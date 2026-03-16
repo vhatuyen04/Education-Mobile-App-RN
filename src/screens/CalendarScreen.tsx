@@ -1,5 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
 import { Screen } from '../components/Screen';
 import { Card } from '../components/Card';
@@ -7,6 +9,7 @@ import { colors } from '../theme/colors';
 import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
 import { toast } from '../utils/toast';
+import type { RootStackParamList } from '../navigation/types';
 
 type EventItem = {
   id: string;
@@ -33,6 +36,7 @@ function mondayIndexOfFirstDay(year: number, monthIndex0: number) {
 }
 
 export function CalendarScreen() {
+  const nav = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const year = 20;
   const [monthIndex0] = useState(2);
 
@@ -225,6 +229,9 @@ export function CalendarScreen() {
               );
             })}
           </View>
+
+          <View style={{ height: 10 }} />
+          <Button title="Modify schedule (week)" full onPress={() => nav.navigate('ScheduleWeek')} />
         </Card>
       </ScrollView>
 

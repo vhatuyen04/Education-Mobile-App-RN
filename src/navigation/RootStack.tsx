@@ -20,9 +20,9 @@ export function RootStack() {
       }}
     >
       <Stack.Screen name="Tabs" component={BottomTabs} options={{ headerShown: false }} />
-      <Stack.Screen name="GoalDetail" component={GoalDetailScreen} options={{ title: 'Goal detail' }} />
-      <Stack.Screen name="TodayDetails" component={TodayDetailsScreen} options={{ title: 'Details' }} />
-      <Stack.Screen name="ScheduleWeek" component={ScheduleWeekScreen} options={{ title: 'Modify schedule' }} />
+      <Stack.Screen name="GoalDetail" component={GoalDetailScreen} options={{ title: 'Goal detail', headerShown: false }} />
+      <Stack.Screen name="TodayDetails" component={TodayDetailsScreen} options={{ title: 'Details', headerShown: false}} />
+      <Stack.Screen name="ScheduleWeek" component={ScheduleWeekScreen} options={{ title: 'Modify schedule', headerShown: false }} />
     </Stack.Navigator>
   );
 }
