@@ -1,16 +1,19 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 
 import { Screen } from '../components/Screen';
 import { Card } from '../components/Card';
 import { colors } from '../theme/colors';
-import { Pill } from '../components/Pill';
 import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
 import { toast } from '../utils/toast';
+import { useAuth } from '../auth/AuthContext';
+import * as authApi from '../api/auth';
 
 type DayKey = 'Mon' | 'Tue' | 'Wed' | 'Thu' | 'Fri' | 'Sat' | 'Sun';
+
+type RepeatMode = 'Once' | 'Daily' | 'Weekly' | 'Monthly' | 'Yearly';
 
 type Block = {
   id: string;
@@ -18,8 +21,11 @@ type Block = {
   title: string;
   start: string;
   end: string;
-  repeat: 'Once' | 'Daily' | 'Weekly' | 'Custom';
+  repeat: RepeatMode;
   desc: string;
+  startAt: string;
+  endAt: string | null;
+  seriesId?: string | null;
 };
 
 function makeId() {
@@ -28,15 +34,17 @@ function makeId() {
 
 export function ScheduleWeekScreen() {
   const nav = useNavigation();
-  const [day, setDay] = useState<DayKey>('Mon');
+  const { state } = useAuth();
 
-  const [blocks, setBlocks] = useState<Block[]>([
-    { id: 'b1', day: 'Mon', title: 'Database class', start: '15:00', end: '18:00', repeat: 'Daily', desc: 'None' },
-    { id: 'b2', day: 'Mon', title: 'Chess class', start: '18:00', end: '19:00', repeat: 'Daily', desc: 'None' },
-    { id: 'b3', day: 'Tue', title: 'Gym session', start: '18:00', end: '19:00', repeat: 'Weekly', desc: 'None' },
-    { id: 'b4', day: 'Wed', title: 'Thesis writing', start: '20:00', end: '21:30', repeat: 'Daily', desc: 'None' },
-    { id: 'b5', day: 'Fri', title: 'IELTS practice', start: '19:00', end: '20:00', repeat: 'Daily', desc: 'None' },
-  ]);
+  const [day, setDay] = useState<DayKey>(() => {
+    const d = new Date();
+    const keys: DayKey[] = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const k = keys[d.getDay()];
+    return (k === 'Sun' ? 'Sun' : k) as DayKey;
+  });
+
+  const [blocks, setBlocks] = useState<Block[]>([]);
+  const [loading, setLoading] = useState(false);
 
   const [edit, setEdit] = useState<{ open: boolean; id: string | null }>({ open: false, id: null });
   const [confirm, setConfirm] = useState<{ open: boolean; id: string | null }>({ open: false, id: null });
@@ -44,19 +52,171 @@ export function ScheduleWeekScreen() {
   const currentBlocks = useMemo(() => blocks.filter(b => b.day === day), [blocks, day]);
   const editingBlock = useMemo(() => (edit.id ? blocks.find(b => b.id === edit.id) ?? null : null), [blocks, edit.id]);
 
-  const [form, setForm] = useState({ title: 'New event', start: '09:00', end: '10:00', repeat: 'Once', desc: 'None' });
+  const [form, setForm] = useState({
+    title: 'New event',
+    startDate: '',
+    startTime: '09:00',
+    endDate: '',
+    endTime: '10:00',
+    repeat: 'Once' as RepeatMode,
+    repeatUntil: '',
+    desc: 'None',
+  });
+
+  const week = useMemo(() => {
+    const now = new Date();
+    const start = new Date(now);
+    const dayIdx = (start.getDay() + 6) % 7; // Monday=0
+    start.setDate(start.getDate() - dayIdx);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    end.setHours(23, 59, 59, 999);
+    return { start, end };
+  }, []);
+
+  const dayDate = useMemo(() => {
+    const map: Record<DayKey, number> = { Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 };
+    const d = new Date(week.start);
+    d.setDate(d.getDate() + map[day]);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }, [day, week.start]);
+
+  const dayDateLabel = useMemo(() => {
+    const dd = String(dayDate.getDate()).padStart(2, '0');
+    const mm = String(dayDate.getMonth() + 1).padStart(2, '0');
+    const yyyy = String(dayDate.getFullYear());
+    return `${dd}-${mm}-${yyyy}`;
+  }, [dayDate]);
+
+  function parseDateDMY(raw: string): Date | null {
+    const s = raw.trim();
+    const m = s.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+    if (!m) return null;
+    const dd = Number(m[1]);
+    const mm = Number(m[2]);
+    const yyyy = Number(m[3]);
+    if (Number.isNaN(dd) || Number.isNaN(mm) || Number.isNaN(yyyy)) return null;
+    const d = new Date(yyyy, mm - 1, dd);
+    if (d.getFullYear() !== yyyy || d.getMonth() !== mm - 1 || d.getDate() !== dd) return null;
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }
+
+  function parseTimeHM(raw: string): { hh: number; mm: number } | null {
+    const m = raw.trim().match(/^(\d{1,2}):(\d{2})$/);
+    if (!m) return null;
+    const hh = Number(m[1]);
+    const mm = Number(m[2]);
+    if (Number.isNaN(hh) || Number.isNaN(mm)) return null;
+    if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+    return { hh, mm };
+  }
+
+  function combineDateAndTimeDMY(dateDmy: string, timeHm: string, fallbackDate: Date): Date | null {
+    const base = dateDmy.trim() ? parseDateDMY(dateDmy) : new Date(fallbackDate);
+    if (!base) return null;
+    const t = parseTimeHM(timeHm);
+    if (!t) return null;
+    const d = new Date(base);
+    d.setHours(t.hh, t.mm, 0, 0);
+    return d;
+  }
+
+  const refresh = useCallback(async () => {
+    const token = state.accessToken;
+    if (!token) return;
+
+    setLoading(true);
+    try {
+      const resp = await authApi.listEvents(token, { from: week.start.toISOString(), to: week.end.toISOString() });
+
+      const unique = new Map<string, authApi.EventItem>();
+      for (const e of resp.events) unique.set(e.id, e);
+
+      const next: Block[] = Array.from(unique.values()).map(e => {
+        const d = new Date(e.startAt);
+        const idx = (d.getDay() + 6) % 7; // Monday=0
+        const keys: DayKey[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+        const k = keys[idx];
+
+        const startTxt = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+        const endTxt = e.endAt
+          ? new Date(e.endAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+          : '';
+
+        const r = (e.repeat ?? 'Once') as any;
+        return {
+          id: e.id,
+          day: k,
+          title: e.title,
+          start: startTxt,
+          end: endTxt || startTxt,
+          repeat: r,
+          desc: 'None',
+          startAt: e.startAt,
+          endAt: e.endAt ?? null,
+          seriesId: e.seriesId ?? null,
+        };
+      });
+
+      setBlocks(next);
+    } catch (e: any) {
+      toast(String(e?.message ?? 'Failed to load'));
+    } finally {
+      setLoading(false);
+    }
+  }, [state.accessToken, week.end, week.start]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void refresh();
+    }, [refresh])
+  );
 
   function openEdit(id: string) {
     setEdit({ open: true, id });
     const b = blocks.find(x => x.id === id);
-    if (b) setForm({ title: b.title, start: b.start, end: b.end, repeat: b.repeat, desc: b.desc });
+    if (b) {
+      const s = new Date(b.startAt);
+      const e = b.endAt ? new Date(b.endAt) : null;
+
+      const sdd = String(s.getDate()).padStart(2, '0');
+      const smm = String(s.getMonth() + 1).padStart(2, '0');
+      const syy = String(s.getFullYear());
+      const startDate = `${sdd}-${smm}-${syy}`;
+
+      const edd = e ? String(e.getDate()).padStart(2, '0') : sdd;
+      const emm = e ? String(e.getMonth() + 1).padStart(2, '0') : smm;
+      const eyy = e ? String(e.getFullYear()) : syy;
+      const endDate = `${edd}-${emm}-${eyy}`;
+
+      setForm({
+        title: b.title,
+        startDate,
+        startTime: b.start,
+        endDate,
+        endTime: b.end,
+        repeat: b.repeat,
+        repeatUntil: '',
+        desc: b.desc,
+      });
+    }
   }
 
   function openNew() {
     const id = makeId();
-    const newBlock: Block = { id, day, title: 'New event', start: '09:00', end: '10:00', repeat: 'Once', desc: 'None' };
-    setBlocks(prev => [newBlock, ...prev]);
-    setForm({ title: newBlock.title, start: newBlock.start, end: newBlock.end, repeat: newBlock.repeat, desc: newBlock.desc });
+    setForm({
+      title: 'New event',
+      startDate: dayDateLabel,
+      startTime: '09:00',
+      endDate: dayDateLabel,
+      endTime: '10:00',
+      repeat: 'Once',
+      repeatUntil: '',
+      desc: 'None',
+    });
     setEdit({ open: true, id });
   }
 
@@ -64,24 +224,81 @@ export function ScheduleWeekScreen() {
     setEdit({ open: false, id: null });
   }
 
-  function saveEdit() {
+  async function saveEdit() {
+    if (loading) return;
+    const token = state.accessToken;
+    if (!token) {
+      toast('Not signed in');
+      return;
+    }
     if (!edit.id) return;
-    setBlocks(prev =>
-      prev.map(b =>
-        b.id === edit.id
-          ? {
-              ...b,
-              title: form.title || 'New event',
-              start: form.start || '00:00',
-              end: form.end || '00:00',
-              repeat: (form.repeat as any) || 'Once',
-              desc: form.desc || 'None',
-            }
-          : b
-      )
-    );
-    toast('Saved (demo)');
-    closeEdit();
+
+    const repeatMode = (form.repeat || 'Once') as RepeatMode;
+
+    const startDt = combineDateAndTimeDMY(form.startDate, form.startTime || '00:00', dayDate);
+    const endDt = combineDateAndTimeDMY(form.endDate || form.startDate, form.endTime || '00:00', dayDate);
+    if (!startDt) {
+      toast('Invalid start (use DD-MM-YYYY and HH:MM)');
+      return;
+    }
+    if (!endDt) {
+      toast('Invalid end (use DD-MM-YYYY and HH:MM)');
+      return;
+    }
+
+    const isExisting = blocks.some(b => b.id === edit.id);
+
+    setLoading(true);
+    try {
+      if (isExisting) {
+        const existingBlock = blocks.find(b => b.id === edit.id) ?? null;
+        const scope = repeatMode !== 'Once' || existingBlock?.seriesId ? 'series' : 'single';
+        await authApi.updateEvent(
+          token,
+          edit.id,
+          {
+            title: form.title || 'New event',
+            startAt: startDt.toISOString(),
+            endAt: endDt ? endDt.toISOString() : null,
+            repeat: repeatMode || null,
+          },
+          { scope }
+        );
+      } else {
+        const isRepeat = repeatMode && repeatMode !== 'Once';
+        const payload: any = {
+          title: form.title || 'New event',
+          startAt: startDt.toISOString(),
+          endAt: endDt ? endDt.toISOString() : undefined,
+          repeat: repeatMode || undefined,
+        };
+
+        if (isRepeat) {
+          const seriesEndBase = parseDateDMY(form.endDate);
+          if (!seriesEndBase) {
+            toast('End date is required for repeating events (DD-MM-YYYY)');
+            return;
+          }
+          const seriesEnd = new Date(seriesEndBase);
+          seriesEnd.setHours(23, 59, 59, 999);
+          if (seriesEnd.getTime() < startDt.getTime()) {
+            toast('End date must be after start date');
+            return;
+          }
+          payload.seriesEndAt = seriesEnd.toISOString();
+        }
+
+        await authApi.createEvent(token, payload);
+      }
+
+      await refresh();
+      toast('Saved');
+      closeEdit();
+    } catch (e: any) {
+      toast(String(e?.message ?? 'Save failed'));
+    } finally {
+      setLoading(false);
+    }
   }
 
   function requestDelete() {
@@ -93,12 +310,29 @@ export function ScheduleWeekScreen() {
     setConfirm({ open: false, id: null });
   }
 
-  function deleteConfirmed() {
+  async function deleteConfirmed() {
+    const token = state.accessToken;
+    if (!token) {
+      toast('Not signed in');
+      return;
+    }
     if (!confirm.id) return;
-    setBlocks(prev => prev.filter(b => b.id !== confirm.id));
-    toast('Deleted (demo)');
-    closeConfirm();
-    closeEdit();
+
+    const existingBlock = blocks.find(b => b.id === confirm.id) ?? null;
+    const scope = existingBlock?.repeat !== 'Once' || existingBlock?.seriesId ? 'series' : 'single';
+
+    setLoading(true);
+    try {
+      await authApi.deleteEvent(token, confirm.id, { scope });
+      await refresh();
+      toast('Deleted');
+      closeConfirm();
+      closeEdit();
+    } catch (e: any) {
+      toast(String(e?.message ?? 'Delete failed'));
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -107,10 +341,6 @@ export function ScheduleWeekScreen() {
         <View style={styles.topRow}>
           <View style={{ flex: 1 }}>
             <Text style={styles.hTitle}>Modify schedule</Text>
-            <View style={styles.hSub}>
-              <Pill dot>Weekly view</Pill>
-              <Pill>Tap a block to edit</Pill>
-            </View>
           </View>
           <Pressable
             onPress={() => (nav as any).goBack()}
@@ -121,13 +351,6 @@ export function ScheduleWeekScreen() {
         </View>
 
         <Card>
-          <View style={styles.cardTitleRow}>
-            <Text style={styles.cardTitle}>Week (March, 20XX)</Text>
-            <Badge>All editable</Badge>
-          </View>
-
-          <View style={{ height: 10 }} />
-
           <View style={styles.tabs}>
             {(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const).map(t => (
               <Pressable
@@ -144,7 +367,7 @@ export function ScheduleWeekScreen() {
 
           <View style={{ gap: 10 }}>
             {currentBlocks.length === 0 ? (
-              <Text style={styles.mutedSmall}>No blocks for this day (demo)</Text>
+              <Text style={styles.mutedSmall}>No blocks for this day</Text>
             ) : (
               currentBlocks.map(b => (
                 <Pressable
@@ -188,24 +411,71 @@ export function ScheduleWeekScreen() {
 
               <View style={styles.row}>
                 <View style={[styles.field, { flex: 1 }]}>
-                  <Text style={styles.label}>Start</Text>
-                  <TextInput value={form.start} onChangeText={t => setForm(s => ({ ...s, start: t }))} style={styles.input} placeholder="" placeholderTextColor={colors.muted} />
+                  <Text style={styles.label}>Start date</Text>
+                  <TextInput
+                    value={form.startDate}
+                    onChangeText={t => setForm(s => ({ ...s, startDate: t }))}
+                    style={styles.input}
+                    placeholder="DD-MM-YYYY"
+                    placeholderTextColor={colors.muted}
+                    autoCapitalize="none"
+                  />
                 </View>
                 <View style={[styles.field, { flex: 1 }]}>
-                  <Text style={styles.label}>End</Text>
-                  <TextInput value={form.end} onChangeText={t => setForm(s => ({ ...s, end: t }))} style={styles.input} placeholder="" placeholderTextColor={colors.muted} />
+                  <Text style={styles.label}>Start time</Text>
+                  <TextInput
+                    value={form.startTime}
+                    onChangeText={t => setForm(s => ({ ...s, startTime: t }))}
+                    style={styles.input}
+                    placeholder="HH:MM"
+                    placeholderTextColor={colors.muted}
+                    autoCapitalize="none"
+                  />
+                </View>
+              </View>
+
+              <View style={styles.row}>
+                <View style={[styles.field, { flex: 1 }]}>
+                  <Text style={styles.label}>End date</Text>
+                  <TextInput
+                    value={form.endDate}
+                    onChangeText={t => setForm(s => ({ ...s, endDate: t }))}
+                    style={styles.input}
+                    placeholder="DD-MM-YYYY"
+                    placeholderTextColor={colors.muted}
+                    autoCapitalize="none"
+                  />
+                </View>
+                <View style={[styles.field, { flex: 1 }]}>
+                  <Text style={styles.label}>End time</Text>
+                  <TextInput
+                    value={form.endTime}
+                    onChangeText={t => setForm(s => ({ ...s, endTime: t }))}
+                    style={styles.input}
+                    placeholder="HH:MM"
+                    placeholderTextColor={colors.muted}
+                    autoCapitalize="none"
+                  />
                 </View>
               </View>
 
               <View style={styles.field}>
                 <Text style={styles.label}>Repeat</Text>
-                <TextInput
-                  value={form.repeat}
-                  onChangeText={t => setForm(s => ({ ...s, repeat: t }))}
-                  style={styles.input}
-                  placeholder="Once | Daily | Weekly | Custom"
-                  placeholderTextColor={colors.muted}
-                />
+                <View style={styles.repeatRow}>
+                  {(['Once', 'Daily', 'Weekly', 'Monthly', 'Yearly'] as const).map(opt => (
+                    <Pressable
+                      key={opt}
+                      onPress={() => setForm(s => ({ ...s, repeat: opt }))}
+                      style={({ pressed }) => [
+                        styles.repeatChip,
+                        form.repeat === opt ? styles.repeatChipOn : null,
+                        pressed ? { opacity: 0.9 } : null,
+                      ]}
+                    >
+                      <Text style={[styles.repeatChipText, form.repeat === opt ? styles.repeatChipTextOn : null]}>{opt}</Text>
+                    </Pressable>
+                  ))}
+                </View>
               </View>
 
               <View style={styles.field}>
@@ -328,6 +598,31 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   tabTextOn: {
+    color: '#06101f',
+  },
+  repeatRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  repeatChip: {
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: colors.surface2,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 999,
+  },
+  repeatChipOn: {
+    backgroundColor: colors.primary,
+    borderColor: 'transparent',
+  },
+  repeatChipText: {
+    color: colors.text,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  repeatChipTextOn: {
     color: '#06101f',
   },
   item: {

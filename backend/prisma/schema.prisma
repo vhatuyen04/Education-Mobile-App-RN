@@ -11,8 +11,47 @@ model User {
   id               String   @id @default(uuid())
   email            String   @unique
   name             String?
+  score            Int      @default(0)
   passwordHash     String
   refreshTokenHash String?
+  goals            Goal[]
+  events           Event[]
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
+}
+
+model Goal {
+  id          String   @id @default(uuid())
+  userId      String
+  title       String
+  progressPct Int      @default(0)
+  dueAt       DateTime?
+  completed   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, completed, dueAt])
+}
+
+model Event {
+  id            String   @id @default(uuid())
+  userId        String
+  title         String
+  startAt       DateTime
+  endAt         DateTime?
+  repeat        String?
+  seriesId      String?
+  seriesStartAt DateTime?
+  seriesEndAt   DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, startAt])
+  @@index([userId, seriesId])
 }

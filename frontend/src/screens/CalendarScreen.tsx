@@ -1,6 +1,6 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
 import { Screen } from '../components/Screen';
@@ -9,17 +9,11 @@ import { colors } from '../theme/colors';
 import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
 import { toast } from '../utils/toast';
+import { useAuth } from '../auth/AuthContext';
+import * as authApi from '../api/auth';
 import type { RootStackParamList } from '../navigation/types';
 
-type EventItem = {
-  id: string;
-  day: number;
-  title: string;
-  start: string;
-  end: string;
-  repeat: 'Once' | 'Daily' | 'Weekly' | 'Custom';
-  desc: string;
-};
+type EventItem = authApi.EventItem;
 
 function pad2(n: number) {
   return n < 10 ? `0${n}` : `${n}`;
@@ -27,6 +21,40 @@ function pad2(n: number) {
 
 function daysInMonth(year: number, monthIndex0: number) {
   return new Date(year, monthIndex0 + 1, 0).getDate();
+}
+
+function parseDateDMY(raw: string): Date | null {
+  const s = raw.trim();
+  const m = s.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  if (!m) return null;
+  const dd = Number(m[1]);
+  const mm = Number(m[2]);
+  const yyyy = Number(m[3]);
+  if (Number.isNaN(dd) || Number.isNaN(mm) || Number.isNaN(yyyy)) return null;
+  const d = new Date(yyyy, mm - 1, dd);
+  if (d.getFullYear() !== yyyy || d.getMonth() !== mm - 1 || d.getDate() !== dd) return null;
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function parseTimeHM(raw: string): { hh: number; mm: number } | null {
+  const m = raw.trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  if (Number.isNaN(hh) || Number.isNaN(mm)) return null;
+  if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+  return { hh, mm };
+}
+
+function combineDateAndTimeDMY(dateDmy: string, timeHm: string, fallbackDate: Date): Date | null {
+  const base = dateDmy.trim() ? parseDateDMY(dateDmy) : new Date(fallbackDate);
+  if (!base) return null;
+  const t = parseTimeHM(timeHm);
+  if (!t) return null;
+  const d = new Date(base);
+  d.setHours(t.hh, t.mm, 0, 0);
+  return d;
 }
 
 // Monday = 0 ... Sunday = 6
@@ -37,38 +65,22 @@ function mondayIndexOfFirstDay(year: number, monthIndex0: number) {
 
 export function CalendarScreen() {
   const nav = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
-  const year = 20;
-  const [monthIndex0] = useState(2);
+  const { state } = useAuth();
 
-  const monthLabel = 'March, 20XX';
+  const [viewDate, setViewDate] = useState(() => {
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth(), 1);
+  });
 
-  const [events, setEvents] = useState<EventItem[]>([
-    { id: 'ev1', day: 2, title: 'Morning review', start: '07:30', end: '08:00', repeat: 'Daily', desc: 'None' },
-    { id: 'ev2', day: 3, title: 'Gym session', start: '18:00', end: '19:00', repeat: 'Weekly', desc: 'None' },
-    { id: 'ev3', day: 4, title: 'Thesis writing', start: '20:00', end: '21:30', repeat: 'Daily', desc: 'None' },
-    { id: 'ev4', day: 5, title: 'Database class', start: '15:00', end: '18:00', repeat: 'Daily', desc: 'None' },
-    { id: 'ev5', day: 5, title: 'Chess class', start: '18:00', end: '19:00', repeat: 'Daily', desc: 'None' },
-    { id: 'ev6', day: 6, title: 'Basketball training', start: '20:00', end: '21:00', repeat: 'Once', desc: 'None' },
-    { id: 'ev7', day: 7, title: 'IELTS practice', start: '19:00', end: '20:00', repeat: 'Daily', desc: 'None' },
-    { id: 'ev8', day: 9, title: 'Study block', start: '09:00', end: '11:00', repeat: 'Once', desc: 'None' },
-    { id: 'ev9', day: 9, title: 'Team meeting', start: '13:30', end: '14:00', repeat: 'Weekly', desc: 'None' },
-    { id: 'ev10', day: 10, title: 'Project planning', start: '17:00', end: '17:40', repeat: 'Once', desc: 'None' },
-    { id: 'ev11', day: 12, title: 'LoL ranked session', start: '21:00', end: '22:00', repeat: 'Custom', desc: 'None' },
-    { id: 'ev12', day: 12, title: 'Stretching', start: '07:00', end: '07:20', repeat: 'Daily', desc: 'None' },
-    { id: 'ev24', day: 12, title: 'Database revision', start: '16:00', end: '17:15', repeat: 'Once', desc: 'None' },
-    { id: 'ev25', day: 12, title: 'Quick walk', start: '12:10', end: '12:30', repeat: 'Once', desc: 'None' },
-    { id: 'ev13', day: 14, title: 'Weekly review', start: '20:30', end: '21:00', repeat: 'Weekly', desc: 'None' },
-    { id: 'ev14', day: 15, title: 'Reading time', start: '22:00', end: '22:30', repeat: 'Daily', desc: 'None' },
-    { id: 'ev15', day: 16, title: 'Database quiz', start: '10:00', end: '10:30', repeat: 'Once', desc: 'None' },
-    { id: 'ev16', day: 18, title: 'Gym session', start: '18:00', end: '19:00', repeat: 'Weekly', desc: 'None' },
-    { id: 'ev17', day: 20, title: 'Chess class', start: '18:00', end: '19:00', repeat: 'Daily', desc: 'None' },
-    { id: 'ev18', day: 20, title: 'Study block', start: '19:30', end: '21:00', repeat: 'Once', desc: 'None' },
-    { id: 'ev19', day: 21, title: 'Basketball goal step', start: '21:00', end: '21:30', repeat: 'Once', desc: 'None' },
-    { id: 'ev20', day: 24, title: 'Thesis writing', start: '20:00', end: '21:30', repeat: 'Daily', desc: 'None' },
-    { id: 'ev21', day: 24, title: 'Calendar cleanup', start: '21:40', end: '22:00', repeat: 'Once', desc: 'None' },
-    { id: 'ev22', day: 26, title: 'Rest day', start: '00:00', end: '23:59', repeat: 'Once', desc: 'None' },
-    { id: 'ev23', day: 28, title: 'Final review', start: '19:00', end: '21:00', repeat: 'Once', desc: 'None' },
-  ]);
+  const [events, setEvents] = useState<EventItem[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const year = viewDate.getFullYear();
+  const monthIndex0 = viewDate.getMonth();
+
+  const monthLabel = useMemo(() => {
+    return viewDate.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  }, [viewDate]);
 
   const [dayEvents, setDayEvents] = useState<{ open: boolean; day: number | null }>({ open: false, day: null });
   const [edit, setEdit] = useState<{ open: boolean; eventId: string | null }>({ open: false, eventId: null });
@@ -94,29 +106,119 @@ export function CalendarScreen() {
 
   const selectedDayEvents = useMemo(() => {
     if (!dayEvents.day) return [];
-    return events.filter(e => e.day === dayEvents.day);
-  }, [events, dayEvents.day]);
+    return events.filter(e => {
+      const d = new Date(e.startAt);
+      return d.getFullYear() === year && d.getMonth() === monthIndex0 && d.getDate() === dayEvents.day;
+    });
+  }, [events, dayEvents.day, monthIndex0, year]);
 
   const editingEvent = useMemo(() => {
     if (!edit.eventId) return null;
     return events.find(e => e.id === edit.eventId) ?? null;
   }, [events, edit.eventId]);
 
-  const [form, setForm] = useState({ title: 'Database class', start: '15:00', end: '18:00', repeat: 'Daily', desc: 'None' });
+  const [form, setForm] = useState({
+    title: 'New event',
+    startDate: '',
+    startTime: '09:00',
+    endDate: '',
+    endTime: '10:00',
+    repeat: 'Once',
+    desc: 'None',
+  });
+
+  const monthRange = useMemo(() => {
+    const from = new Date(year, monthIndex0, 1);
+    from.setHours(0, 0, 0, 0);
+    const to = new Date(year, monthIndex0 + 1, 0);
+    to.setHours(23, 59, 59, 999);
+    return { from, to };
+  }, [monthIndex0, year]);
+
+  const refresh = useCallback(async () => {
+    const token = state.accessToken;
+    if (!token) return;
+
+    setLoading(true);
+    try {
+      const resp = await authApi.listEvents(token, { from: monthRange.from.toISOString(), to: monthRange.to.toISOString() });
+      const unique = new Map<string, authApi.EventItem>();
+      for (const e of resp.events) unique.set(e.id, e);
+      setEvents(Array.from(unique.values()));
+    } catch (e: any) {
+      toast(String(e?.message ?? 'Failed to load'));
+    } finally {
+      setLoading(false);
+    }
+  }, [monthRange.from, monthRange.to, state.accessToken]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void refresh();
+    }, [refresh])
+  );
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  function combineDateAndTime(day: number, hm: string) {
+    const m = hm.trim().match(/^(\d{1,2}):(\d{2})$/);
+    if (!m) return null;
+    const hh = Number(m[1]);
+    const mm = Number(m[2]);
+    if (Number.isNaN(hh) || Number.isNaN(mm)) return null;
+    const d = new Date(year, monthIndex0, day);
+    d.setHours(hh, mm, 0, 0);
+    return d;
+  }
+
+  function formatTimeRange(startAt: string, endAt: string | null) {
+    const start = new Date(startAt);
+    const end = endAt ? new Date(endAt) : null;
+    const startTxt = start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    const endTxt = end ? end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : null;
+    return endTxt ? `${startTxt} – ${endTxt}` : startTxt;
+  }
 
   function openDay(day: number) {
     setDayEvents({ open: true, day });
   }
 
   function closeDayEvents() {
-    setDayEvents({ open: false, day: null });
+    setDayEvents(s => ({ ...s, open: false }));
   }
 
   function openEdit(eventId: string) {
     setEdit({ open: true, eventId });
     const e = events.find(x => x.id === eventId);
     if (e) {
-      setForm({ title: e.title, start: e.start, end: e.end, repeat: e.repeat, desc: e.desc });
+      const s = new Date(e.startAt);
+      const endDt = e.endAt ? new Date(e.endAt) : null;
+      const startTime = s.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+      const endTime = endDt
+        ? endDt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+        : startTime;
+
+      const sdd = String(s.getDate()).padStart(2, '0');
+      const smm = String(s.getMonth() + 1).padStart(2, '0');
+      const syy = String(s.getFullYear());
+      const startDate = `${sdd}-${smm}-${syy}`;
+
+      const edd = endDt ? String(endDt.getDate()).padStart(2, '0') : sdd;
+      const emm = endDt ? String(endDt.getMonth() + 1).padStart(2, '0') : smm;
+      const eyy = endDt ? String(endDt.getFullYear()) : syy;
+      const endDate = `${edd}-${emm}-${eyy}`;
+
+      setForm({
+        title: e.title,
+        startDate,
+        startTime,
+        endDate,
+        endTime,
+        repeat: (e.repeat ?? 'Once') as any,
+        desc: 'None',
+      });
     }
   }
 
@@ -124,24 +226,50 @@ export function CalendarScreen() {
     setEdit({ open: false, eventId: null });
   }
 
-  function saveEdit() {
+  async function saveEdit() {
+    if (loading) return;
+    const token = state.accessToken;
+    if (!token) {
+      toast('Not signed in');
+      return;
+    }
     if (!edit.eventId) return;
-    setEvents(prev =>
-      prev.map(e =>
-        e.id === edit.eventId
-          ? {
-              ...e,
-              title: form.title || 'New event',
-              start: form.start || '00:00',
-              end: form.end || '00:00',
-              repeat: (form.repeat as any) || 'Once',
-              desc: form.desc || 'None',
-            }
-          : e
-      )
-    );
-    toast('Saved (demo)');
-    closeEdit();
+
+    const fallbackDate = editingEvent ? new Date(editingEvent.startAt) : new Date(year, monthIndex0, 1);
+    const startDt = combineDateAndTimeDMY(form.startDate, form.startTime || '00:00', fallbackDate);
+    const endDt = combineDateAndTimeDMY(form.endDate || form.startDate, form.endTime || '00:00', fallbackDate);
+    if (!startDt) {
+      toast('Invalid start (use DD-MM-YYYY and HH:MM)');
+      return;
+    }
+    if (!endDt) {
+      toast('Invalid end (use DD-MM-YYYY and HH:MM)');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const repeatMode = (form.repeat as any) || 'Once';
+      const scope = repeatMode !== 'Once' || editingEvent?.seriesId ? 'series' : 'single';
+      await authApi.updateEvent(
+        token,
+        edit.eventId,
+        {
+          title: form.title || 'New event',
+          startAt: startDt.toISOString(),
+          endAt: endDt ? endDt.toISOString() : null,
+          repeat: (form.repeat as any) || null,
+        },
+        { scope }
+      );
+      await refresh();
+      toast('Saved');
+      closeEdit();
+    } catch (e: any) {
+      toast(String(e?.message ?? 'Save failed'));
+    } finally {
+      setLoading(false);
+    }
   }
 
   function requestDelete(eventId: string) {
@@ -152,12 +280,30 @@ export function CalendarScreen() {
     setConfirm({ open: false, eventId: null });
   }
 
-  function deleteConfirmed() {
+  async function deleteConfirmed() {
+    if (loading) return;
+    const token = state.accessToken;
+    if (!token) {
+      toast('Not signed in');
+      return;
+    }
     if (!confirm.eventId) return;
-    setEvents(prev => prev.filter(e => e.id !== confirm.eventId));
-    toast('Deleted (demo)');
-    closeConfirm();
-    closeEdit();
+
+    setLoading(true);
+    try {
+      const e = events.find(x => x.id === confirm.eventId) ?? null;
+      const repeatMode = (e?.repeat ?? 'Once') as any;
+      const scope = repeatMode !== 'Once' || e?.seriesId ? 'series' : 'single';
+      await authApi.deleteEvent(token, confirm.eventId, { scope });
+      await refresh();
+      toast('Deleted');
+      closeConfirm();
+      closeEdit();
+    } catch (e: any) {
+      toast(String(e?.message ?? 'Delete failed'));
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -171,9 +317,17 @@ export function CalendarScreen() {
 
         <Card>
           <View style={styles.calHeader}>
-            <Button title="◀" small onPress={() => toast('Previous month (demo)')} />
+            <Button
+              title="◀"
+              small
+              onPress={() => setViewDate(d => new Date(d.getFullYear(), d.getMonth() - 1, 1))}
+            />
             <Text style={styles.calMonth}>{monthLabel}</Text>
-            <Button title="▶" small onPress={() => toast('Next month (demo)')} />
+            <Button
+              title="▶"
+              small
+              onPress={() => setViewDate(d => new Date(d.getFullYear(), d.getMonth() + 1, 1))}
+            />
           </View>
 
           <View style={styles.weekdayRow}>
@@ -203,7 +357,10 @@ export function CalendarScreen() {
                 );
               }
 
-              const count = events.filter(e => e.day === c.day).length;
+              const count = events.filter(e => {
+                const d = new Date(e.startAt);
+                return d.getFullYear() === year && d.getMonth() === monthIndex0 && d.getDate() === c.day;
+              }).length;
               const has = count > 0;
               const dotStrength = Math.min(4, count);
               const dotOpacity = 0.25 + dotStrength * 0.18;
@@ -231,7 +388,7 @@ export function CalendarScreen() {
           </View>
 
           <View style={{ height: 10 }} />
-          <Button title="Modify schedule (week)" full onPress={() => nav.navigate('ScheduleWeek')} />
+          <Button title="Modify schedule" full onPress={() => nav.navigate('ScheduleWeek')} />
         </Card>
       </ScrollView>
 
@@ -250,7 +407,7 @@ export function CalendarScreen() {
 
             <View style={{ gap: 10 }}>
               {selectedDayEvents.length === 0 ? (
-                <Text style={styles.mutedSmall}>No events (demo)</Text>
+                <Text style={styles.mutedSmall}>No events</Text>
               ) : (
                 selectedDayEvents.map(e => (
                   <Pressable
@@ -264,7 +421,7 @@ export function CalendarScreen() {
                     <View style={{ flex: 1 }}>
                       <Text style={styles.modalName}>{e.title}</Text>
                       <Text style={styles.modalMeta}>
-                        {pad2(e.day)} · {e.start} – {e.end} · {e.repeat}
+                        {pad2(new Date(e.startAt).getDate())} · {formatTimeRange(e.startAt, e.endAt)} · {e.repeat ?? 'Once'}
                       </Text>
                     </View>
                     <Badge>Edit</Badge>
@@ -300,26 +457,51 @@ export function CalendarScreen() {
               </View>
 
               <View style={styles.row}>
-                <View style={[styles.field, { flex: 1 }]}
-                >
-                  <Text style={styles.label}>Start</Text>
+                <View style={[styles.field, { flex: 1 }]}>
+                  <Text style={styles.label}>Start date</Text>
                   <TextInput
-                    value={form.start}
-                    onChangeText={t => setForm(s => ({ ...s, start: t }))}
-                    placeholder=""
+                    value={form.startDate}
+                    onChangeText={t => setForm(s => ({ ...s, startDate: t }))}
+                    placeholder="DD-MM-YYYY"
                     placeholderTextColor={colors.muted}
                     style={styles.input}
+                    autoCapitalize="none"
                   />
                 </View>
-                <View style={[styles.field, { flex: 1 }]}
-                >
-                  <Text style={styles.label}>End</Text>
+                <View style={[styles.field, { flex: 1 }]}>
+                  <Text style={styles.label}>Start time</Text>
                   <TextInput
-                    value={form.end}
-                    onChangeText={t => setForm(s => ({ ...s, end: t }))}
-                    placeholder=""
+                    value={form.startTime}
+                    onChangeText={t => setForm(s => ({ ...s, startTime: t }))}
+                    placeholder="HH:MM"
                     placeholderTextColor={colors.muted}
                     style={styles.input}
+                    autoCapitalize="none"
+                  />
+                </View>
+              </View>
+
+              <View style={styles.row}>
+                <View style={[styles.field, { flex: 1 }]}>
+                  <Text style={styles.label}>End date</Text>
+                  <TextInput
+                    value={form.endDate}
+                    onChangeText={t => setForm(s => ({ ...s, endDate: t }))}
+                    placeholder="DD-MM-YYYY"
+                    placeholderTextColor={colors.muted}
+                    style={styles.input}
+                    autoCapitalize="none"
+                  />
+                </View>
+                <View style={[styles.field, { flex: 1 }]}>
+                  <Text style={styles.label}>End time</Text>
+                  <TextInput
+                    value={form.endTime}
+                    onChangeText={t => setForm(s => ({ ...s, endTime: t }))}
+                    placeholder="HH:MM"
+                    placeholderTextColor={colors.muted}
+                    style={styles.input}
+                    autoCapitalize="none"
                   />
                 </View>
               </View>

@@ -1,6 +1,6 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 
 import { Screen } from '../components/Screen';
 import { Card } from '../components/Card';
@@ -11,6 +11,8 @@ import { Button } from '../components/Button';
 import { ProgressBar } from '../components/ProgressBar';
 import { toast } from '../utils/toast';
 import { AiPlannerModal } from '../components/AiPlannerModal';
+import { useAuth } from '../auth/AuthContext';
+import * as authApi from '../api/auth';
 import type { RootStackParamList } from '../navigation/types';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
@@ -18,12 +20,66 @@ type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 export function HomeScreen() {
   const nav = useNavigation<Nav>();
+  const { state } = useAuth();
   const [aiOpen, setAiOpen] = useState(false);
+
+  const [dash, setDash] = useState<authApi.DashboardResponse | null>(null);
+  const [loading, setLoading] = useState(false);
 
   const today = useMemo(() => {
     const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
     return days[new Date().getDay()];
   }, []);
+
+  const refresh = useCallback(async () => {
+    const token = state.accessToken;
+    if (!token) return;
+
+    setLoading(true);
+    try {
+      const resp = await authApi.getDashboard(token);
+      setDash(resp);
+    } catch (e: any) {
+      toast(String(e?.message ?? 'Failed to load'));
+    } finally {
+      setLoading(false);
+    }
+  }, [state.accessToken]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void refresh();
+    }, [refresh])
+  );
+
+  const score = dash?.score ?? 0;
+  const tasksPlanned = dash?.tasksPlanned ?? 0;
+  const nextGoal = dash?.nextGoal ?? null;
+  const nextEvent = dash?.nextEvent ?? null;
+  const todayEvents = dash?.todayEvents ?? [];
+  const todayGoals = dash?.todayGoals ?? [];
+
+  function formatDueBadge(dueAt: string | null) {
+    if (!dueAt) return 'No due date';
+    const due = new Date(dueAt);
+    const ms = due.getTime() - Date.now();
+    const days = Math.ceil(ms / (1000 * 60 * 60 * 24));
+    if (Number.isNaN(days)) return 'Due date';
+    if (days < 0) return 'Overdue';
+    if (days === 0) return 'Due today';
+    if (days === 1) return 'Due tomorrow';
+    if (days < 7) return `Due in ${days} days`;
+    const weeks = Math.ceil(days / 7);
+    return `Due in ${weeks} weeks`;
+  }
+
+  function formatTimeRange(startAt: string, endAt: string | null) {
+    const start = new Date(startAt);
+    const end = endAt ? new Date(endAt) : null;
+    const startTxt = start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const endTxt = end ? end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null;
+    return endTxt ? `${startTxt} – ${endTxt}` : startTxt;
+  }
 
   return (
     <Screen style={{ padding: 0 }}>
@@ -34,11 +90,12 @@ export function HomeScreen() {
             <View style={styles.hSub}>
               <Pill dot>{today}</Pill>
               <Pill>
-                Score: <Text style={styles.bold}>38</Text>
+                Score: <Text style={styles.bold}>{score}</Text>
               </Pill>
               <Pill>
-                <Text style={styles.bold}>3</Text> tasks planned
+                <Text style={styles.bold}>{tasksPlanned}</Text> tasks planned
               </Pill>
+              {loading ? <Pill>Loading…</Pill> : null}
             </View>
           </View>
 
@@ -51,25 +108,36 @@ export function HomeScreen() {
         </View>
 
         <View style={{ gap: 12 }}>
-          <Pressable onPress={() => nav.navigate('GoalDetail', { title: 'Challenger LoL' })}>
+          <Pressable
+            onPress={() => {
+              if (!nextGoal) return;
+              nav.navigate('GoalDetail', { id: nextGoal.id, title: nextGoal.title });
+            }}
+          >
             <Card>
               <View style={styles.cardTitleRow}>
                 <Text style={styles.cardTitle}>Next goal</Text>
-                <Badge>Due in 7 weeks</Badge>
+                <Badge>{nextGoal ? formatDueBadge(nextGoal.dueAt) : 'No goals'}</Badge>
               </View>
 
               <View style={{ marginTop: 10 }}>
-                <View style={styles.titleLine}>
-                  <Text style={styles.goalName}>Challenge LoL</Text>
-                  <Pill>
-                    Progress: <Text style={styles.bold}>58%</Text>
-                  </Pill>
-                </View>
+                {nextGoal ? (
+                  <>
+                    <View style={styles.titleLine}>
+                      <Text style={styles.goalName}>{nextGoal.title}</Text>
+                      <Pill>
+                        Progress: <Text style={styles.bold}>{nextGoal.progressPct}%</Text>
+                      </Pill>
+                    </View>
 
-                <View style={{ height: 10 }} />
-                <ProgressBar value={58} />
-                <View style={{ height: 10 }} />
-                <Text style={styles.muted12}>Tap this card to open the goal details and start the steps.</Text>
+                    <View style={{ height: 10 }} />
+                    <ProgressBar value={nextGoal.progressPct} />
+                    <View style={{ height: 10 }} />
+                    <Text style={styles.muted12}>Tap this card to open the goal details.</Text>
+                  </>
+                ) : (
+                  <Text style={styles.muted12}>No goals yet. Create one to see it here.</Text>
+                )}
               </View>
             </Card>
           </Pressable>
@@ -77,18 +145,25 @@ export function HomeScreen() {
           <Card>
             <View style={styles.cardTitleRow}>
               <Text style={styles.cardTitle}>Next event</Text>
-              <Badge>Daily</Badge>
+              <Badge>{nextEvent?.repeat ?? 'Upcoming'}</Badge>
             </View>
 
             <View style={[styles.row, { marginTop: 10 }]}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.eventTitle}>Database class</Text>
-                <Text style={styles.muted12}>15:00 – 18:00</Text>
-              </View>
-              <View style={{ flexDirection: 'row', gap: 8 }}>
-                <Button title="Cancel" small variant="danger" onPress={() => toast('Cancel event (demo)')} />
-                <Button title="Detail" small onPress={() => toast('Detail (demo)')} />
-              </View>
+              {nextEvent ? (
+                <>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.eventTitle}>{nextEvent.title}</Text>
+                    <Text style={styles.muted12}>{formatTimeRange(nextEvent.startAt, nextEvent.endAt)}</Text>
+                  </View>
+                  <View style={{ flexDirection: 'row', gap: 8 }}>
+                    <Button title="Detail" small onPress={() => toast('Event details (todo)')} />
+                  </View>
+                </>
+              ) : (
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.muted12}>No upcoming events.</Text>
+                </View>
+              )}
             </View>
           </Card>
 
@@ -96,43 +171,44 @@ export function HomeScreen() {
             <View style={styles.cardTitleRow}>
               <Text style={styles.cardTitle}>Todo today</Text>
               <Badge>
-                <Text style={styles.bold}>2</Text> conflicts
+                <Text style={styles.bold}>{todayEvents.length + todayGoals.length}</Text> items
               </Badge>
             </View>
 
             <View style={{ marginTop: 10, gap: 10 }}>
-              <View style={styles.item}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.itemName}>Database class</Text>
-                  <Text style={styles.itemMeta}>15:00 – 18:00</Text>
-                </View>
-                <View style={{ flexDirection: 'row', gap: 8 }}>
-                  <Button title="Mark as done" small onPress={() => toast('Marked as done (demo)')} />
-                  <Button title="Edit" small onPress={() => toast('Edit (demo)')} />
-                </View>
-              </View>
+              {todayEvents.length === 0 && todayGoals.length === 0 ? (
+                <Text style={styles.muted12}>Nothing planned for today.</Text>
+              ) : (
+                <>
+                  {todayEvents.map(e => (
+                    <View key={e.id} style={styles.item}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.itemName}>{e.title}</Text>
+                        <Text style={styles.itemMeta}>{formatTimeRange(e.startAt, e.endAt)}</Text>
+                      </View>
+                      <View style={{ flexDirection: 'row', gap: 8 }}>
+                        <Button title="Detail" small onPress={() => toast('Event details (todo)')} />
+                      </View>
+                    </View>
+                  ))}
 
-              <View style={styles.item}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.itemName}>Chess class</Text>
-                  <Text style={styles.itemMeta}>18:00 – 19:00</Text>
-                </View>
-                <View style={{ flexDirection: 'row', gap: 8 }}>
-                  <Button title="Mark as done" small onPress={() => toast('Marked as done (demo)')} />
-                  <Button title="Edit" small onPress={() => toast('Edit (demo)')} />
-                </View>
-              </View>
-
-              <View style={styles.item}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.itemName}>Basketball goal</Text>
-                  <Text style={styles.itemMeta}>Action: Shoot 20 times · Deadline: 22:00</Text>
-                </View>
-                <View style={{ flexDirection: 'row', gap: 8 }}>
-                  <Button title="Mark as done" small onPress={() => toast('Marked as done (demo)')} />
-                  <Button title="Detail" small onPress={() => nav.navigate('GoalDetail', { title: 'Basketball goal' })} />
-                </View>
-              </View>
+                  {todayGoals.map(g => (
+                    <View key={g.id} style={styles.item}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.itemName}>{g.title}</Text>
+                        <Text style={styles.itemMeta}>{g.dueAt ? formatDueBadge(g.dueAt) : 'No due date'}</Text>
+                      </View>
+                      <View style={{ flexDirection: 'row', gap: 8 }}>
+                        <Button
+                          title="Detail"
+                          small
+                          onPress={() => nav.navigate('GoalDetail', { id: g.id, title: g.title })}
+                        />
+                      </View>
+                    </View>
+                  ))}
+                </>
+              )}
             </View>
 
             <View style={{ height: 10 }} />

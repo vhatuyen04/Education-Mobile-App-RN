@@ -33,6 +33,65 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   return data as T;
 }
 
+async function deleteJsonAuth<T>(path: string, accessToken: string): Promise<T> {
+  const res = await fetch(`${API_BASE_URL}${path}`, {
+    method: 'DELETE',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  const text = await res.text();
+  const data = text ? JSON.parse(text) : null;
+
+  if (!res.ok) {
+    const message = data?.error ?? `Request failed (${res.status})`;
+    throw new Error(message);
+  }
+
+  return data as T;
+}
+
+async function postJsonAuth<T>(path: string, body: unknown, accessToken: string): Promise<T> {
+  const res = await fetch(`${API_BASE_URL}${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify(body),
+  });
+
+  const text = await res.text();
+  const data = text ? JSON.parse(text) : null;
+
+  if (!res.ok) {
+    const message = data?.error ?? `Request failed (${res.status})`;
+    throw new Error(message);
+  }
+
+  return data as T;
+}
+
+async function getJsonAuth<T>(path: string, accessToken: string): Promise<T> {
+  const res = await fetch(`${API_BASE_URL}${path}`, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  const text = await res.text();
+  const data = text ? JSON.parse(text) : null;
+
+  if (!res.ok) {
+    const message = data?.error ?? `Request failed (${res.status})`;
+    throw new Error(message);
+  }
+
+  return data as T;
+}
+
 async function putJsonAuth<T>(path: string, body: unknown, accessToken: string): Promise<T> {
   const res = await fetch(`${API_BASE_URL}${path}`, {
     method: 'PUT',
@@ -68,4 +127,77 @@ export async function logout(refreshToken: string): Promise<{ ok: true }> {
 
 export async function updateMeName(accessToken: string, name: string): Promise<{ user: AuthUser }> {
   return putJsonAuth<{ user: AuthUser }>('/auth/me', { name }, accessToken);
+}
+
+export type DashboardGoal = {
+  id: string;
+  title: string;
+  progressPct: number;
+  dueAt: string | null;
+} | null;
+
+export type DashboardEvent = {
+  id: string;
+  title: string;
+  startAt: string;
+  endAt: string | null;
+  repeat: string | null;
+} | null;
+
+export type EventItem = {
+  id: string;
+  title: string;
+  startAt: string;
+  endAt: string | null;
+  repeat: string | null;
+  seriesId?: string | null;
+  seriesStartAt?: string | null;
+  seriesEndAt?: string | null;
+};
+
+export type DashboardResponse = {
+  score: number;
+  tasksPlanned: number;
+  nextGoal: DashboardGoal;
+  nextEvent: DashboardEvent;
+  todayEvents: EventItem[];
+  todayGoals: Exclude<DashboardGoal, null>[];
+};
+
+export async function getDashboard(accessToken: string): Promise<DashboardResponse> {
+  return getJsonAuth<DashboardResponse>('/auth/dashboard', accessToken);
+}
+
+export async function listEvents(accessToken: string, params?: { from?: string; to?: string }): Promise<{ events: EventItem[] }> {
+  const sp = new URLSearchParams();
+  if (params?.from) sp.set('from', params.from);
+  if (params?.to) sp.set('to', params.to);
+  const qs = sp.toString();
+  return getJsonAuth<{ events: EventItem[] }>(`/auth/events${qs ? `?${qs}` : ''}`, accessToken);
+}
+
+export async function createEvent(
+  accessToken: string,
+  body: { title: string; startAt: string; endAt?: string; repeat?: string; seriesEndAt?: string }
+): Promise<{ event: EventItem }> {
+  return postJsonAuth<{ event: EventItem }>('/auth/events', body, accessToken);
+}
+
+export async function updateEvent(
+  accessToken: string,
+  id: string,
+  body: { title?: string; startAt?: string; endAt?: string | null; repeat?: string | null },
+  opts?: { scope?: 'series' | 'single' }
+): Promise<{ event: EventItem }> {
+  const sp = new URLSearchParams();
+  if (opts?.scope) sp.set('scope', opts.scope);
+  const qs = sp.toString();
+  return putJsonAuth<{ event: EventItem }>(`/auth/events/${id}${qs ? `?${qs}` : ''}`, body, accessToken);
+}
+
+export async function deleteEvent(accessToken: string, id: string, opts?: { scope?: 'series' | 'single' }): Promise<{ ok: true }> {
+  const sp = new URLSearchParams();
+  if (opts?.scope) sp.set('scope', opts.scope);
+  const qs = sp.toString();
+  return deleteJsonAuth<{ ok: true }>(`/auth/events/${id}${qs ? `?${qs}` : ''}`, accessToken);
 }

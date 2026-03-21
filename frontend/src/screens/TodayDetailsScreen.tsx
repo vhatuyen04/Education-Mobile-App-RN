@@ -1,6 +1,6 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 
 import { Screen } from '../components/Screen';
 import { Card } from '../components/Card';
@@ -9,6 +9,8 @@ import { Pill } from '../components/Pill';
 import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
 import { toast } from '../utils/toast';
+import { useAuth } from '../auth/AuthContext';
+import * as authApi from '../api/auth';
 
 type ItemType = 'event' | 'goal';
 
@@ -17,37 +19,79 @@ type Item = {
   type: ItemType;
   name: string;
   meta: string;
-  done: boolean;
+  seriesId?: string | null;
 };
 
 export function TodayDetailsScreen() {
   const nav = useNavigation();
 
-  const [items, setItems] = useState<Item[]>([
-    {
-      id: 'e1',
-      type: 'event',
-      name: 'Database class (Daily)',
-      meta: '15:00 – 18:00 · Not completed',
-      done: false,
-    },
-    {
-      id: 'e2',
-      type: 'event',
-      name: 'Chess class (Daily)',
-      meta: '18:00 – 19:00 · Not completed',
-      done: false,
-    },
-    {
-      id: 'g1',
-      type: 'goal',
-      name: 'Basketball goal',
-      meta: 'Until 22:00 · Step action plan · Not completed',
-      done: false,
-    },
-  ]);
+  const { state } = useAuth();
+  const [dash, setDash] = useState<authApi.DashboardResponse | null>(null);
+  const [loading, setLoading] = useState(false);
 
   const [confirm, setConfirm] = useState<{ open: boolean; item?: Item }>({ open: false });
+
+  const refresh = useCallback(async () => {
+    const token = state.accessToken;
+    if (!token) return;
+
+    setLoading(true);
+    try {
+      const resp = await authApi.getDashboard(token);
+      setDash(resp);
+    } catch (e: any) {
+      toast(String(e?.message ?? 'Failed to load'));
+    } finally {
+      setLoading(false);
+    }
+  }, [state.accessToken]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void refresh();
+    }, [refresh])
+  );
+
+  function formatDueBadge(dueAt: string | null) {
+    if (!dueAt) return 'No due date';
+    const due = new Date(dueAt);
+    const ms = due.getTime() - Date.now();
+    const days = Math.ceil(ms / (1000 * 60 * 60 * 24));
+    if (Number.isNaN(days)) return 'Due date';
+    if (days < 0) return 'Overdue';
+    if (days === 0) return 'Due today';
+    if (days === 1) return 'Due tomorrow';
+    if (days < 7) return `Due in ${days} days`;
+    const weeks = Math.ceil(days / 7);
+    return `Due in ${weeks} weeks`;
+  }
+
+  function formatTimeRange(startAt: string, endAt: string | null) {
+    const start = new Date(startAt);
+    const end = endAt ? new Date(endAt) : null;
+    const startTxt = start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    const endTxt = end ? end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : null;
+    return endTxt ? `${startTxt} – ${endTxt}` : startTxt;
+  }
+
+  const items = useMemo<Item[]>(() => {
+    const events = (dash?.todayEvents ?? []).map(e => ({
+      id: e.id,
+      type: 'event' as const,
+      name: e.repeat ? `${e.title} (${e.repeat})` : e.title,
+      meta: formatTimeRange(e.startAt, e.endAt),
+      seriesId: (e as any).seriesId ?? null,
+    }));
+
+    const goals = (dash?.todayGoals ?? []).map(g => ({
+      id: g.id,
+      type: 'goal' as const,
+      name: g.title,
+      meta: g.dueAt ? formatDueBadge(g.dueAt) : 'No due date',
+    }));
+
+    return [...events, ...goals];
+  }, [dash?.todayEvents, dash?.todayGoals]);
 
   const confirmText = useMemo(() => {
     if (!confirm.item) return 'Are you sure you want to delete this item?';
@@ -64,28 +108,28 @@ export function TodayDetailsScreen() {
     setConfirm({ open: false });
   }
 
-  function deleteConfirmed() {
+  async function deleteConfirmed() {
+    const token = state.accessToken;
+    if (!token) {
+      toast('Not signed in');
+      return;
+    }
     if (!confirm.item) return;
-    setItems(prev => prev.filter(i => i.id !== confirm.item!.id));
-    toast('Deleted (demo)');
-    closeConfirm();
-  }
+    if (confirm.item.type !== 'event') {
+      toast('Delete goal (todo)');
+      closeConfirm();
+      return;
+    }
 
-  function markDone(id: string) {
-    setItems(prev =>
-      prev.map(i =>
-        i.id === id
-          ? {
-              ...i,
-              done: true,
-              meta: i.meta
-                .replace('Not completed', 'Completed')
-                .replace('Status: Not completed', 'Status: Completed'),
-            }
-          : i
-      )
-    );
-    toast('Marked as done (demo)');
+    try {
+      const scope = confirm.item.seriesId ? 'series' : 'single';
+      await authApi.deleteEvent(token, confirm.item.id, { scope });
+      toast('Deleted');
+      closeConfirm();
+      await refresh();
+    } catch (e: any) {
+      toast(String(e?.message ?? 'Delete failed'));
+    }
   }
 
   return (
@@ -96,6 +140,7 @@ export function TodayDetailsScreen() {
             <Text style={styles.hTitle}>Details (Todo today)</Text>
             <View style={styles.hSub}>
               <Pill dot>Events & goals today</Pill>
+              {loading ? <Pill>Loading…</Pill> : null}
             </View>
           </View>
           <Pressable
@@ -114,19 +159,30 @@ export function TodayDetailsScreen() {
           <View style={{ height: 10 }} />
 
           <ScrollView style={{ maxHeight: 420 }} contentContainerStyle={{ gap: 10 }} nestedScrollEnabled>
-            {items.map(item => (
-              <View key={item.id} style={styles.item}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.name}>{item.name}</Text>
-                  <Text style={styles.meta}>{item.meta}</Text>
-                </View>
+            {items.length === 0 ? (
+              <Text style={styles.meta}>Nothing planned for today.</Text>
+            ) : (
+              items.map(item => (
+                <View key={`${item.type}_${item.id}`} style={styles.item}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.name}>{item.name}</Text>
+                    <Text style={styles.meta}>{item.meta}</Text>
+                  </View>
 
-                <View style={styles.actions}>
-                  <Button title="Delete" small variant="danger" onPress={() => requestDelete(item)} />
-                  <Button title={item.done ? 'Done' : 'Mark as done'} small onPress={() => markDone(item.id)} />
+                  <View style={styles.actions}>
+                    {item.type === 'event' ? (
+                      <Button title="Delete" small variant="danger" onPress={() => requestDelete(item)} />
+                    ) : null}
+
+                    {item.type === 'goal' ? (
+                      <Button title="Detail" small onPress={() => (nav as any).navigate('GoalDetail', { id: item.id, title: item.name })} />
+                    ) : (
+                      <Button title="Detail" small onPress={() => toast('Event details (todo)')} />
+                    )}
+                  </View>
                 </View>
-              </View>
-            ))}
+              ))
+            )}
           </ScrollView>
         </Card>
       </ScrollView>
