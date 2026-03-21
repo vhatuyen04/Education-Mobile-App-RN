@@ -26,12 +26,25 @@ npm-debug.*
 yarn-debug.*
 yarn-error.*
 
+# logs
+*.log
+
 # macOS
 .DS_Store
 *.pem
 
+# Windows
+Thumbs.db
+Desktop.ini
+
 # local env files
 .env*.local
+
+# env files (keep examples tracked)
+.env
+.env.*
+!.env.example
+!.env.*.example
 
 # typescript
 *.tsbuildinfo

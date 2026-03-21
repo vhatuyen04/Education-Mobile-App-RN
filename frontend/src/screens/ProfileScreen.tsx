@@ -7,6 +7,7 @@ import { colors } from '../theme/colors';
 import { Pill } from '../components/Pill';
 import { Button } from '../components/Button';
 import { toast } from '../utils/toast';
+import { useAuth } from '../auth/AuthContext';
 
 type Row = {
   key: string;
@@ -17,6 +18,7 @@ type Row = {
 };
 
 export function ProfileScreen() {
+  const { signOut } = useAuth();
   const [rankingMode, setRankingMode] = useState(true);
   const [tryHardMode, setTryHardMode] = useState(true);
 
@@ -45,6 +47,10 @@ export function ProfileScreen() {
   function toggleTryHard() {
     setTryHardMode(v => !v);
     toast('Changed (demo)');
+  }
+
+  async function handleLogout() {
+    await signOut();
   }
 
   return (
@@ -115,7 +121,7 @@ export function ProfileScreen() {
           <View style={styles.divider} />
 
           <Pressable
-            onPress={() => toast('Log out (demo)')}
+            onPress={handleLogout}
             style={({ pressed }) => [styles.logout, pressed ? { opacity: 0.9 } : null]}
           >
             <Text style={styles.logoutText}>Log out</Text>

@@ -1,4 +1,5 @@
 export type RootStackParamList = {
+  Auth: undefined;
   Tabs: undefined;
   GoalDetail: { id?: string; title?: string } | undefined;
   TodayDetails: undefined;
