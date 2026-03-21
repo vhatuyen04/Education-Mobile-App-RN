@@ -23,6 +23,14 @@ const LogoutSchema = z.object({
   refreshToken: z.string().min(1),
 });
 
+const UpdateMeSchema = z.object({
+  name: z.string().min(1),
+});
+
+function hasInvalidEmail(error: z.ZodError) {
+  return error.issues.some(issue => issue.path[0] === 'email');
+}
+
 function signAccessToken(userId: string) {
   const config = getConfig();
   const options: SignOptions = { expiresIn: config.accessTokenTtl as SignOptions['expiresIn'] };
@@ -35,9 +43,30 @@ function signRefreshToken(userId: string) {
   return jwt.sign({ sub: userId, type: 'refresh' }, config.jwtRefreshSecret as Secret, options);
 }
 
+function getAccessTokenFromReq(req: Request): string | null {
+  const raw = req.header('authorization') || req.header('Authorization');
+  if (!raw) return null;
+  const m = raw.match(/^Bearer\s+(.+)$/i);
+  return m ? m[1] : null;
+}
+
+function verifyAccessToken(token: string): { sub: string } {
+  const config = getConfig();
+  const payload: any = jwt.verify(token, config.jwtAccessSecret);
+
+  if (!payload?.sub || payload?.type !== 'access') {
+    throw new Error('Invalid token');
+  }
+
+  return { sub: String(payload.sub) };
+}
+
 authRouter.post('/register', async (req: Request, res: Response) => {
   const parsed = RegisterSchema.safeParse(req.body);
   if (!parsed.success) {
+    if (hasInvalidEmail(parsed.error)) {
+      return res.status(400).json({ error: 'Invalid email.' });
+    }
     return res.status(400).json({ error: 'Invalid payload' });
   }
 
@@ -69,6 +98,9 @@ authRouter.post('/register', async (req: Request, res: Response) => {
 authRouter.post('/login', async (req: Request, res: Response) => {
   const parsed = LoginSchema.safeParse(req.body);
   if (!parsed.success) {
+    if (hasInvalidEmail(parsed.error)) {
+      return res.status(400).json({ error: 'Invalid email.' });
+    }
     return res.status(400).json({ error: 'Invalid payload' });
   }
 
@@ -76,12 +108,12 @@ authRouter.post('/login', async (req: Request, res: Response) => {
 
   const user = await prisma.user.findUnique({ where: { email } });
   if (!user) {
-    return res.status(401).json({ error: 'Invalid credentials' });
+    return res.status(401).json({ error: 'Invalid username or password.' });
   }
 
   const ok = await bcrypt.compare(password, user.passwordHash);
   if (!ok) {
-    return res.status(401).json({ error: 'Invalid credentials' });
+    return res.status(401).json({ error: 'Invalid username or password.' });
   }
 
   const accessToken = signAccessToken(user.id);
@@ -125,4 +157,36 @@ authRouter.post('/logout', async (req: Request, res: Response) => {
   });
 
   return res.json({ ok: true });
+});
+
+authRouter.put('/me', async (req: Request, res: Response) => {
+  const token = getAccessTokenFromReq(req);
+  if (!token) {
+    return res.status(401).json({ error: 'Missing access token' });
+  }
+
+  let userId: string;
+  try {
+    userId = verifyAccessToken(token).sub;
+  } catch {
+    return res.status(401).json({ error: 'Invalid access token' });
+  }
+
+  const parsed = UpdateMeSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Invalid payload' });
+  }
+
+  const name = parsed.data.name.trim();
+  if (!name) {
+    return res.status(400).json({ error: 'Invalid payload' });
+  }
+
+  const user = await prisma.user.update({
+    where: { id: userId },
+    data: { name },
+    select: { id: true, email: true, name: true },
+  });
+
+  return res.json({ user });
 });

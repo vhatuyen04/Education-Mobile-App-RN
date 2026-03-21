@@ -14,6 +14,7 @@ type AuthContextValue = {
   state: AuthState;
   signIn: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string, name?: string) => Promise<void>;
+  updateName: (name: string) => Promise<void>;
   signOut: () => Promise<void>;
 };
 
@@ -85,6 +86,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await applyAuth(resp);
   }
 
+  async function updateName(name: string) {
+    const accessToken = state.accessToken;
+    const user = state.user;
+
+    if (!accessToken || !user) {
+      throw new Error('Not signed in');
+    }
+
+    const nextName = name.trim();
+    if (!nextName) {
+      throw new Error('Name is required');
+    }
+
+    const resp = await authApi.updateMeName(accessToken, nextName);
+    await setSecure(KEY_USER, JSON.stringify(resp.user));
+    setState(s => ({ ...s, user: resp.user }));
+  }
+
   async function signOut() {
     const refresh = state.refreshToken;
 
@@ -100,7 +119,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
-  const value = useMemo<AuthContextValue>(() => ({ state, signIn, register, signOut }), [state]);
+  const value = useMemo<AuthContextValue>(() => ({ state, signIn, register, updateName, signOut }), [state]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

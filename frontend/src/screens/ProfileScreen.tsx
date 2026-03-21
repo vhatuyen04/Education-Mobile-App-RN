@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { Screen } from '../components/Screen';
 import { Card } from '../components/Card';
@@ -18,9 +18,17 @@ type Row = {
 };
 
 export function ProfileScreen() {
-  const { signOut } = useAuth();
+  const { signOut, state, updateName } = useAuth();
   const [rankingMode, setRankingMode] = useState(true);
   const [tryHardMode, setTryHardMode] = useState(true);
+
+  const [editing, setEditing] = useState(false);
+  const [nameDraft, setNameDraft] = useState(state.user?.name ?? '');
+  const [saving, setSaving] = useState(false);
+
+  const displayName = state.user?.name?.trim() || state.user?.email?.split('@')[0] || 'User';
+  const displayEmail = state.user?.email || '';
+  const avatarLetter = (displayName.trim()[0] || 'U').toUpperCase();
 
   const rows = useMemo<Row[]>(
     () => [
@@ -53,6 +61,30 @@ export function ProfileScreen() {
     await signOut();
   }
 
+  function startEdit() {
+    setNameDraft(state.user?.name ?? '');
+    setEditing(true);
+  }
+
+  function cancelEdit() {
+    setEditing(false);
+    setNameDraft(state.user?.name ?? '');
+  }
+
+  async function saveName() {
+    if (saving) return;
+    setSaving(true);
+    try {
+      await updateName(nameDraft);
+      setEditing(false);
+      toast('Name updated');
+    } catch (e: any) {
+      toast(String(e?.message ?? 'Update failed'));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <Screen style={{ padding: 0 }}>
       <ScrollView contentContainerStyle={styles.content}>
@@ -70,14 +102,33 @@ export function ProfileScreen() {
           <View style={styles.headerRow}>
             <View style={styles.userRow}>
               <View style={styles.avatar}>
-                <Text style={styles.avatarText}>T</Text>
+                <Text style={styles.avatarText}>{avatarLetter}</Text>
               </View>
               <View style={{ gap: 2 }}>
-                <Text style={styles.userName}>Tuyen Vu</Text>
-                <Text style={styles.userEmail}>katuyen123@gmail.com</Text>
+                {editing ? (
+                  <TextInput
+                    value={nameDraft}
+                    onChangeText={setNameDraft}
+                    placeholder="Your name"
+                    placeholderTextColor={colors.muted}
+                    style={styles.nameInput}
+                    autoCapitalize="words"
+                    editable={!saving}
+                  />
+                ) : (
+                  <Text style={styles.userName}>{displayName}</Text>
+                )}
+                <Text style={styles.userEmail}>{displayEmail}</Text>
+
+                {editing ? (
+                  <View style={styles.editBtnsInline}>
+                    <Button title={saving ? 'Saving…' : 'Save'} small variant="primary" onPress={saveName} />
+                    <Button title="Cancel" small onPress={cancelEdit} />
+                  </View>
+                ) : null}
               </View>
             </View>
-            <Button title="Edit" small onPress={() => toast('Edit profile (demo)')} />
+            {editing ? null : <Button title="Edit" small onPress={startEdit} />}
           </View>
 
           <View style={styles.divider} />
@@ -188,6 +239,28 @@ const styles = StyleSheet.create({
     color: colors.muted,
     fontSize: 12,
     fontWeight: '700',
+  },
+  nameInput: {
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: colors.surface2,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    color: colors.text,
+    fontWeight: '900',
+    minWidth: 160,
+  },
+  editBtns: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  editBtnsInline: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 8,
   },
   divider: {
     height: 1,

@@ -19,13 +19,29 @@ export function LoginScreen({ onGoRegister }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  function isValidEmail(v: string) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
+  }
+
   async function handleLogin() {
+    if (!isValidEmail(email)) {
+      setError('Invalid email.');
+      return;
+    }
+
     setLoading(true);
     setError(null);
     try {
       await signIn(email, password);
     } catch (e: any) {
-      setError(e?.message ?? 'Login failed');
+      const msg = String(e?.message ?? 'Login failed');
+      if (msg.toLowerCase().includes('invalid email')) {
+        setError('Invalid email.');
+      } else if (msg.toLowerCase().includes('invalid username or password')) {
+        setError('Invalid username or password.');
+      } else {
+        setError(msg);
+      }
     } finally {
       setLoading(false);
     }

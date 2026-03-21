@@ -20,13 +20,27 @@ export function RegisterScreen({ onGoLogin }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  function isValidEmail(v: string) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
+  }
+
   async function handleRegister() {
+    if (!isValidEmail(email)) {
+      setError('Invalid email.');
+      return;
+    }
+
     setLoading(true);
     setError(null);
     try {
       await register(email, password, name);
     } catch (e: any) {
-      setError(e?.message ?? 'Register failed');
+      const msg = String(e?.message ?? 'Register failed');
+      if (msg.toLowerCase().includes('invalid email')) {
+        setError('Invalid email.');
+      } else {
+        setError(msg);
+      }
     } finally {
       setLoading(false);
     }
