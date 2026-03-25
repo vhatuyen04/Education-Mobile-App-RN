@@ -12,6 +12,8 @@ import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
 import { Step, StepEditorList } from '../components/StepEditorList';
 import { toast } from '../utils/toast';
+import { useAuth } from '../auth/AuthContext';
+import * as authApi from '../api/auth';
 import type { RootStackParamList } from '../navigation/types';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -42,12 +44,15 @@ function exampleStepsFor(title: string): Step[] {
 export function GoalDetailScreen() {
   const nav = useNavigation<Nav>();
   const route = useRoute<R>();
+  const { state } = useAuth();
 
+  const goalId = route.params?.id;
   const initialTitle = route.params?.title || 'New goal';
 
   const [title, setTitle] = useState(initialTitle);
   const [desc, setDesc] = useState('');
   const [steps, setSteps] = useState<Step[]>(() => exampleStepsFor(initialTitle));
+  const [saving, setSaving] = useState(false);
 
   const stepCount = useMemo(() => steps.filter(s => s.text.trim()).length, [steps]);
 
@@ -55,7 +60,8 @@ export function GoalDetailScreen() {
     setSteps(prev => [...prev, { id: makeId(), text: 'New step' }]);
   }
 
-  function save() {
+  async function save() {
+    if (saving) return;
     const t = title.trim();
     const stepTexts = steps.map(s => s.text.trim()).filter(Boolean);
     if (!t) {
@@ -66,8 +72,27 @@ export function GoalDetailScreen() {
       toast('Please add at least 1 step');
       return;
     }
-    toast('Saved (demo)');
-    nav.goBack();
+
+    const token = state.accessToken;
+    if (!token) {
+      toast('Not signed in');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      if (goalId) {
+        await authApi.updateGoal(token, goalId, { title: t });
+      } else {
+        await authApi.createGoal(token, { title: t, progressPct: 0 });
+      }
+      toast('Saved');
+      nav.goBack();
+    } catch (e: any) {
+      toast(String(e?.message ?? 'Save failed'));
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (

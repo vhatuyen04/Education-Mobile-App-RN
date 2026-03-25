@@ -36,6 +36,13 @@ const CreateGoalSchema = z.object({
   dueAt: z.string().datetime().optional(),
 });
 
+const UpdateGoalSchema = z.object({
+  title: z.string().min(1).optional(),
+  progressPct: z.number().int().min(0).max(100).optional(),
+  dueAt: z.string().datetime().optional().nullable(),
+  completed: z.boolean().optional(),
+});
+
 const CreateEventSchema = z.object({
   title: z.string().min(1),
   startAt: z.string().datetime(),
@@ -54,6 +61,12 @@ const UpdateEventSchema = z.object({
   startAt: z.string().datetime().optional(),
   endAt: z.string().datetime().optional().nullable(),
   repeat: z.string().min(1).optional().nullable(),
+});
+
+const LeaderboardFieldQuerySchema = z.object({
+  field: z.enum(['Sport', 'Academy', 'Entertainment']),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
 });
 
 function isRepeating(repeat: string | null | undefined) {
@@ -86,6 +99,39 @@ function addRepeatInterval(date: Date, repeat: string) {
   // Unknown repeat type: treat as non-repeating by returning a date after the end.
   d.setFullYear(d.getFullYear() + 100);
   return d;
+}
+
+function inferRankFieldFromText(text: string): 'Sport' | 'Academy' | 'Entertainment' {
+  const t = (text || '').toLowerCase();
+  if (t.includes('gym') || t.includes('run') || t.includes('basket') || t.includes('swim') || t.includes('fitness')) return 'Sport';
+  if (t.includes('thesis') || t.includes('study') || t.includes('exam') || t.includes('database') || t.includes('ielts')) return 'Academy';
+  if (t.includes('game') || t.includes('lol') || t.includes('movie') || t.includes('music')) return 'Entertainment';
+  return 'Academy';
+}
+
+function scoreFieldForRankField(field: 'Sport' | 'Academy' | 'Entertainment') {
+  if (field === 'Sport') return 'sportScore';
+  if (field === 'Entertainment') return 'entertainmentScore';
+  return 'academyScore';
+}
+
+async function refreshLeaderboardTop(field: 'Sport' | 'Academy' | 'Entertainment') {
+  const scoreField = scoreFieldForRankField(field);
+  const top = await prismaAny.user.findFirst({
+    where: { [scoreField]: { gt: 0 } },
+    orderBy: [{ [scoreField]: 'desc' }, { updatedAt: 'asc' }],
+    select: { id: true, name: true, [scoreField]: true },
+  });
+
+  const points = top ? Number(top[scoreField] ?? 0) : 0;
+  const userId = top?.id ?? null;
+  const userName = top?.name ?? null;
+
+  await prismaAny.leaderboardTop.upsert({
+    where: { field },
+    create: { field, userId, userName, points },
+    update: { userId, userName, points },
+  });
 }
 
 async function ensureSeriesForLegacyRepeatingEvent(params: {
@@ -492,6 +538,253 @@ authRouter.post('/goals', async (req: Request, res: Response) => {
   });
 
   return res.status(201).json({ goal });
+});
+
+authRouter.get('/goals', async (req: Request, res: Response) => {
+  const token = getAccessTokenFromReq(req);
+  if (!token) {
+    return res.status(401).json({ error: 'Missing access token' });
+  }
+
+  let userId: string;
+  try {
+    userId = verifyAccessToken(token).sub;
+  } catch {
+    return res.status(401).json({ error: 'Invalid access token' });
+  }
+
+  const goals = await prismaAny.goal.findMany({
+    where: { userId },
+    orderBy: [{ completed: 'asc' }, { dueAt: 'asc' }, { createdAt: 'asc' }],
+    select: { id: true, title: true, progressPct: true, dueAt: true, completed: true },
+    take: 200,
+  });
+
+  return res.json({ goals });
+});
+
+authRouter.put('/goals/:id', async (req: Request, res: Response) => {
+  const token = getAccessTokenFromReq(req);
+  if (!token) {
+    return res.status(401).json({ error: 'Missing access token' });
+  }
+
+  let userId: string;
+  try {
+    userId = verifyAccessToken(token).sub;
+  } catch {
+    return res.status(401).json({ error: 'Invalid access token' });
+  }
+
+  const parsed = UpdateGoalSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Invalid payload' });
+  }
+
+  const id = String(req.params.id);
+  const existing = await prismaAny.goal.findFirst({ where: { id, userId }, select: { id: true, title: true, completed: true } });
+  if (!existing) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+
+  const data: any = {};
+  if (parsed.data.title !== undefined) data.title = parsed.data.title.trim();
+  if (parsed.data.progressPct !== undefined) data.progressPct = parsed.data.progressPct;
+  if (parsed.data.dueAt !== undefined) data.dueAt = parsed.data.dueAt ? new Date(parsed.data.dueAt) : null;
+  if (parsed.data.completed !== undefined) data.completed = parsed.data.completed;
+
+  if (data.title !== undefined && !data.title) {
+    return res.status(400).json({ error: 'Invalid payload' });
+  }
+
+  const willComplete = data.completed === true && existing.completed === false;
+  const goal = await prismaAny.goal.update({
+    where: { id },
+    data,
+    select: { id: true, title: true, progressPct: true, dueAt: true, completed: true },
+  });
+
+  if (willComplete) {
+    const field = inferRankFieldFromText(existing.title);
+    const scoreField = scoreFieldForRankField(field);
+    await prismaAny.user.update({
+      where: { id: userId },
+      data: {
+        score: { increment: 1 },
+        [scoreField]: { increment: 1 },
+      },
+      select: { id: true },
+    });
+    await refreshLeaderboardTop(field);
+  }
+
+  return res.json({ goal });
+});
+
+authRouter.get('/leaderboard', async (req: Request, res: Response) => {
+  const token = getAccessTokenFromReq(req);
+  if (!token) {
+    return res.status(401).json({ error: 'Missing access token' });
+  }
+
+  let userId: string;
+  try {
+    userId = verifyAccessToken(token).sub;
+  } catch {
+    return res.status(401).json({ error: 'Invalid access token' });
+  }
+
+  const fields: Array<'Sport' | 'Academy' | 'Entertainment'> = ['Sport', 'Academy', 'Entertainment'];
+
+  await Promise.all(fields.map(f => refreshLeaderboardTop(f)));
+
+  const leaderboards = await Promise.all(
+    fields.map(async field => {
+      const scoreField = scoreFieldForRankField(field);
+
+      const top = await prismaAny.user.findMany({
+        where: { [scoreField]: { gt: 0 } },
+        orderBy: [{ [scoreField]: 'desc' }, { updatedAt: 'asc' }],
+        select: { id: true, name: true, [scoreField]: true },
+        take: 10,
+      });
+
+      const leaders = top.map((u: any, idx: number) => ({
+        userId: String(u.id),
+        name: u.name ?? 'Unknown',
+        points: Number(u[scoreField] ?? 0),
+        rank: idx + 1,
+      }));
+
+      const me = await prismaAny.user.findUnique({
+        where: { id: userId },
+        select: { id: true, name: true, [scoreField]: true },
+      });
+
+      const myPoints = Number(me?.[scoreField] ?? 0);
+      const myRank =
+        myPoints > 0
+          ? (await prismaAny.user.count({
+              where: { [scoreField]: { gt: myPoints } },
+            })) + 1
+          : null;
+
+      const topRow = await prismaAny.leaderboardTop.findUnique({ where: { field } });
+
+      return {
+        field,
+        topUser: topRow?.userName ?? (leaders[0]?.name ?? null),
+        leaders,
+        me: {
+          userId,
+          name: me?.name ?? 'You',
+          points: myPoints,
+          rank: myRank,
+        },
+      };
+    })
+  );
+
+  return res.json({ leaderboards });
+});
+
+authRouter.get('/leaderboard/field', async (req: Request, res: Response) => {
+  const token = getAccessTokenFromReq(req);
+  if (!token) {
+    return res.status(401).json({ error: 'Missing access token' });
+  }
+
+  let userId: string;
+  try {
+    userId = verifyAccessToken(token).sub;
+  } catch {
+    return res.status(401).json({ error: 'Invalid access token' });
+  }
+
+  const parsed = LeaderboardFieldQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Invalid query' });
+  }
+
+  const field = parsed.data.field;
+  const limit = parsed.data.limit ?? 50;
+  const offset = parsed.data.offset ?? 0;
+
+  await refreshLeaderboardTop(field);
+
+  const scoreField = scoreFieldForRankField(field);
+
+  const total = await prismaAny.user.count({
+    where: { [scoreField]: { gt: 0 } },
+  });
+
+  const rows = await prismaAny.user.findMany({
+    where: { [scoreField]: { gt: 0 } },
+    orderBy: [{ [scoreField]: 'desc' }, { updatedAt: 'asc' }],
+    select: { id: true, name: true, [scoreField]: true },
+    skip: offset,
+    take: limit,
+  });
+
+  const leaders = rows.map((u: any, idx: number) => ({
+    userId: String(u.id),
+    name: u.name ?? 'Unknown',
+    points: Number(u[scoreField] ?? 0),
+    rank: offset + idx + 1,
+  }));
+
+  const me = await prismaAny.user.findUnique({
+    where: { id: userId },
+    select: { id: true, name: true, [scoreField]: true },
+  });
+
+  const myPoints = Number(me?.[scoreField] ?? 0);
+  const myRank =
+    myPoints > 0
+      ? (await prismaAny.user.count({
+          where: { [scoreField]: { gt: myPoints } },
+        })) + 1
+      : null;
+
+  const topRow = await prismaAny.leaderboardTop.findUnique({ where: { field } });
+
+  return res.json({
+    field,
+    topUser: topRow?.userName ?? (leaders[0]?.name ?? null),
+    total,
+    limit,
+    offset,
+    leaders,
+    me: {
+      userId,
+      name: me?.name ?? 'You',
+      points: myPoints,
+      rank: myRank,
+    },
+  });
+});
+
+authRouter.delete('/goals/:id', async (req: Request, res: Response) => {
+  const token = getAccessTokenFromReq(req);
+  if (!token) {
+    return res.status(401).json({ error: 'Missing access token' });
+  }
+
+  let userId: string;
+  try {
+    userId = verifyAccessToken(token).sub;
+  } catch {
+    return res.status(401).json({ error: 'Invalid access token' });
+  }
+
+  const id = String(req.params.id);
+  const existing = await prismaAny.goal.findFirst({ where: { id, userId }, select: { id: true } });
+  if (!existing) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+
+  await prismaAny.goal.delete({ where: { id } });
+  return res.json({ ok: true });
 });
 
 authRouter.post('/events', async (req: Request, res: Response) => {

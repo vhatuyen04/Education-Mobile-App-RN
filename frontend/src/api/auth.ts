@@ -136,6 +136,14 @@ export type DashboardGoal = {
   dueAt: string | null;
 } | null;
 
+export type GoalItem = {
+  id: string;
+  title: string;
+  progressPct: number;
+  dueAt: string | null;
+  completed: boolean;
+};
+
 export type DashboardEvent = {
   id: string;
   title: string;
@@ -164,8 +172,73 @@ export type DashboardResponse = {
   todayGoals: Exclude<DashboardGoal, null>[];
 };
 
+export type LeaderboardField = 'Sport' | 'Academy' | 'Entertainment';
+
+export type LeaderboardEntry = {
+  userId: string;
+  name: string;
+  points: number;
+  rank: number | null;
+};
+
+export type LeaderboardFieldResponse = {
+  field: LeaderboardField;
+  topUser: string | null;
+  leaders: LeaderboardEntry[];
+  me: LeaderboardEntry;
+};
+
+export type LeaderboardFieldPageResponse = LeaderboardFieldResponse & {
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type LeaderboardResponse = {
+  leaderboards: LeaderboardFieldResponse[];
+};
+
 export async function getDashboard(accessToken: string): Promise<DashboardResponse> {
   return getJsonAuth<DashboardResponse>('/auth/dashboard', accessToken);
+}
+
+export async function getLeaderboard(accessToken: string): Promise<LeaderboardResponse> {
+  return getJsonAuth<LeaderboardResponse>('/auth/leaderboard', accessToken);
+}
+
+export async function getLeaderboardField(
+  accessToken: string,
+  params: { field: LeaderboardField; limit?: number; offset?: number }
+): Promise<LeaderboardFieldPageResponse> {
+  const sp = new URLSearchParams();
+  sp.set('field', params.field);
+  if (params.limit !== undefined) sp.set('limit', String(params.limit));
+  if (params.offset !== undefined) sp.set('offset', String(params.offset));
+  const qs = sp.toString();
+  return getJsonAuth<LeaderboardFieldPageResponse>(`/auth/leaderboard/field?${qs}`, accessToken);
+}
+
+export async function listGoals(accessToken: string): Promise<{ goals: GoalItem[] }> {
+  return getJsonAuth<{ goals: GoalItem[] }>('/auth/goals', accessToken);
+}
+
+export async function createGoal(
+  accessToken: string,
+  body: { title: string; progressPct?: number; dueAt?: string }
+): Promise<{ goal: GoalItem }> {
+  return postJsonAuth<{ goal: GoalItem }>('/auth/goals', body, accessToken);
+}
+
+export async function updateGoal(
+  accessToken: string,
+  id: string,
+  body: { title?: string; progressPct?: number; dueAt?: string | null; completed?: boolean }
+): Promise<{ goal: GoalItem }> {
+  return putJsonAuth<{ goal: GoalItem }>(`/auth/goals/${id}`, body, accessToken);
+}
+
+export async function deleteGoal(accessToken: string, id: string): Promise<{ ok: true }> {
+  return deleteJsonAuth<{ ok: true }>(`/auth/goals/${id}`, accessToken);
 }
 
 export async function listEvents(accessToken: string, params?: { from?: string; to?: string }): Promise<{ events: EventItem[] }> {

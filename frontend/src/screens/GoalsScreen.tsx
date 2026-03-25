@@ -1,6 +1,6 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
 import { Screen } from '../components/Screen';
@@ -9,39 +9,67 @@ import { colors } from '../theme/colors';
 import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
 import { toast } from '../utils/toast';
+import { useAuth } from '../auth/AuthContext';
+import * as authApi from '../api/auth';
 import type { RootStackParamList } from '../navigation/types';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
-type Goal = {
-  id: string;
-  title: string;
-  completedPct: number;
-};
+type Goal = authApi.GoalItem;
 
 export function GoalsScreen() {
   const nav = useNavigation<Nav>();
+  const { state } = useAuth();
 
-  const [goals, setGoals] = useState<Goal[]>([
-    { id: 'g1', title: 'Challenge LoL', completedPct: 58 },
-    { id: 'g2', title: '6.5 IELTS', completedPct: 70 },
-    { id: 'g3', title: 'Thesis writing', completedPct: 24 },
-    { id: 'g4', title: 'Run 20km/week', completedPct: 45 },
-    { id: 'g5', title: 'Learn Flutter', completedPct: 62 },
-    { id: 'g6', title: 'No sugar week', completedPct: 10 },
-    { id: 'g7', title: 'Read 12 books', completedPct: 33 },
-    { id: 'g8', title: 'Meditate daily', completedPct: 58 },
-  ]);
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [loading, setLoading] = useState(false);
 
-  const activeCount = useMemo(() => goals.length, [goals.length]);
+  const activeCount = useMemo(() => goals.filter(g => !g.completed).length, [goals]);
   const [confirm, setConfirm] = useState<{ open: boolean; goal?: Goal }>({ open: false });
+
+  const refresh = useCallback(async () => {
+    const token = state.accessToken;
+    if (!token) return;
+
+    setLoading(true);
+    try {
+      const resp = await authApi.listGoals(token);
+      setGoals(resp.goals);
+    } catch (e: any) {
+      toast(String(e?.message ?? 'Failed to load'));
+    } finally {
+      setLoading(false);
+    }
+  }, [state.accessToken]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void refresh();
+    }, [refresh])
+  );
 
   function openGoal(g: Goal) {
     nav.navigate('GoalDetail', { id: g.id, title: g.title });
   }
 
-  function completeGoal(g: Goal) {
-    toast('Complete (demo)');
+  async function completeGoal(g: Goal) {
+    if (loading) return;
+    const token = state.accessToken;
+    if (!token) {
+      toast('Not signed in');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      await authApi.updateGoal(token, g.id, { completed: true });
+      await refresh();
+      toast('Completed');
+    } catch (e: any) {
+      toast(String(e?.message ?? 'Complete failed'));
+    } finally {
+      setLoading(false);
+    }
   }
 
   function requestDelete(g: Goal) {
@@ -52,11 +80,26 @@ export function GoalsScreen() {
     setConfirm({ open: false });
   }
 
-  function deleteConfirmed() {
+  async function deleteConfirmed() {
     if (!confirm.goal) return;
-    setGoals(prev => prev.filter(x => x.id !== confirm.goal!.id));
-    toast('Deleted (demo)');
-    closeConfirm();
+    if (loading) return;
+    const token = state.accessToken;
+    if (!token) {
+      toast('Not signed in');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      await authApi.deleteGoal(token, confirm.goal.id);
+      await refresh();
+      toast('Deleted');
+      closeConfirm();
+    } catch (e: any) {
+      toast(String(e?.message ?? 'Delete failed'));
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -77,7 +120,12 @@ export function GoalsScreen() {
           <View style={{ height: 10 }} />
 
           <View style={{ gap: 10 }}>
-            {goals.map(g => (
+            {loading ? (
+              <Text style={styles.meta}>Loading…</Text>
+            ) : goals.length === 0 ? (
+              <Text style={styles.meta}>No goals yet.</Text>
+            ) : (
+              goals.map(g => (
               <Pressable
                 key={g.id}
                 onPress={() => openGoal(g)}
@@ -85,7 +133,7 @@ export function GoalsScreen() {
               >
                 <View style={{ flex: 1 }}>
                   <Text style={styles.name}>{g.title}</Text>
-                  <Text style={styles.meta}>Completed: {g.completedPct}% steps</Text>
+                  <Text style={styles.meta}>Completed: {g.progressPct}% steps</Text>
                 </View>
 
                 <View style={styles.goalActions}>
@@ -110,7 +158,8 @@ export function GoalsScreen() {
                   </Pressable>
                 </View>
               </Pressable>
-            ))}
+              ))
+            )}
           </View>
         </Card>
       </ScrollView>
