@@ -93,7 +93,7 @@ export function HomeScreen() {
                 Score: <Text style={styles.bold}>{score}</Text>
               </Pill>
               <Pill>
-                <Text style={styles.bold}>{tasksPlanned}</Text> tasks planned
+                <Text style={styles.bold}>{tasksPlanned}</Text> {tasksPlanned === 1 ? 'task' : 'tasks'} planned
               </Pill>
               {loading ? <Pill>Loading…</Pill> : null}
             </View>
