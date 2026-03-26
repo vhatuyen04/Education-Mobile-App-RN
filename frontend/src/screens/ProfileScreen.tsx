@@ -1,13 +1,15 @@
 import React, { useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { Screen } from '../components/Screen';
 import { Card } from '../components/Card';
-import { colors } from '../theme/colors';
+import { backgroundPresets, colors } from '../theme/colors';
 import { Pill } from '../components/Pill';
 import { Button } from '../components/Button';
 import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
+import { useSettings } from '../settings/SettingsContext';
+import type { LeaderboardField } from '../api/auth';
 
 type Row = {
   key: string;
@@ -18,9 +20,8 @@ type Row = {
 };
 
 export function ProfileScreen() {
-  const { signOut, state, updateName } = useAuth();
-  const [rankingMode, setRankingMode] = useState(true);
-  const [tryHardMode, setTryHardMode] = useState(true);
+  const { signOut, state, updateName, changePassword } = useAuth();
+  const { settings, setRankingMode, setInterestedFields, setHobbies, setBackgroundColor, resetBackgroundColor } = useSettings();
 
   const [editing, setEditing] = useState(false);
   const [nameDraft, setNameDraft] = useState(state.user?.name ?? '');
@@ -30,31 +31,101 @@ export function ProfileScreen() {
   const displayEmail = state.user?.email || '';
   const avatarLetter = (displayName.trim()[0] || 'U').toUpperCase();
 
+  const [editFieldsOpen, setEditFieldsOpen] = useState(false);
+  const [editHobbiesOpen, setEditHobbiesOpen] = useState(false);
+  const [editBgOpen, setEditBgOpen] = useState(false);
+  const [editPwOpen, setEditPwOpen] = useState(false);
+
+  const [hobbiesDraft, setHobbiesDraft] = useState(settings.hobbies ?? '');
+  const [oldPwDraft, setOldPwDraft] = useState('');
+  const [newPwDraft, setNewPwDraft] = useState('');
+  const [confirmPwDraft, setConfirmPwDraft] = useState('');
+  const [pwSaving, setPwSaving] = useState(false);
+
+  const fieldOptions: LeaderboardField[] = ['Sport', 'Academy', 'Entertainment'];
+  const selectedFields = settings.interestedFields ?? fieldOptions;
+
+  const currentBg = settings.backgroundColor || colors.bg;
+  const currentBgName = useMemo(() => {
+    const hit = backgroundPresets.find(p => p.value.toLowerCase() === String(currentBg).toLowerCase());
+    return hit?.name ?? 'Custom';
+  }, [currentBg]);
+
   const rows = useMemo<Row[]>(
     () => [
       { key: 'help', title: 'Help', meta: 'FAQ / Contact', actionLabel: 'Open', onPress: () => toast('Help (demo)') },
-      { key: 'account', title: 'Account', meta: 'Security / Email', actionLabel: 'Open', onPress: () => toast('Account (demo)') },
-      { key: 'bg', title: 'Background color', meta: 'Red', actionLabel: 'Change', onPress: () => toast('Change color (demo)') },
-      { key: 'hobbies', title: 'Hobbies', meta: 'Swimming, Basketball', actionLabel: 'Edit', onPress: () => toast('Hobbies (demo)') },
       {
-        key: 'fields',
-        title: 'Fields you are interested in',
-        meta: 'Sport, Academy, Entertainment',
-        actionLabel: 'Edit',
-        onPress: () => toast('Fields (demo)'),
+        key: 'account',
+        title: 'Account',
+        meta: 'Change password',
+        actionLabel: 'Open',
+        onPress: () => setEditPwOpen(true),
       },
     ],
     []
   );
 
-  function toggleRanking() {
-    setRankingMode(v => !v);
-    toast('Changed (demo)');
+  function openChangePassword() {
+    setOldPwDraft('');
+    setNewPwDraft('');
+    setConfirmPwDraft('');
+    setEditPwOpen(true);
   }
 
-  function toggleTryHard() {
-    setTryHardMode(v => !v);
-    toast('Changed (demo)');
+  async function savePassword() {
+    if (pwSaving) return;
+    if (!oldPwDraft.trim()) {
+      toast('Old password is required');
+      return;
+    }
+    if (newPwDraft.length < 6) {
+      toast('New password must be at least 6 characters');
+      return;
+    }
+    if (newPwDraft !== confirmPwDraft) {
+      toast('Passwords do not match');
+      return;
+    }
+
+    setPwSaving(true);
+    try {
+      await changePassword({ oldPassword: oldPwDraft, newPassword: newPwDraft, confirmNewPassword: confirmPwDraft });
+      setEditPwOpen(false);
+      toast('Password updated');
+    } catch (e: any) {
+      toast(String(e?.message ?? 'Update failed'));
+    } finally {
+      setPwSaving(false);
+    }
+  }
+
+  function toggleRanking() {
+    void setRankingMode(!settings.rankingMode);
+  }
+
+  async function toggleField(f: LeaderboardField) {
+    const next = selectedFields.includes(f) ? selectedFields.filter(x => x !== f) : [...selectedFields, f];
+    await setInterestedFields(next);
+  }
+
+  function openEditHobbies() {
+    setHobbiesDraft(settings.hobbies ?? '');
+    setEditHobbiesOpen(true);
+  }
+
+  async function saveHobbies() {
+    await setHobbies(hobbiesDraft);
+    setEditHobbiesOpen(false);
+    toast('Saved');
+  }
+
+  function openEditBg() {
+    setEditBgOpen(true);
+  }
+
+  async function resetBg() {
+    await resetBackgroundColor();
+    toast('Reset');
   }
 
   async function handleLogout() {
@@ -93,7 +164,6 @@ export function ProfileScreen() {
             <Text style={styles.hTitle}>Profile</Text>
             <View style={styles.hSub}>
               <Pill dot>Account</Pill>
-              <Pill>Preferences</Pill>
             </View>
           </View>
         </View>
@@ -140,32 +210,40 @@ export function ProfileScreen() {
                   <Text style={styles.name}>{r.title}</Text>
                   <Text style={styles.meta}>{r.meta}</Text>
                 </View>
-                <Button title={r.actionLabel} small onPress={r.onPress} />
+                <Button title={r.actionLabel} small onPress={r.key === 'account' ? openChangePassword : r.onPress} />
               </View>
             ))}
 
             <View style={styles.item}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.name}>Ranking mode</Text>
-                <Text style={styles.meta}>{rankingMode ? 'On' : 'Off'}</Text>
+                <Text style={styles.meta}>{settings.rankingMode ? 'On' : 'Off'}</Text>
               </View>
               <Button title="Change" small onPress={toggleRanking} />
             </View>
 
             <View style={styles.item}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.name}>Try hard mode</Text>
-                <Text style={styles.meta}>{tryHardMode ? 'On' : 'Off'}</Text>
+                <Text style={styles.name}>Fields you are interested in</Text>
+                <Text style={styles.meta}>{selectedFields.length ? selectedFields.join(', ') : 'None'}</Text>
               </View>
-              <Button title="Change" small onPress={toggleTryHard} />
+              <Button title="Edit" small onPress={() => setEditFieldsOpen(true)} />
             </View>
 
             <View style={styles.item}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.name}>Language</Text>
-                <Text style={styles.meta}>English</Text>
+                <Text style={styles.name}>Hobbies</Text>
+                <Text style={styles.meta}>{(settings.hobbies ?? '').trim() ? settings.hobbies : 'None'}</Text>
               </View>
-              <Button title="Change" small onPress={() => toast('Change language (demo)')} />
+              <Button title="Edit" small onPress={openEditHobbies} />
+            </View>
+
+            <View style={styles.item}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.name}>Background color</Text>
+                <Text style={styles.meta}>Current: {currentBgName}</Text>
+              </View>
+              <Button title="Change" small onPress={openEditBg} />
             </View>
           </View>
 
@@ -179,6 +257,144 @@ export function ProfileScreen() {
           </Pressable>
         </Card>
       </ScrollView>
+
+      <Modal visible={editFieldsOpen} transparent animationType="fade" onRequestClose={() => setEditFieldsOpen(false)}>
+        <View style={styles.backdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setEditFieldsOpen(false)} />
+          <View style={styles.sheet}>
+            <View style={styles.sheetHead}>
+              <Text style={styles.sheetTitle}>Interested fields</Text>
+              <Pressable onPress={() => setEditFieldsOpen(false)} hitSlop={10}>
+                <Text style={styles.close}>✕</Text>
+              </Pressable>
+            </View>
+
+            <View style={{ gap: 10 }}>
+              {fieldOptions.map(f => (
+                <Pressable
+                  key={f}
+                  onPress={() => {
+                    void toggleField(f);
+                  }}
+                  style={({ pressed }) => [styles.item, pressed ? { opacity: 0.9 } : null]}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.name}>{f}</Text>
+                    <Text style={styles.meta}>{selectedFields.includes(f) ? 'Selected' : 'Not selected'}</Text>
+                  </View>
+                </Pressable>
+              ))}
+            </View>
+
+            <View style={styles.divider} />
+            <View style={styles.rowEnd}>
+              <Button title="Done" variant="primary" onPress={() => setEditFieldsOpen(false)} />
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={editHobbiesOpen} transparent animationType="fade" onRequestClose={() => setEditHobbiesOpen(false)}>
+        <View style={styles.backdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setEditHobbiesOpen(false)} />
+          <View style={styles.sheet}>
+            <View style={styles.sheetHead}>
+              <Text style={styles.sheetTitle}>Edit hobbies</Text>
+              <Pressable onPress={() => setEditHobbiesOpen(false)} hitSlop={10}>
+                <Text style={styles.close}>✕</Text>
+              </Pressable>
+            </View>
+
+            <TextInput
+              value={hobbiesDraft}
+              onChangeText={setHobbiesDraft}
+              placeholder="Swimming, Basketball"
+              placeholderTextColor={colors.muted}
+              style={styles.input}
+            />
+
+            <View style={styles.divider} />
+            <View style={styles.rowEnd}>
+              <Button title="Cancel" onPress={() => setEditHobbiesOpen(false)} />
+              <Button title="Save" variant="primary" onPress={saveHobbies} />
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={editBgOpen} transparent animationType="fade" onRequestClose={() => setEditBgOpen(false)}>
+        <View style={styles.backdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setEditBgOpen(false)} />
+          <View style={styles.sheet}>
+            <View style={styles.sheetHead}>
+              <Text style={styles.sheetTitle}>Background color</Text>
+              <Pressable onPress={() => setEditBgOpen(false)} hitSlop={10}>
+                <Text style={styles.close}>✕</Text>
+              </Pressable>
+            </View>
+
+            <View style={{ gap: 10 }}>
+              {backgroundPresets.map(p => (
+                <Pressable
+                  key={p.key}
+                  onPress={() => {
+                    void setBackgroundColor(p.value);
+                    setEditBgOpen(false);
+                    toast('Saved');
+                  }}
+                  style={({ pressed }) => [styles.item, pressed ? { opacity: 0.9 } : null]}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.name}>{p.name}</Text>
+                    <Text style={styles.meta}>{p.value}</Text>
+                  </View>
+                  <View style={[styles.swatch, { backgroundColor: p.value }]} />
+                </Pressable>
+              ))}
+            </View>
+
+            <View style={styles.divider} />
+            <View style={styles.rowEnd}>
+              <Button title="Reset" onPress={resetBg} />
+              <Button title="Close" variant="primary" onPress={() => setEditBgOpen(false)} />
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={editPwOpen} transparent animationType="fade" onRequestClose={() => setEditPwOpen(false)}>
+        <View style={styles.backdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setEditPwOpen(false)} />
+          <View style={styles.sheet}>
+            <View style={styles.sheetHead}>
+              <Text style={styles.sheetTitle}>Change password</Text>
+              <Pressable onPress={() => setEditPwOpen(false)} hitSlop={10}>
+                <Text style={styles.close}>✕</Text>
+              </Pressable>
+            </View>
+
+            <Text style={styles.meta}>Old password</Text>
+            <View style={{ height: 6 }} />
+            <TextInput value={oldPwDraft} onChangeText={setOldPwDraft} style={styles.input} secureTextEntry placeholder="••••••" placeholderTextColor={colors.muted} />
+
+            <View style={{ height: 10 }} />
+            <Text style={styles.meta}>New password</Text>
+            <View style={{ height: 6 }} />
+            <TextInput value={newPwDraft} onChangeText={setNewPwDraft} style={styles.input} secureTextEntry placeholder="At least 6 characters" placeholderTextColor={colors.muted} />
+
+            <View style={{ height: 10 }} />
+            <Text style={styles.meta}>Confirm new password</Text>
+            <View style={{ height: 6 }} />
+            <TextInput value={confirmPwDraft} onChangeText={setConfirmPwDraft} style={styles.input} secureTextEntry placeholder="Repeat new password" placeholderTextColor={colors.muted} />
+
+            <View style={styles.divider} />
+            <View style={styles.rowEnd}>
+              <Button title="Cancel" onPress={() => setEditPwOpen(false)} />
+              <Button title={pwSaving ? 'Saving…' : 'Save'} variant="primary" onPress={savePassword} />
+            </View>
+          </View>
+        </View>
+      </Modal>
     </Screen>
   );
 }
@@ -287,6 +503,58 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     marginTop: 2,
+  },
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'center',
+    padding: 16,
+  },
+  sheet: {
+    backgroundColor: colors.surface,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: colors.line,
+    padding: 14,
+  },
+  sheetHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingBottom: 8,
+  },
+  sheetTitle: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  close: {
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  rowEnd: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 10,
+    alignItems: 'center',
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: colors.surface2,
+    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    color: colors.text,
+    fontWeight: '900',
+  },
+  swatch: {
+    width: 34,
+    height: 28,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.line,
   },
   logout: {
     alignSelf: 'stretch',

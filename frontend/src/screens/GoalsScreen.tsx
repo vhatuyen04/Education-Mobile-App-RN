@@ -161,6 +161,9 @@ export function GoalsScreen() {
               ))
             )}
           </View>
+
+          <View style={{ height: 10 }} />
+          <Button title="Modify schedule" full onPress={() => nav.navigate('ScheduleWeek')} />
         </Card>
       </ScrollView>
 

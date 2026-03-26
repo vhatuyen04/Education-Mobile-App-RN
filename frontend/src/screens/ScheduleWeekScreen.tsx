@@ -17,6 +17,7 @@ type RepeatMode = 'Once' | 'Daily' | 'Weekly' | 'Monthly' | 'Yearly';
 
 type Block = {
   id: string;
+  eventId: string;
   day: DayKey;
   title: string;
   start: string;
@@ -49,8 +50,23 @@ export function ScheduleWeekScreen() {
   const [edit, setEdit] = useState<{ open: boolean; id: string | null }>({ open: false, id: null });
   const [confirm, setConfirm] = useState<{ open: boolean; id: string | null }>({ open: false, id: null });
 
-  const currentBlocks = useMemo(() => blocks.filter(b => b.day === day), [blocks, day]);
-  const editingBlock = useMemo(() => (edit.id ? blocks.find(b => b.id === edit.id) ?? null : null), [blocks, edit.id]);
+  const currentBlocks = useMemo(() => {
+    function toMinutes(hm: string) {
+      const m = hm.trim().match(/^(\d{1,2}):(\d{2})$/);
+      if (!m) return 0;
+      return Number(m[1]) * 60 + Number(m[2]);
+    }
+
+    return blocks
+      .filter(b => b.day === day)
+      .slice()
+      .sort((a, b) => toMinutes(a.start) - toMinutes(b.start));
+  }, [blocks, day]);
+
+  const editingBlock = useMemo(() => {
+    if (!edit.id) return null;
+    return blocks.find(b => b.eventId === edit.id && b.day === day) ?? blocks.find(b => b.eventId === edit.id) ?? null;
+  }, [blocks, day, edit.id]);
 
   const [form, setForm] = useState({
     title: 'New event',
@@ -130,36 +146,44 @@ export function ScheduleWeekScreen() {
 
     setLoading(true);
     try {
-      const resp = await authApi.listEvents(token, { from: week.start.toISOString(), to: week.end.toISOString() });
+      const resp = await authApi.listEvents(token);
 
       const unique = new Map<string, authApi.EventItem>();
       for (const e of resp.events) unique.set(e.id, e);
 
-      const next: Block[] = Array.from(unique.values()).map(e => {
+      const keys: DayKey[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+      const next: Block[] = [];
+      for (const e of Array.from(unique.values())) {
         const d = new Date(e.startAt);
         const idx = (d.getDay() + 6) % 7; // Monday=0
-        const keys: DayKey[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-        const k = keys[idx];
+        const eventDay = keys[idx];
 
         const startTxt = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
         const endTxt = e.endAt
           ? new Date(e.endAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
           : '';
 
-        const r = (e.repeat ?? 'Once') as any;
-        return {
-          id: e.id,
-          day: k,
-          title: e.title,
-          start: startTxt,
-          end: endTxt || startTxt,
-          repeat: r,
-          desc: 'None',
-          startAt: e.startAt,
-          endAt: e.endAt ?? null,
-          seriesId: e.seriesId ?? null,
-        };
-      });
+        const repeat = ((e.repeat ?? 'Once') as any) as RepeatMode;
+        const showAllWeekdays = repeat === 'Daily' || repeat === 'Monthly' || repeat === 'Yearly';
+        const targetDays: DayKey[] = showAllWeekdays ? keys : [eventDay];
+
+        for (const dayKey of targetDays) {
+          next.push({
+            id: showAllWeekdays ? `${e.id}_${dayKey}` : e.id,
+            eventId: e.id,
+            day: dayKey,
+            title: e.title,
+            start: startTxt,
+            end: endTxt || startTxt,
+            repeat,
+            desc: 'None',
+            startAt: e.startAt,
+            endAt: e.endAt ?? null,
+            seriesId: e.seriesId ?? null,
+          });
+        }
+      }
 
       setBlocks(next);
     } catch (e: any) {
@@ -167,7 +191,7 @@ export function ScheduleWeekScreen() {
     } finally {
       setLoading(false);
     }
-  }, [state.accessToken, week.end, week.start]);
+  }, [state.accessToken]);
 
   useFocusEffect(
     useCallback(() => {
@@ -175,9 +199,9 @@ export function ScheduleWeekScreen() {
     }, [refresh])
   );
 
-  function openEdit(id: string) {
-    setEdit({ open: true, id });
-    const b = blocks.find(x => x.id === id);
+  function openEdit(eventId: string) {
+    setEdit({ open: true, id: eventId });
+    const b = blocks.find(x => x.eventId === eventId && x.day === day) ?? blocks.find(x => x.eventId === eventId);
     if (b) {
       const s = new Date(b.startAt);
       const e = b.endAt ? new Date(b.endAt) : null;
@@ -246,12 +270,12 @@ export function ScheduleWeekScreen() {
       return;
     }
 
-    const isExisting = blocks.some(b => b.id === edit.id);
+    const isExisting = blocks.some(b => b.eventId === edit.id);
 
     setLoading(true);
     try {
       if (isExisting) {
-        const existingBlock = blocks.find(b => b.id === edit.id) ?? null;
+        const existingBlock = blocks.find(b => b.eventId === edit.id) ?? null;
         const scope = repeatMode !== 'Once' || existingBlock?.seriesId ? 'series' : 'single';
         await authApi.updateEvent(
           token,
@@ -318,7 +342,7 @@ export function ScheduleWeekScreen() {
     }
     if (!confirm.id) return;
 
-    const existingBlock = blocks.find(b => b.id === confirm.id) ?? null;
+    const existingBlock = blocks.find(b => b.eventId === confirm.id) ?? null;
     const scope = existingBlock?.repeat !== 'Once' || existingBlock?.seriesId ? 'series' : 'single';
 
     setLoading(true);
@@ -372,7 +396,7 @@ export function ScheduleWeekScreen() {
               currentBlocks.map(b => (
                 <Pressable
                   key={b.id}
-                  onPress={() => openEdit(b.id)}
+                  onPress={() => openEdit(b.eventId)}
                   style={({ pressed }) => [styles.item, pressed ? { opacity: 0.85 } : null]}
                 >
                   <View style={{ flex: 1 }}>

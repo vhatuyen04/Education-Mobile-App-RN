@@ -30,6 +30,18 @@ const UpdateMeSchema = z.object({
   name: z.string().min(1),
 });
 
+const ChangePasswordSchema = z
+  .object({
+    oldPassword: z.string().min(1),
+    newPassword: z.string().min(6),
+    confirmNewPassword: z.string().min(6),
+  })
+  .superRefine((v, ctx) => {
+    if (v.newPassword !== v.confirmNewPassword) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Passwords do not match', path: ['confirmNewPassword'] });
+    }
+  });
+
 const CreateGoalSchema = z.object({
   title: z.string().min(1),
   progressPct: z.number().int().min(0).max(100).optional(),
@@ -360,6 +372,46 @@ authRouter.put('/me', async (req: Request, res: Response) => {
   });
 
   return res.json({ user });
+});
+
+authRouter.put('/me/password', async (req: Request, res: Response) => {
+  const token = getAccessTokenFromReq(req);
+  if (!token) {
+    return res.status(401).json({ error: 'Missing access token' });
+  }
+
+  let userId: string;
+  try {
+    userId = verifyAccessToken(token).sub;
+  } catch {
+    return res.status(401).json({ error: 'Invalid access token' });
+  }
+
+  const parsed = ChangePasswordSchema.safeParse(req.body);
+  if (!parsed.success) {
+    const msg = parsed.error.issues[0]?.message;
+    if (msg === 'Passwords do not match') {
+      return res.status(400).json({ error: 'Passwords do not match' });
+    }
+    return res.status(400).json({ error: 'Invalid payload' });
+  }
+
+  const { oldPassword, newPassword } = parsed.data;
+
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, passwordHash: true } });
+  if (!user) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  const ok = await bcrypt.compare(oldPassword, user.passwordHash);
+  if (!ok) {
+    return res.status(401).json({ error: 'Old password is incorrect' });
+  }
+
+  const nextHash = await bcrypt.hash(newPassword, 10);
+  await prisma.user.update({ where: { id: userId }, data: { passwordHash: nextHash } });
+
+  return res.json({ ok: true });
 });
 
 authRouter.get('/dashboard', async (req: Request, res: Response) => {

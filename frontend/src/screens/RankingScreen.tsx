@@ -10,11 +10,13 @@ import { Button } from '../components/Button';
 import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
+import { useSettings } from '../settings/SettingsContext';
 
 type Field = authApi.LeaderboardField;
 
 export function RankingScreen() {
   const { state } = useAuth();
+  const { settings } = useSettings();
   const [field, setField] = useState<Field>('Sport');
 
   const listRef = useRef<FlatList<authApi.LeaderboardEntry> | null>(null);
@@ -66,6 +68,16 @@ export function RankingScreen() {
       setLoadingMore(false);
     }
   }, [field, limit, loading, loadingMore, page, state.accessToken]);
+
+  const visibleFields = useMemo(() => {
+    const f = settings.interestedFields ?? ['Sport', 'Academy', 'Entertainment'];
+    return f.length ? f : (['Academy'] as Field[]);
+  }, [settings.interestedFields]);
+
+  useEffect(() => {
+    if (visibleFields.includes(field)) return;
+    setField(visibleFields[0]);
+  }, [field, visibleFields]);
 
   useFocusEffect(
     useCallback(() => {
@@ -121,7 +133,7 @@ export function RankingScreen() {
 
       <Card>
         <View style={styles.tabs}>
-          {(['Sport', 'Academy', 'Entertainment'] as const).map(t => (
+          {visibleFields.map(t => (
             <Pressable
               key={t}
               onPress={() => setField(t)}
@@ -130,12 +142,6 @@ export function RankingScreen() {
               <Text style={[styles.tabText, field === t ? styles.tabTextOn : null]}>{t}</Text>
             </Pressable>
           ))}
-          <Pressable
-            onPress={() => toast('Add fields (demo)')}
-            style={({ pressed }) => [styles.tab, pressed ? { opacity: 0.9 } : null]}
-          >
-            <Text style={styles.tabText}>+ Add fields</Text>
-          </Pressable>
         </View>
 
         <View style={{ height: 12 }} />

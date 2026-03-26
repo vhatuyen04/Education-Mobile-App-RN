@@ -9,10 +9,12 @@ import { GoalsScreen } from '../screens/GoalsScreen';
 import { RankingScreen } from '../screens/RankingScreen';
 import { ProfileScreen } from '../screens/ProfileScreen';
 import { colors } from '../theme/colors';
+import { useSettings } from '../settings/SettingsContext';
 
 const Tab = createBottomTabNavigator<TabsParamList>();
 
 export function BottomTabs() {
+  const { settings } = useSettings();
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
@@ -59,7 +61,7 @@ export function BottomTabs() {
       <Tab.Screen name="Home" component={HomeScreen} />
       <Tab.Screen name="Calendar" component={CalendarScreen} />
       <Tab.Screen name="Goals" component={GoalsScreen} />
-      <Tab.Screen name="Ranking" component={RankingScreen} />
+      {settings.rankingMode ? <Tab.Screen name="Ranking" component={RankingScreen} /> : null}
       <Tab.Screen name="Profile" component={ProfileScreen} />
     </Tab.Navigator>
   );

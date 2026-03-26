@@ -10,3 +10,13 @@ export const colors = {
   danger: '#FB7185',
   warning: '#FBBF24',
 };
+
+export const backgroundPresets = [
+  { key: 'default', name: 'Default', value: colors.bg },
+  { key: 'midnight', name: 'Midnight', value: '#050814' },
+  { key: 'navy', name: 'Navy', value: '#0A1E4A' },
+  { key: 'indigo', name: 'Indigo', value: '#1B1558' },
+  { key: 'deep-green', name: 'Deep Green', value: '#05231B' },
+  { key: 'burgundy', name: 'Burgundy', value: '#2A0B18' },
+  { key: 'light', name: 'Light', value: '#F5F7FF' },
+];

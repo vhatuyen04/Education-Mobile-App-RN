@@ -129,6 +129,13 @@ export async function updateMeName(accessToken: string, name: string): Promise<{
   return putJsonAuth<{ user: AuthUser }>('/auth/me', { name }, accessToken);
 }
 
+export async function changeMyPassword(
+  accessToken: string,
+  body: { oldPassword: string; newPassword: string; confirmNewPassword: string }
+): Promise<{ ok: true }> {
+  return putJsonAuth<{ ok: true }>('/auth/me/password', body, accessToken);
+}
+
 export type DashboardGoal = {
   id: string;
   title: string;

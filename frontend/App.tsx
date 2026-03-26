@@ -6,15 +6,18 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { RootStack } from './src/navigation/RootStack';
 import { AuthProvider } from './src/auth/AuthContext';
+import { SettingsProvider } from './src/settings/SettingsContext';
 
 export default function App() {
   return (
     <SafeAreaProvider>
       <AuthProvider>
-        <NavigationContainer>
-          <StatusBar style="light" />
-          <RootStack />
-        </NavigationContainer>
+        <SettingsProvider>
+          <NavigationContainer>
+            <StatusBar style="light" />
+            <RootStack />
+          </NavigationContainer>
+        </SettingsProvider>
       </AuthProvider>
     </SafeAreaProvider>
   );
