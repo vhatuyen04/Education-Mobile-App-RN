@@ -6,80 +6,23 @@ import { z } from 'zod';
 
 import { prisma } from '../utils/prisma.js';
 import { getConfig } from '../utils/config.js';
+import {
+  ChangePasswordSchema,
+  CreateEventSchema,
+  CreateGoalSchema,
+  LeaderboardFieldQuerySchema,
+  ListRangeSchema,
+  LoginSchema,
+  LogoutSchema,
+  RegisterSchema,
+  UpdateEventSchema,
+  UpdateGoalSchema,
+  UpdateMeSchema,
+} from '../schemas/authSchemas.js';
 
 export const authRouter = Router();
 
 const prismaAny = prisma as any;
-
-const RegisterSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(6),
-  name: z.string().min(1).optional(),
-});
-
-const LoginSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(1),
-});
-
-const LogoutSchema = z.object({
-  refreshToken: z.string().min(1),
-});
-
-const UpdateMeSchema = z.object({
-  name: z.string().min(1),
-});
-
-const ChangePasswordSchema = z
-  .object({
-    oldPassword: z.string().min(1),
-    newPassword: z.string().min(6),
-    confirmNewPassword: z.string().min(6),
-  })
-  .superRefine((v, ctx) => {
-    if (v.newPassword !== v.confirmNewPassword) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Passwords do not match', path: ['confirmNewPassword'] });
-    }
-  });
-
-const CreateGoalSchema = z.object({
-  title: z.string().min(1),
-  progressPct: z.number().int().min(0).max(100).optional(),
-  dueAt: z.string().datetime().optional(),
-});
-
-const UpdateGoalSchema = z.object({
-  title: z.string().min(1).optional(),
-  progressPct: z.number().int().min(0).max(100).optional(),
-  dueAt: z.string().datetime().optional().nullable(),
-  completed: z.boolean().optional(),
-});
-
-const CreateEventSchema = z.object({
-  title: z.string().min(1),
-  startAt: z.string().datetime(),
-  endAt: z.string().datetime().optional(),
-  repeat: z.string().min(1).optional(),
-  seriesEndAt: z.string().datetime().optional(),
-});
-
-const ListRangeSchema = z.object({
-  from: z.string().datetime().optional(),
-  to: z.string().datetime().optional(),
-});
-
-const UpdateEventSchema = z.object({
-  title: z.string().min(1).optional(),
-  startAt: z.string().datetime().optional(),
-  endAt: z.string().datetime().optional().nullable(),
-  repeat: z.string().min(1).optional().nullable(),
-});
-
-const LeaderboardFieldQuerySchema = z.object({
-  field: z.enum(['Sport', 'Academy', 'Entertainment']),
-  limit: z.coerce.number().int().min(1).max(100).optional(),
-  offset: z.coerce.number().int().min(0).optional(),
-});
 
 function isRepeating(repeat: string | null | undefined) {
   if (!repeat) return false;
