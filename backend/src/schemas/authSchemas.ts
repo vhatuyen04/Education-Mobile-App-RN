@@ -33,12 +33,14 @@ export const ChangePasswordSchema = z
 
 export const CreateGoalSchema = z.object({
   title: z.string().min(1),
+  description: z.string().optional(),
   progressPct: z.number().int().min(0).max(100).optional(),
   dueAt: z.string().datetime().optional(),
 });
 
 export const UpdateGoalSchema = z.object({
   title: z.string().min(1).optional(),
+  description: z.string().optional().nullable(),
   progressPct: z.number().int().min(0).max(100).optional(),
   dueAt: z.string().datetime().optional().nullable(),
   completed: z.boolean().optional(),
@@ -68,4 +70,10 @@ export const LeaderboardFieldQuerySchema = z.object({
   field: z.enum(['Sport', 'Academy', 'Entertainment']),
   limit: z.coerce.number().int().min(1).max(100).optional(),
   offset: z.coerce.number().int().min(0).optional(),
+});
+
+export const AiGoalSuggestSchema = z.object({
+  prompt: z.string().min(1),
+  deadline: z.string().min(1).optional(),
+  intensity: z.enum(['Light', 'Normal', 'Hard']).optional(),
 });

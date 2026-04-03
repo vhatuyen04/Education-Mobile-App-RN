@@ -59,6 +59,11 @@ export function HomeScreen() {
   const todayEvents = dash?.todayEvents ?? [];
   const todayGoals = dash?.todayGoals ?? [];
 
+  function displayGoalTitle(raw: string) {
+    const first = String(raw ?? '').split(/\r?\n/)[0] ?? '';
+    return first.trim() || 'Untitled goal';
+  }
+
   function formatDueBadge(dueAt: string | null) {
     if (!dueAt) return 'No due date';
     const due = new Date(dueAt);
@@ -122,19 +127,9 @@ export function HomeScreen() {
 
               <View style={{ marginTop: 10 }}>
                 {nextGoal ? (
-                  <>
-                    <View style={styles.titleLine}>
-                      <Text style={styles.goalName}>{nextGoal.title}</Text>
-                      <Pill>
-                        Progress: <Text style={styles.bold}>{nextGoal.progressPct}%</Text>
-                      </Pill>
-                    </View>
-
-                    <View style={{ height: 10 }} />
-                    <ProgressBar value={nextGoal.progressPct} />
-                    <View style={{ height: 10 }} />
-                    <Text style={styles.muted12}>Tap this card to open the goal details.</Text>
-                  </>
+                  <View style={styles.titleLine}>
+                    <Text style={styles.goalName}>{displayGoalTitle(nextGoal.title)}</Text>
+                  </View>
                 ) : (
                   <Text style={styles.muted12}>No goals yet. Create one to see it here.</Text>
                 )}
@@ -154,9 +149,6 @@ export function HomeScreen() {
                   <View style={{ flex: 1 }}>
                     <Text style={styles.eventTitle}>{nextEvent.title}</Text>
                     <Text style={styles.muted12}>{formatTimeRange(nextEvent.startAt, nextEvent.endAt)}</Text>
-                  </View>
-                  <View style={{ flexDirection: 'row', gap: 8 }}>
-                    <Button title="Detail" small onPress={() => toast('Event details (todo)')} />
                   </View>
                 </>
               ) : (
@@ -195,7 +187,7 @@ export function HomeScreen() {
                   {todayGoals.map(g => (
                     <View key={g.id} style={styles.item}>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.itemName}>{g.title}</Text>
+                        <Text style={styles.itemName}>{displayGoalTitle(g.title)}</Text>
                         <Text style={styles.itemMeta}>{g.dueAt ? formatDueBadge(g.dueAt) : 'No due date'}</Text>
                       </View>
                       <View style={{ flexDirection: 'row', gap: 8 }}>
@@ -217,14 +209,11 @@ export function HomeScreen() {
         </View>
       </ScrollView>
 
-      <Pressable
-        onPress={() => setAiOpen(true)}
-        style={({ pressed }) => [styles.fab, pressed ? { opacity: 0.9 } : null]}
-      >
+      <AiPlannerModal visible={aiOpen} onClose={() => setAiOpen(false)} onSaved={refresh} />
+
+      <Pressable onPress={() => setAiOpen(true)} style={({ pressed }) => [styles.fab, pressed ? { opacity: 0.9 } : null]}>
         <Text style={styles.fabText}>✨</Text>
       </Pressable>
-
-      <AiPlannerModal visible={aiOpen} onClose={() => setAiOpen(false)} />
     </Screen>
   );
 }

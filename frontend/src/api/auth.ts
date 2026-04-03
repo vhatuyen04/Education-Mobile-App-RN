@@ -136,6 +136,24 @@ export async function changeMyPassword(
   return putJsonAuth<{ ok: true }>('/auth/me/password', body, accessToken);
 }
 
+export type AiGoalSuggestion = {
+  title: string;
+  field: LeaderboardField;
+  deadline: string;
+  steps: string[];
+};
+
+export type AiGoalSuggestResponse =
+  | { ok: false; message: string; questions: string[] }
+  | { ok: true; suggestion: AiGoalSuggestion };
+
+export async function aiSuggestGoal(
+  accessToken: string,
+  body: { prompt: string; deadline?: string; intensity?: 'Light' | 'Normal' | 'Hard' }
+): Promise<AiGoalSuggestResponse> {
+  return postJsonAuth<AiGoalSuggestResponse>('/auth/ai/goal', body, accessToken);
+}
+
 export type DashboardGoal = {
   id: string;
   title: string;
@@ -146,6 +164,7 @@ export type DashboardGoal = {
 export type GoalItem = {
   id: string;
   title: string;
+  description?: string | null;
   progressPct: number;
   dueAt: string | null;
   completed: boolean;
@@ -229,9 +248,13 @@ export async function listGoals(accessToken: string): Promise<{ goals: GoalItem[
   return getJsonAuth<{ goals: GoalItem[] }>('/auth/goals', accessToken);
 }
 
+export async function getGoal(accessToken: string, id: string): Promise<{ goal: GoalItem }> {
+  return getJsonAuth<{ goal: GoalItem }>(`/auth/goals/${id}`, accessToken);
+}
+
 export async function createGoal(
   accessToken: string,
-  body: { title: string; progressPct?: number; dueAt?: string }
+  body: { title: string; description?: string | null; progressPct?: number; dueAt?: string }
 ): Promise<{ goal: GoalItem }> {
   return postJsonAuth<{ goal: GoalItem }>('/auth/goals', body, accessToken);
 }
@@ -239,7 +262,7 @@ export async function createGoal(
 export async function updateGoal(
   accessToken: string,
   id: string,
-  body: { title?: string; progressPct?: number; dueAt?: string | null; completed?: boolean }
+  body: { title?: string; description?: string | null; progressPct?: number; dueAt?: string | null; completed?: boolean }
 ): Promise<{ goal: GoalItem }> {
   return putJsonAuth<{ goal: GoalItem }>(`/auth/goals/${id}`, body, accessToken);
 }

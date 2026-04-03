@@ -27,6 +27,11 @@ export function GoalsScreen() {
   const activeCount = useMemo(() => goals.filter(g => !g.completed).length, [goals]);
   const [confirm, setConfirm] = useState<{ open: boolean; goal?: Goal }>({ open: false });
 
+  function displayGoalTitle(raw: string) {
+    const first = String(raw ?? '').split(/\r?\n/)[0] ?? '';
+    return first.trim() || 'Untitled goal';
+  }
+
   const refresh = useCallback(async () => {
     const token = state.accessToken;
     if (!token) return;
@@ -132,7 +137,7 @@ export function GoalsScreen() {
                 style={({ pressed }) => [styles.item, pressed ? { opacity: 0.85 } : null]}
               >
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.name}>{g.title}</Text>
+                  <Text style={styles.name}>{displayGoalTitle(g.title)}</Text>
                   <Text style={styles.meta}>Completed: {g.progressPct}% steps</Text>
                 </View>
 
@@ -162,8 +167,6 @@ export function GoalsScreen() {
             )}
           </View>
 
-          <View style={{ height: 10 }} />
-          <Button title="Modify schedule" full onPress={() => nav.navigate('ScheduleWeek')} />
         </Card>
       </ScrollView>
 

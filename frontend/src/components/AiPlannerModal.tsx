@@ -1,21 +1,85 @@
 import React, { useMemo, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { colors } from '../theme/colors';
 import { Badge } from './Badge';
 import { Button } from './Button';
 import { Card } from './Card';
 import { Pill } from './Pill';
-import { Step, StepEditorList } from './StepEditorList';
+import { Step } from './StepEditorList';
 import { toast } from '../utils/toast';
+import { useAuth } from '../auth/AuthContext';
+import * as authApi from '../api/auth';
 
 type Props = {
   visible: boolean;
   onClose: () => void;
+  onSaved?: () => void;
 };
 
 function makeId() {
   return `s_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function formatDateYmd(d: Date) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function parseYmd(raw: string): Date | null {
+  const s = String(raw ?? '').trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  if (Number.isNaN(d.getTime())) return null;
+  return d;
+}
+
+function parseDmy(raw: string): Date | null {
+  const s = String(raw ?? '').trim();
+  const m = s.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);
+  if (!m) return null;
+  const d = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+  if (Number.isNaN(d.getTime())) return null;
+  return d;
+}
+
+type PlanDeadline = { date: Date; label: string };
+
+function parseDeadlineFromPlanText(planText: string): PlanDeadline | null {
+  const txt = String(planText ?? '');
+
+  const absMatch = txt.match(/\b(?:by|before|until|deadline\s*[:=]?)\s*(\d{4}-\d{2}-\d{2}|\d{1,2}[./-]\d{1,2}[./-]\d{4})\b/i);
+  if (absMatch?.[1]) {
+    const d = parseYmd(absMatch[1]) ?? parseDmy(absMatch[1]);
+    if (d) return { date: d, label: absMatch[1] };
+  }
+
+  const relMatch =
+    txt.match(/\b(?:in|within|for)\s*(\d+)\s*(day|days|week|weeks|month|months)\b/i) ??
+    txt.match(/\b(\d+)\s*[- ]\s*(day|days|week|weeks|month|months)\b/i);
+  if (relMatch?.[1] && relMatch?.[2]) {
+    const n = Number(relMatch[1]);
+    const unit = relMatch[2].toLowerCase();
+    if (!Number.isFinite(n) || n <= 0) return null;
+    const base = new Date();
+    base.setHours(0, 0, 0, 0);
+    const d = new Date(base);
+    if (unit.startsWith('day')) d.setDate(d.getDate() + n);
+    else if (unit.startsWith('week')) d.setDate(d.getDate() + n * 7);
+    else if (unit.startsWith('month')) d.setMonth(d.getMonth() + n);
+    return { date: d, label: `${n} ${unit}` };
+  }
+
+  return null;
+}
+
+function isSimilarDeadline(a: Date, b: Date) {
+  const ms = Math.abs(a.getTime() - b.getTime());
+  const days = ms / (1000 * 60 * 60 * 24);
+  return days <= 3;
 }
 
 function inferFieldFromText(text: string): 'Sport' | 'Academy' | 'Entertainment' {
@@ -31,70 +95,190 @@ function defaultGoalTitle(text: string) {
   return firstLine.length > 46 ? `${firstLine.slice(0, 46)}…` : firstLine;
 }
 
-export function AiPlannerModal({ visible, onClose }: Props) {
+export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
+  const { state } = useAuth();
   const [planText, setPlanText] = useState('');
-  const [horizon, setHorizon] = useState<'This week' | '2 weeks' | '1 month'>('This week');
+  const [deadline, setDeadline] = useState('');
   const [intensity, setIntensity] = useState<'Light' | 'Normal' | 'Hard'>('Normal');
+
+  const [aiHelp, setAiHelp] = useState<{ message: string; questions: string[] } | null>(null);
+  const [dirty, setDirty] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [generated, setGenerated] = useState(false);
 
   const [goalTitle, setGoalTitle] = useState('');
   const [goalField, setGoalField] = useState<'Sport' | 'Academy' | 'Entertainment'>('Academy');
-  const [goalHorizon, setGoalHorizon] = useState('This week');
+  const [goalDeadline, setGoalDeadline] = useState('');
   const [steps, setSteps] = useState<Step[]>([]);
 
   const stepCount = steps.length;
 
   const templates = useMemo(
     () => [
-      { label: 'Study plan', text: 'Study plan: I want to study ___ for ___ weeks. I can spend ___ minutes/day.' },
-      { label: 'Fitness plan', text: 'Fitness plan: I want to improve ___ in ___ weeks. I can train ___ times/week.' },
-      { label: 'Thesis plan', text: 'Thesis plan: I want to finish chapter ___ by ___. I can write ___ minutes/day.' },
+      { label: 'Study plan', text: 'Study plan: I want to study ___ for ___ weeks.' },
+      { label: 'Fitness plan', text: 'Fitness plan: I want to improve ___ in ___ weeks.' },
+      { label: 'Thesis plan', text: 'Thesis plan: I want to finish chapter ___ by ___.' },
       { label: 'Balanced week', text: 'Balanced week: I need to balance study, sport and rest. I want 1 main goal and small daily tasks.' },
     ],
     []
   );
 
+  function resetGenerated() {
+    setGenerated(false);
+    setGoalTitle('');
+    setGoalField('Academy');
+    setGoalDeadline(deadline);
+    setSteps([]);
+    setAiHelp(null);
+    setDirty(false);
+  }
+
+  async function resolveDeadlineForPlan(override?: string): Promise<string | null> {
+    const input = String(override ?? deadline ?? '').trim();
+    const fromPlan = parseDeadlineFromPlanText(planText);
+
+    if (fromPlan && !input) {
+      const auto = formatDateYmd(fromPlan.date);
+      setDeadline(auto);
+      return auto;
+    }
+
+    if (!fromPlan) {
+      return input || null;
+    }
+
+    if (!input) {
+      const auto = formatDateYmd(fromPlan.date);
+      setDeadline(auto);
+      return auto;
+    }
+
+    const inputDate = parseYmd(input) ?? parseDmy(input);
+    if (!inputDate) {
+      return input;
+    }
+
+    if (isSimilarDeadline(fromPlan.date, inputDate)) {
+      return input;
+    }
+
+    const planChoice = formatDateYmd(fromPlan.date);
+    const inputChoice = formatDateYmd(inputDate);
+
+    return new Promise(resolve => {
+      Alert.alert(
+        'Choose deadline',
+        `Your plan mentions a deadline that differs from the Deadline field.\n\nFrom plan: ${planChoice}\nFrom field: ${inputChoice}`,
+        [
+          {
+            text: 'Cancel',
+            style: 'cancel',
+            onPress: () => resolve(null),
+          },
+          {
+            text: `Use ${planChoice}`,
+            onPress: () => {
+              setDeadline(planChoice);
+              resolve(planChoice);
+            },
+          },
+          {
+            text: `Use ${inputChoice}`,
+            onPress: () => resolve(inputChoice),
+          },
+        ]
+      );
+    });
+  }
+
   function insertTemplate(t: string) {
-    setPlanText(prev => (prev.trim() ? `${prev.trim()}\n${t}` : t));
+    setPlanText(t);
+    setAiHelp(null);
+    if (generated) setDirty(true);
   }
 
   function addStep() {
     setSteps(prev => [...prev, { id: makeId(), text: 'New step' }]);
   }
 
-  function generate() {
+  function removeStep(id: string) {
+    setSteps(prev => prev.filter(s => s.id !== id));
+  }
+
+  function parseDeadlineToISOEndOfDay(v: string, opts?: { mustBeFuture?: boolean }): string | null {
+    const raw = v.trim();
+    if (!raw) return null;
+
+    const d = new Date(raw);
+    if (!Number.isFinite(d.getTime())) return null;
+
+    d.setHours(23, 59, 59, 999);
+
+    if (opts?.mustBeFuture) {
+      const now = new Date();
+      if (d.getTime() < now.getTime()) return null;
+    }
+
+    return d.toISOString();
+  }
+
+  async function generate() {
     if (!planText.trim()) {
       toast('Please describe your plan first');
       return;
     }
 
+    if (planText.includes('___')) {
+      toast('Please fill in the blanks (___) in your plan first.');
+      return;
+    }
+
+    const resolvedDeadline = await resolveDeadlineForPlan();
+    if (!resolvedDeadline) {
+      toast('Please enter a deadline (or mention it in your plan like “in 6 weeks”).');
+      return;
+    }
+
+    const dl = parseDeadlineToISOEndOfDay(resolvedDeadline, { mustBeFuture: true });
+    if (!dl) {
+      toast('Please enter a valid future deadline');
+      return;
+    }
+
+    const token = state.accessToken;
+    if (!token) {
+      toast('Not signed in');
+      return;
+    }
+
     setGenerated(false);
+    setAiHelp(null);
+    setDirty(false);
     setLoading(true);
 
-    const field = inferFieldFromText(planText);
-    const base = [
-      'Define outcome + deadline',
-      'Break the goal into 3 measurable tasks',
-      'Schedule 2 focused sessions',
-      'Review progress and adjust',
-    ];
+    try {
+      const resp = await authApi.aiSuggestGoal(token, { prompt: planText.trim(), deadline: dl, intensity });
+      if (!resp.ok) {
+        setAiHelp({ message: resp.message, questions: resp.questions ?? [] });
+        return;
+      }
 
-    const chosen = intensity === 'Hard' ? [...base, 'Add one extra challenge task'] : intensity === 'Light' ? base.slice(0, 3) : base;
-
-    setTimeout(() => {
-      setLoading(false);
+      setGoalTitle(resp.suggestion.title || defaultGoalTitle(planText));
+      setGoalField(resp.suggestion.field);
+      setGoalDeadline(resp.suggestion.deadline || resolvedDeadline);
+      setSteps(resp.suggestion.steps.map(s => ({ id: makeId(), text: s })));
       setGenerated(true);
-      setGoalTitle(defaultGoalTitle(planText));
-      setGoalField(field);
-      setGoalHorizon(horizon);
-      setSteps(chosen.map(s => ({ id: makeId(), text: s })));
-      toast('AI suggestions ready (demo)');
-    }, 700);
+      setDirty(false);
+      toast('AI suggestions ready');
+    } catch (e: any) {
+      toast(String(e?.message ?? 'AI failed'));
+    } finally {
+      setLoading(false);
+    }
   }
 
-  function save() {
+  async function save() {
     const title = goalTitle.trim();
     const stepTexts = steps.map(s => s.text.trim()).filter(Boolean);
     if (!title) {
@@ -105,8 +289,37 @@ export function AiPlannerModal({ visible, onClose }: Props) {
       toast('Please add at least 1 step');
       return;
     }
-    toast(`Saved: ${title} (${stepTexts.length} steps) (demo)`);
-    onClose();
+
+    const token = state.accessToken;
+    if (!token) {
+      toast('Not signed in');
+      return;
+    }
+
+    if (loading) return;
+    setLoading(true);
+    try {
+      const prefix = goalField === 'Sport' ? 'Fitness' : goalField === 'Entertainment' ? 'Music' : 'Study';
+      const withSteps = `${prefix}: ${title}\n\nSteps:\n${stepTexts.map(s => `- [ ] ${s}`).join('\n')}`;
+
+      const resolvedDeadline = await resolveDeadlineForPlan(goalDeadline || deadline);
+      if (!resolvedDeadline) return;
+
+      const dueIso = parseDeadlineToISOEndOfDay(resolvedDeadline, { mustBeFuture: true });
+      if (!dueIso) {
+        toast('Please enter a valid future deadline');
+        return;
+      }
+
+      await authApi.createGoal(token, { title: withSteps, description: planText.trim() ? planText.trim() : null, dueAt: dueIso });
+      toast('Saved');
+      onSaved?.();
+      onClose();
+    } catch (e: any) {
+      toast(String(e?.message ?? 'Save failed'));
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -122,15 +335,23 @@ export function AiPlannerModal({ visible, onClose }: Props) {
             </Pressable>
           </View>
 
-          <ScrollView contentContainerStyle={{ paddingBottom: 16 }}>
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={{ paddingBottom: 16 }}
+            keyboardShouldPersistTaps="handled"
+          >
             <Text style={styles.mutedSmall}>Describe your plan. AI will suggest 1 goal and a checklist.</Text>
 
             <View style={styles.field}>
               <Text style={styles.label}>Your plan</Text>
               <TextInput
                 value={planText}
-                onChangeText={setPlanText}
-                placeholder="Example: I want to prepare for database exam in 3 weeks and go to gym 2 times/week."
+                onChangeText={t => {
+                  setPlanText(t);
+                  setAiHelp(null);
+                  if (generated) setDirty(true);
+                }}
+                placeholder="Example: I want to prepare for database exam in 3 weeks."
                 placeholderTextColor={colors.muted}
                 multiline
                 style={styles.textarea}
@@ -147,20 +368,33 @@ export function AiPlannerModal({ visible, onClose }: Props) {
 
             <View style={styles.row2}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.label}>Time horizon</Text>
-                <View style={styles.selectRow}>
-                  {(['This week', '2 weeks', '1 month'] as const).map(v => (
-                    <Pressable key={v} onPress={() => setHorizon(v)} style={[styles.selectOpt, horizon === v ? styles.selectOptOn : null]}>
-                      <Text style={[styles.selectText, horizon === v ? styles.selectTextOn : null]}>{v}</Text>
-                    </Pressable>
-                  ))}
-                </View>
+                <Text style={styles.label}>Deadline</Text>
+                <TextInput
+                  value={deadline}
+                  onChangeText={t => {
+                    setDeadline(t);
+                    setAiHelp(null);
+                    if (generated) setDirty(true);
+                  }}
+                  placeholder="YYYY-MM-DD"
+                  placeholderTextColor={colors.muted}
+                  style={styles.input}
+                />
+                <Text style={[styles.mutedSmall, { marginTop: 6 }]}>Example: 2027-01-01</Text>
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.label}>Intensity</Text>
                 <View style={styles.selectRow}>
                   {(['Light', 'Normal', 'Hard'] as const).map(v => (
-                    <Pressable key={v} onPress={() => setIntensity(v)} style={[styles.selectOpt, intensity === v ? styles.selectOptOn : null]}>
+                    <Pressable
+                      key={v}
+                      onPress={() => {
+                        setIntensity(v);
+                        setAiHelp(null);
+                        if (generated) setDirty(true);
+                      }}
+                      style={[styles.selectOpt, intensity === v ? styles.selectOptOn : null]}
+                    >
                       <Text style={[styles.selectText, intensity === v ? styles.selectTextOn : null]}>{v}</Text>
                     </Pressable>
                   ))}
@@ -172,6 +406,26 @@ export function AiPlannerModal({ visible, onClose }: Props) {
             <Button title={generated ? 'Regenerate' : 'Generate suggestions'} variant="primary" full onPress={generate} />
 
             {loading ? <Text style={[styles.mutedSmall, { marginTop: 10 }]}>Thinking…</Text> : null}
+
+            {generated && dirty ? (
+              <Text style={[styles.mutedSmall, { marginTop: 10 }]}>Plan updated. Tap Regenerate to update the goal.</Text>
+            ) : null}
+
+            {aiHelp ? (
+              <Card style={{ marginTop: 12 }}>
+                <Text style={[styles.cardTitle, { marginBottom: 6 }]}>AI needs more info</Text>
+                <Text style={styles.mutedSmall}>{aiHelp.message}</Text>
+                {aiHelp.questions?.length ? (
+                  <View style={{ marginTop: 10, gap: 6 }}>
+                    {aiHelp.questions.map((q, i) => (
+                      <Text key={`${i}_${q}`} style={styles.mutedSmall}>
+                        {i + 1}. {q}
+                      </Text>
+                    ))}
+                  </View>
+                ) : null}
+              </Card>
+            ) : null}
 
             {generated ? (
               <View style={{ marginTop: 12, gap: 12 }}>
@@ -189,7 +443,7 @@ export function AiPlannerModal({ visible, onClose }: Props) {
 
                   <View style={{ flexDirection: 'row', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
                     <Pill>Field: {goalField}</Pill>
-                    <Pill>Horizon: {goalHorizon}</Pill>
+                    <Pill>Deadline: {goalDeadline || deadline || '—'}</Pill>
                   </View>
                 </Card>
 
@@ -200,7 +454,19 @@ export function AiPlannerModal({ visible, onClose }: Props) {
                   </View>
 
                   <View style={{ marginTop: 10 }}>
-                    <StepEditorList steps={steps} onChange={setSteps} />
+                    <View style={{ gap: 10 }}>
+                      {steps.map((s, idx) => (
+                        <View key={s.id} style={styles.stepItemRow}>
+                          <Text style={styles.stepNum}>{idx + 1}.</Text>
+                          <Text style={styles.stepItemText}>
+                            {s.text}
+                          </Text>
+                          <Pressable onPress={() => removeStep(s.id)} hitSlop={10} style={styles.stepRemove}>
+                            <Text style={styles.stepRemoveText}>🗑</Text>
+                          </Pressable>
+                        </View>
+                      ))}
+                    </View>
                   </View>
 
                   <View style={{ height: 10 }} />
@@ -208,8 +474,7 @@ export function AiPlannerModal({ visible, onClose }: Props) {
                 </Card>
 
                 <View style={{ gap: 8 }}>
-                  <Button title={'Save (demo)'} variant="primary" full onPress={save} />
-                  <Text style={styles.hint}>In prototype: save will show a toast only (no persistence yet).</Text>
+                  <Button title={'Save'} variant="primary" full onPress={save} />
                 </View>
               </View>
             ) : null}
@@ -234,7 +499,7 @@ const styles = StyleSheet.create({
     borderColor: colors.line,
     paddingHorizontal: 14,
     paddingTop: 12,
-    maxHeight: '90%',
+    height: '90%',
   },
   sheetHead: {
     flexDirection: 'row',
@@ -349,5 +614,82 @@ const styles = StyleSheet.create({
     color: colors.muted,
     fontSize: 11,
     fontWeight: '700',
+  },
+  stepRow: {
+    flexDirection: 'row',
+    gap: 10,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: colors.surface2,
+    padding: 10,
+    borderRadius: 14,
+  },
+  stepRowDone: {
+    opacity: 0.92,
+  },
+  stepCheck: {
+    width: 18,
+    height: 18,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: 'transparent',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepCheckOn: {
+    backgroundColor: colors.success,
+    borderColor: 'transparent',
+  },
+  stepCheckMark: {
+    color: colors.surface,
+    fontWeight: '900',
+    fontSize: 12,
+    lineHeight: 12,
+  },
+  stepLabel: {
+    color: colors.muted,
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  stepText: {
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: '800',
+    marginTop: 2,
+  },
+  stepItemRow: {
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'flex-start',
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: colors.surface2,
+    padding: 10,
+    borderRadius: 14,
+  },
+  stepNum: {
+    color: colors.muted,
+    fontWeight: '900',
+    width: 20,
+    textAlign: 'right',
+    paddingTop: 1,
+  },
+  stepItemText: {
+    flex: 1,
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: '800',
+    lineHeight: 18,
+  },
+  stepRemove: {
+    paddingHorizontal: 6,
+    paddingVertical: 6,
+    alignSelf: 'flex-start',
+  },
+  stepRemoveText: {
+    color: colors.danger,
+    fontWeight: '900',
   },
 });

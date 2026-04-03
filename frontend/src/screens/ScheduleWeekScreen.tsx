@@ -164,19 +164,17 @@ export function ScheduleWeekScreen() {
           ? new Date(e.endAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
           : '';
 
-        const repeat = ((e.repeat ?? 'Once') as any) as RepeatMode;
-        const showAllWeekdays = repeat === 'Daily' || repeat === 'Monthly' || repeat === 'Yearly';
-        const targetDays: DayKey[] = showAllWeekdays ? keys : [eventDay];
+        const targetDays: DayKey[] = [eventDay];
 
         for (const dayKey of targetDays) {
           next.push({
-            id: showAllWeekdays ? `${e.id}_${dayKey}` : e.id,
+            id: e.id,
             eventId: e.id,
             day: dayKey,
             title: e.title,
             start: startTxt,
             end: endTxt || startTxt,
-            repeat,
+            repeat: ((e.repeat ?? 'Once') as any) as RepeatMode,
             desc: 'None',
             startAt: e.startAt,
             endAt: e.endAt ?? null,

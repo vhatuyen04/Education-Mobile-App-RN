@@ -36,6 +36,8 @@ export function StepEditorList({ steps, onChange }: Props) {
               onChangeText={t => setStepText(s.id, t)}
               placeholder=""
               placeholderTextColor={colors.muted}
+              multiline
+              textAlignVertical="top"
               style={styles.input}
             />
           </View>
@@ -83,6 +85,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     paddingVertical: 6,
     paddingHorizontal: 0,
+    minHeight: 40,
   },
   trash: {
     paddingHorizontal: 6,

@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { prisma } from '../utils/prisma.js';
 import { getConfig } from '../utils/config.js';
 import {
+  AiGoalSuggestSchema,
   ChangePasswordSchema,
   CreateEventSchema,
   CreateGoalSchema,
@@ -285,6 +286,118 @@ authRouter.post('/logout', async (req: Request, res: Response) => {
   return res.json({ ok: true });
 });
 
+authRouter.post('/ai/goal', async (req: Request, res: Response) => {
+  const token = getAccessTokenFromReq(req);
+  if (!token) {
+    return res.status(401).json({ error: 'Missing access token' });
+  }
+
+  let userId: string;
+  try {
+    userId = verifyAccessToken(token).sub;
+  } catch {
+    return res.status(401).json({ error: 'Invalid access token' });
+  }
+
+  const parsed = AiGoalSuggestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Invalid payload' });
+  }
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    return res.status(500).json({ error: 'AI is not configured on the server' });
+  }
+
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, email: true, name: true } });
+  if (!user) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  const deadline = parsed.data.deadline ?? 'No deadline provided';
+  if (parsed.data.deadline) {
+    const d = new Date(parsed.data.deadline);
+    if (!Number.isFinite(d.getTime())) {
+      return res.status(400).json({ error: 'Invalid deadline' });
+    }
+    if (d.getTime() < Date.now()) {
+      return res.status(400).json({ error: 'Deadline must be in the future' });
+    }
+  }
+  const intensity = parsed.data.intensity ?? 'Normal';
+
+  const system =
+    'You are a helpful planner. You must output ONLY valid JSON. Default behavior: generate a useful, actionable goal suggestion even if some details are missing, by making reasonable generic assumptions and keeping steps broadly applicable. Only return clarification (ok=false) if the user request does NOT contain a concrete outcome (e.g., no specific target, no clear deliverable, or it is purely vague like "study more" / "get healthier" without a measurable goal). If the user has a clear outcome (including rank/achievement goals like "reach Challenger in League of Legends") and/or a deadline, do NOT ask for clarification; instead generate a generic plan with steps that adapt to different starting levels. Writing style requirements for steps: use very simple, clear language (avoid jargon and complex words); each step must be 1-2 very brief sentences; start the first sentence with a verb ("Practice", "Review", "Track", "Schedule"); be concrete and specific; keep each sentence short; avoid filler phrases and motivational speech. If clarification is truly required, return: {"ok":false,"message":"...","questions":["...","...","..."]}. Otherwise return: {"ok":true,"suggestion":{"title":"...","field":"Sport|Academy|Entertainment","deadline":"YYYY-MM-DD","steps":["...", "..."]}}. Questions must be 1-3 short questions. Steps must be short, actionable, and ordered.';
+
+  const userMsg =
+    `User info: name=${user.name ?? ''}, email=${user.email}.\n` +
+    `Deadline: ${deadline}. Intensity: ${intensity}.\n` +
+    `User request: ${parsed.data.prompt}`;
+
+  try {
+    const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: process.env.OPENAI_MODEL ?? 'gpt-4o-mini',
+        temperature: 0.6,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: userMsg },
+        ],
+      }),
+    });
+
+    const text = await resp.text();
+    const data = text ? JSON.parse(text) : null;
+    if (!resp.ok) {
+      const msg = data?.error?.message ?? `AI request failed (${resp.status})`;
+      return res.status(502).json({ error: msg });
+    }
+
+    const content = data?.choices?.[0]?.message?.content;
+    if (!content || typeof content !== 'string') {
+      return res.status(502).json({ error: 'AI returned empty response' });
+    }
+
+    let parsedJson: any;
+    try {
+      parsedJson = JSON.parse(content);
+    } catch {
+      return res.status(502).json({ error: 'AI returned invalid JSON' });
+    }
+
+    const OutSchema = z.union([
+      z.object({
+        ok: z.literal(false),
+        message: z.string().min(1),
+        questions: z.array(z.string().min(1)).min(1).max(3),
+      }),
+      z.object({
+        ok: z.literal(true),
+        suggestion: z.object({
+          title: z.string().min(1),
+          field: z.enum(['Sport', 'Academy', 'Entertainment']),
+          deadline: z.string().min(1),
+          steps: z.array(z.string().min(1)).min(1).max(12),
+        }),
+      }),
+    ]);
+
+    const out = OutSchema.safeParse(parsedJson);
+    if (!out.success) {
+      return res.status(502).json({ error: 'AI output did not match expected format' });
+    }
+
+    return res.json(out.data);
+  } catch (e: any) {
+    return res.status(502).json({ error: String(e?.message ?? 'AI request failed') });
+  }
+});
+
 authRouter.put('/me', async (req: Request, res: Response) => {
   const token = getAccessTokenFromReq(req);
   if (!token) {
@@ -388,7 +501,7 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
   const nextGoalWithDue = await prismaAny.goal.findFirst({
     where: { userId, completed: false, dueAt: { not: null } },
     orderBy: [{ dueAt: 'asc' }, { createdAt: 'asc' }],
-    select: { id: true, title: true, progressPct: true, dueAt: true },
+    select: { id: true, title: true, description: true, progressPct: true, dueAt: true },
   });
 
   const nextGoal =
@@ -396,7 +509,7 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
     (await prismaAny.goal.findFirst({
       where: { userId, completed: false },
       orderBy: [{ createdAt: 'asc' }],
-      select: { id: true, title: true, progressPct: true, dueAt: true },
+      select: { id: true, title: true, description: true, progressPct: true, dueAt: true },
     }));
 
   const nextEvent = await prismaAny.event.findFirst({
@@ -437,7 +550,7 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
   const todayGoals = await prismaAny.goal.findMany({
     where: { userId, completed: false, dueAt: { gte: startOfDay, lte: endOfDay } },
     orderBy: [{ dueAt: 'asc' }, { createdAt: 'asc' }],
-    select: { id: true, title: true, progressPct: true, dueAt: true },
+    select: { id: true, title: true, description: true, progressPct: true, dueAt: true },
     take: 20,
   });
 
@@ -526,10 +639,11 @@ authRouter.post('/goals', async (req: Request, res: Response) => {
     data: {
       userId,
       title,
+      description: parsed.data.description ?? null,
       progressPct: parsed.data.progressPct ?? 0,
       dueAt: parsed.data.dueAt ? new Date(parsed.data.dueAt) : null,
     },
-    select: { id: true, title: true, progressPct: true, dueAt: true, completed: true },
+    select: { id: true, title: true, description: true, progressPct: true, dueAt: true, completed: true },
   });
 
   return res.status(201).json({ goal });
@@ -551,11 +665,37 @@ authRouter.get('/goals', async (req: Request, res: Response) => {
   const goals = await prismaAny.goal.findMany({
     where: { userId },
     orderBy: [{ completed: 'asc' }, { dueAt: 'asc' }, { createdAt: 'asc' }],
-    select: { id: true, title: true, progressPct: true, dueAt: true, completed: true },
+    select: { id: true, title: true, description: true, progressPct: true, dueAt: true, completed: true },
     take: 200,
   });
 
   return res.json({ goals });
+});
+
+authRouter.get('/goals/:id', async (req: Request, res: Response) => {
+  const token = getAccessTokenFromReq(req);
+  if (!token) {
+    return res.status(401).json({ error: 'Missing access token' });
+  }
+
+  let userId: string;
+  try {
+    userId = verifyAccessToken(token).sub;
+  } catch {
+    return res.status(401).json({ error: 'Invalid access token' });
+  }
+
+  const id = String(req.params.id);
+  const goal = await prismaAny.goal.findFirst({
+    where: { id, userId },
+    select: { id: true, title: true, description: true, progressPct: true, dueAt: true, completed: true },
+  });
+
+  if (!goal) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+
+  return res.json({ goal });
 });
 
 authRouter.put('/goals/:id', async (req: Request, res: Response) => {
@@ -584,6 +724,7 @@ authRouter.put('/goals/:id', async (req: Request, res: Response) => {
 
   const data: any = {};
   if (parsed.data.title !== undefined) data.title = parsed.data.title.trim();
+  if (parsed.data.description !== undefined) data.description = parsed.data.description;
   if (parsed.data.progressPct !== undefined) data.progressPct = parsed.data.progressPct;
   if (parsed.data.dueAt !== undefined) data.dueAt = parsed.data.dueAt ? new Date(parsed.data.dueAt) : null;
   if (parsed.data.completed !== undefined) data.completed = parsed.data.completed;
@@ -596,7 +737,7 @@ authRouter.put('/goals/:id', async (req: Request, res: Response) => {
   const goal = await prismaAny.goal.update({
     where: { id },
     data,
-    select: { id: true, title: true, progressPct: true, dueAt: true, completed: true },
+    select: { id: true, title: true, description: true, progressPct: true, dueAt: true, completed: true },
   });
 
   if (willComplete) {

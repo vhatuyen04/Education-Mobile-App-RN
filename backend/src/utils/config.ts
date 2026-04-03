@@ -8,6 +8,8 @@ type Config = {
   jwtRefreshSecret: string;
   accessTokenTtl: string;
   refreshTokenTtl: string;
+  openaiApiKey?: string;
+  openaiModel?: string;
 };
 
 function requireEnv(name: string): string {
@@ -27,5 +29,7 @@ export function getConfig(): Config {
     jwtRefreshSecret: requireEnv('JWT_REFRESH_SECRET'),
     accessTokenTtl: process.env.ACCESS_TOKEN_TTL ?? '15m',
     refreshTokenTtl: process.env.REFRESH_TOKEN_TTL ?? '30d',
+    openaiApiKey: process.env.OPENAI_API_KEY,
+    openaiModel: process.env.OPENAI_MODEL,
   };
 }

@@ -1,6 +1,6 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
@@ -23,22 +23,38 @@ function makeId() {
   return `s_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
-function exampleStepsFor(title: string): Step[] {
-  const t = (title || '').toLowerCase();
-  const base = (arr: string[]) => arr.map(text => ({ id: makeId(), text }));
-  if (t.includes('ielts')) {
-    return base(['Do 1 listening test', 'Learn 20 new words', 'Write 1 task 2 essay', 'Review mistakes']);
+function parseGoalTitle(raw: string): { name: string; steps: Step[] } {
+  const txt = String(raw ?? '');
+  const lines = txt.split(/\r?\n/);
+  const name = (lines[0] ?? '').trim() || 'Untitled goal';
+
+  const idx = lines.findIndex(l => l.trim().toLowerCase() === 'steps:' || l.trim().toLowerCase() === 'steps');
+  if (idx === -1) {
+    return { name, steps: [] };
   }
-  if (t.includes('thesis')) {
-    return base(['Outline today section', 'Write 300 words', 'Add 2 references', 'Proofread and commit']);
+
+  const stepLines = lines.slice(idx + 1).map(l => l.trim()).filter(Boolean);
+  const steps: Step[] = [];
+  for (const l of stepLines) {
+    const m = l.match(/^[-*]\s*\[(x| )\]\s*(.+)$/i);
+    if (m) {
+      steps.push({ id: makeId(), done: m[1].toLowerCase() === 'x', text: m[2].trim() });
+      continue;
+    }
+    const m2 = l.match(/^[-*]\s*(.+)$/);
+    if (m2) {
+      steps.push({ id: makeId(), done: false, text: m2[1].trim() });
+    }
   }
-  if (t.includes('run')) {
-    return base(['Warm up 10 min', 'Run 5km', 'Cooldown + stretch', 'Log distance']);
-  }
-  if (t.includes('lol')) {
-    return base(['Warm up (1 normal game)', 'Focus on 1 champion', 'Review 1 replay', 'Track LP + notes']);
-  }
-  return base(['Define outcome + deadline', 'Break into 3 tasks', 'Schedule sessions', 'Review progress']);
+
+  return { name, steps };
+}
+
+function serializeGoalTitle(name: string, steps: Step[]): string {
+  const cleanName = (name ?? '').trim() || 'Untitled goal';
+  const cleanSteps = steps.map(s => ({ ...s, text: (s.text ?? '').trim() })).filter(s => s.text.length > 0);
+  if (cleanSteps.length === 0) return cleanName;
+  return `${cleanName}\n\nSteps:\n${cleanSteps.map(s => `- [${s.done ? 'x' : ' '}] ${s.text}`).join('\n')}`;
 }
 
 export function GoalDetailScreen() {
@@ -51,10 +67,32 @@ export function GoalDetailScreen() {
 
   const [title, setTitle] = useState(initialTitle);
   const [desc, setDesc] = useState('');
-  const [steps, setSteps] = useState<Step[]>(() => exampleStepsFor(initialTitle));
+  const [steps, setSteps] = useState<Step[]>([]);
   const [saving, setSaving] = useState(false);
 
   const stepCount = useMemo(() => steps.filter(s => s.text.trim()).length, [steps]);
+  const doneCount = useMemo(() => steps.filter(s => s.text.trim() && s.done).length, [steps]);
+
+  const refresh = useCallback(async () => {
+    if (!goalId) return;
+    const token = state.accessToken;
+    if (!token) return;
+    try {
+      const resp = await authApi.getGoal(token, goalId);
+      const parsed = parseGoalTitle(resp.goal.title);
+      setTitle(parsed.name);
+      setDesc(resp.goal.description ?? '');
+      setSteps(parsed.steps.length ? parsed.steps : [{ id: makeId(), text: 'New step', done: false }]);
+    } catch (e: any) {
+      toast(String(e?.message ?? 'Failed to load'));
+    }
+  }, [goalId, state.accessToken]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void refresh();
+    }, [refresh])
+  );
 
   function addStep() {
     setSteps(prev => [...prev, { id: makeId(), text: 'New step' }]);
@@ -81,10 +119,15 @@ export function GoalDetailScreen() {
 
     setSaving(true);
     try {
+      const serialized = serializeGoalTitle(t, steps);
+      const total = steps.map(s => s.text.trim()).filter(Boolean).length;
+      const done = steps.filter(s => s.text.trim() && s.done).length;
+      const progressPct = total > 0 ? Math.round((done / total) * 100) : 0;
+
       if (goalId) {
-        await authApi.updateGoal(token, goalId, { title: t });
+        await authApi.updateGoal(token, goalId, { title: serialized, description: desc.trim() ? desc : null, progressPct });
       } else {
-        await authApi.createGoal(token, { title: t, progressPct: 0 });
+        await authApi.createGoal(token, { title: serialized, description: desc.trim() ? desc : null, progressPct });
       }
       toast('Saved');
       nav.goBack();
@@ -136,7 +179,9 @@ export function GoalDetailScreen() {
 
           <View style={styles.cardTitleRow}>
             <Text style={styles.cardTitle}>Checklist</Text>
-            <Badge>{stepCount} steps</Badge>
+            <Badge>
+              {doneCount}/{stepCount}
+            </Badge>
           </View>
 
           <View style={{ marginTop: 10 }}>
