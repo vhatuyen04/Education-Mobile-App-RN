@@ -146,7 +146,7 @@ export function GoalDetailScreen() {
             <Text style={styles.hTitle}>Goal detail</Text>
             <View style={styles.hSub}>
               <Pill dot>Edit</Pill>
-              <Pill>Checklist</Pill>
+              <Pill>Steps</Pill>
             </View>
           </View>
           <Pressable
@@ -178,7 +178,7 @@ export function GoalDetailScreen() {
           <View style={styles.divider} />
 
           <View style={styles.cardTitleRow}>
-            <Text style={styles.cardTitle}>Checklist</Text>
+            <Text style={styles.cardTitle}>Steps</Text>
             <Badge>
               {doneCount}/{stepCount}
             </Badge>

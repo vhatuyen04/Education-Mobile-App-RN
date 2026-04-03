@@ -449,7 +449,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
 
                 <Card>
                   <View style={styles.cardTitleRow}>
-                    <Text style={styles.cardTitle}>Checklist</Text>
+                    <Text style={styles.cardTitle}>Steps</Text>
                     <Badge>{stepCount} steps</Badge>
                   </View>
 
