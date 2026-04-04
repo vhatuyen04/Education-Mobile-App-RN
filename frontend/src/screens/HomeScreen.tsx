@@ -58,6 +58,21 @@ export function HomeScreen() {
   const nextEvent = dash?.nextEvent ?? null;
   const todayEvents = dash?.todayEvents ?? [];
   const todayGoals = dash?.todayGoals ?? [];
+  const todaySteps = dash?.todaySteps ?? [];
+
+  const stepsByGoal = useMemo(() => {
+    const map = new Map<string, { goalTitle: string; steps: typeof todaySteps }>();
+    for (const s of todaySteps) {
+      const key = String(s.goalId);
+      const prev = map.get(key);
+      if (prev) {
+        prev.steps.push(s);
+      } else {
+        map.set(key, { goalTitle: s.goalTitle, steps: [s] });
+      }
+    }
+    return Array.from(map.entries()).map(([goalId, v]) => ({ goalId, goalTitle: v.goalTitle, steps: v.steps }));
+  }, [todaySteps]);
 
   function displayGoalTitle(raw: string) {
     const first = String(raw ?? '').split(/\r?\n/)[0] ?? '';
@@ -134,6 +149,18 @@ export function HomeScreen() {
                   <Text style={styles.muted12}>No goals yet. Create one to see it here.</Text>
                 )}
               </View>
+
+              {nextGoal ? (
+                <View style={{ marginTop: 10 }}>
+                  <ProgressBar value={nextGoal.progressPct ?? 0} />
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 }}>
+                    <Text style={styles.muted12}>Overall: {(nextGoal.progressPct ?? 0).toFixed(2)}%</Text>
+                    <Text style={styles.muted12}>
+                      Today: {nextGoal.todayPct === null || nextGoal.todayPct === undefined ? '—' : `${nextGoal.todayPct.toFixed(2)}%`}
+                    </Text>
+                  </View>
+                </View>
+              ) : null}
             </Card>
           </Pressable>
 
@@ -163,12 +190,12 @@ export function HomeScreen() {
             <View style={styles.cardTitleRow}>
               <Text style={styles.cardTitle}>Todo today</Text>
               <Badge>
-                <Text style={styles.bold}>{todayEvents.length + todayGoals.length}</Text> items
+                <Text style={styles.bold}>{todayEvents.length + todayGoals.length + todaySteps.length}</Text> items
               </Badge>
             </View>
 
             <View style={{ marginTop: 10, gap: 10 }}>
-              {todayEvents.length === 0 && todayGoals.length === 0 ? (
+              {todayEvents.length === 0 && todayGoals.length === 0 && todaySteps.length === 0 ? (
                 <Text style={styles.muted12}>Nothing planned for today.</Text>
               ) : (
                 <>
@@ -179,7 +206,11 @@ export function HomeScreen() {
                         <Text style={styles.itemMeta}>{formatTimeRange(e.startAt, e.endAt)}</Text>
                       </View>
                       <View style={{ flexDirection: 'row', gap: 8 }}>
-                        <Button title="Detail" small onPress={() => toast('Event details (todo)')} />
+                        <Button
+                          title="Detail"
+                          small
+                          onPress={() => (nav as any).navigate('Tabs', { screen: 'Calendar', params: { openEventId: e.id } })}
+                        />
                       </View>
                     </View>
                   ))}
@@ -196,6 +227,26 @@ export function HomeScreen() {
                           small
                           onPress={() => nav.navigate('GoalDetail', { id: g.id, title: g.title })}
                         />
+                      </View>
+                    </View>
+                  ))}
+
+                  {stepsByGoal.map(g => (
+                    <View key={g.goalId} style={styles.item}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.itemName}>{displayGoalTitle(g.goalTitle)}</Text>
+                        <Text style={styles.itemMeta}>{g.steps.length} step{g.steps.length === 1 ? '' : 's'} today</Text>
+                        <View style={{ marginTop: 8, gap: 6 }}>
+                          {g.steps.slice(0, 3).map(s => (
+                            <Text key={s.id} style={styles.itemMeta}>
+                              - {s.text}
+                            </Text>
+                          ))}
+                          {g.steps.length > 3 ? <Text style={styles.itemMeta}>- …</Text> : null}
+                        </View>
+                      </View>
+                      <View style={{ flexDirection: 'row', gap: 8 }}>
+                        <Button title="Detail" small onPress={() => nav.navigate('GoalDetail', { id: g.goalId, title: g.goalTitle })} />
                       </View>
                     </View>
                   ))}

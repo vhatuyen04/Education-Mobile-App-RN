@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
+import type { RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
 import { Screen } from '../components/Screen';
@@ -65,6 +66,7 @@ function mondayIndexOfFirstDay(year: number, monthIndex0: number) {
 
 export function CalendarScreen() {
   const nav = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const route = useRoute<RouteProp<{ Calendar: { openEventId?: string } | undefined }, 'Calendar'>>();
   const { state } = useAuth();
 
   const [viewDate, setViewDate] = useState(() => {
@@ -85,6 +87,8 @@ export function CalendarScreen() {
   const [dayEvents, setDayEvents] = useState<{ open: boolean; day: number | null }>({ open: false, day: null });
   const [edit, setEdit] = useState<{ open: boolean; eventId: string | null }>({ open: false, eventId: null });
   const [confirm, setConfirm] = useState<{ open: boolean; eventId: string | null }>({ open: false, eventId: null });
+
+  const lastAutoOpenedEventId = useRef<string | null>(null);
 
   const [gridWidth, setGridWidth] = useState<number | null>(null);
   const cellSize = useMemo(() => {
@@ -151,6 +155,19 @@ export function CalendarScreen() {
       setLoading(false);
     }
   }, [monthRange.from, monthRange.to, state.accessToken]);
+
+  useEffect(() => {
+    const eventId = route.params?.openEventId;
+    if (!eventId) return;
+    if (lastAutoOpenedEventId.current === eventId && edit.open) return;
+    const exists = events.some(e => e.id === eventId);
+    if (!exists) return;
+    lastAutoOpenedEventId.current = eventId;
+    openEdit(eventId);
+    // Clear the param so closing the modal doesn't immediately reopen it.
+    // Navigating here again with openEventId will set it back.
+    (nav as any).setParams?.({ openEventId: undefined });
+  }, [route.params?.openEventId, events, edit.open]);
 
   useFocusEffect(
     useCallback(() => {

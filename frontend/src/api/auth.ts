@@ -140,7 +140,17 @@ export type AiGoalSuggestion = {
   title: string;
   field: LeaderboardField;
   deadline: string;
-  steps: string[];
+  steps: AiGoalStep[];
+};
+
+export type AiGoalStepSchedule =
+  | { type: 'none' }
+  | { type: 'once'; due: string }
+  | { type: 'repeat'; repeat: string; repeatDay?: number; repeatMonth?: number };
+
+export type AiGoalStep = {
+  text: string;
+  schedule: AiGoalStepSchedule;
 };
 
 export type AiGoalSuggestResponse =
@@ -158,6 +168,7 @@ export type DashboardGoal = {
   id: string;
   title: string;
   progressPct: number;
+  todayPct?: number | null;
   dueAt: string | null;
 } | null;
 
@@ -189,6 +200,18 @@ export type EventItem = {
   seriesEndAt?: string | null;
 };
 
+export type TodayStepItem = {
+  id: string;
+  goalId: string;
+  goalTitle: string;
+  text: string;
+  dueAt: string | null;
+  repeat: string | null;
+  repeatDay: number | null;
+  repeatMonth: number | null;
+  doneToday: boolean;
+};
+
 export type DashboardResponse = {
   score: number;
   tasksPlanned: number;
@@ -196,6 +219,7 @@ export type DashboardResponse = {
   nextEvent: DashboardEvent;
   todayEvents: EventItem[];
   todayGoals: Exclude<DashboardGoal, null>[];
+  todaySteps: TodayStepItem[];
 };
 
 export type LeaderboardField = 'Sport' | 'Academy' | 'Entertainment';
@@ -228,6 +252,17 @@ export async function getDashboard(accessToken: string): Promise<DashboardRespon
   return getJsonAuth<DashboardResponse>('/auth/dashboard', accessToken);
 }
 
+export async function toggleGoalStepCompletion(
+  accessToken: string,
+  params: { goalId: string; stepId: string; dateIso: string; done: boolean }
+): Promise<{ ok: true }> {
+  return postJsonAuth<{ ok: true }>(
+    `/auth/goals/${encodeURIComponent(params.goalId)}/steps/${encodeURIComponent(params.stepId)}/completion`,
+    { date: params.dateIso, done: params.done },
+    accessToken
+  );
+}
+
 export async function getLeaderboard(accessToken: string): Promise<LeaderboardResponse> {
   return getJsonAuth<LeaderboardResponse>('/auth/leaderboard', accessToken);
 }
@@ -257,6 +292,61 @@ export async function createGoal(
   body: { title: string; description?: string | null; progressPct?: number; dueAt?: string }
 ): Promise<{ goal: GoalItem }> {
   return postJsonAuth<{ goal: GoalItem }>('/auth/goals', body, accessToken);
+}
+
+export async function createGoalStep(
+  accessToken: string,
+  goalId: string,
+  body: {
+    text: string;
+    order?: number;
+    dueAt?: string | null;
+    repeat?: string | null;
+    repeatDay?: number | null;
+    repeatMonth?: number | null;
+  }
+): Promise<{ step: { id: string } }>
+{
+  return postJsonAuth<{ step: { id: string } }>(`/auth/goals/${encodeURIComponent(goalId)}/steps`, body, accessToken);
+}
+
+export type GoalStepItem = {
+  id: string;
+  goalId: string;
+  text: string;
+  order: number;
+  dueAt: string | null;
+  repeat: string | null;
+  repeatDay: number | null;
+  repeatMonth: number | null;
+};
+
+export async function listGoalSteps(accessToken: string, goalId: string): Promise<{ steps: GoalStepItem[] }> {
+  return getJsonAuth<{ steps: GoalStepItem[] }>(`/auth/goals/${encodeURIComponent(goalId)}/steps`, accessToken);
+}
+
+export async function updateGoalStep(
+  accessToken: string,
+  params: { goalId: string; stepId: string },
+  body: { text?: string; order?: number; dueAt?: string | null; repeat?: string | null; repeatDay?: number | null; repeatMonth?: number | null }
+): Promise<{ step: GoalStepItem }>
+{
+  return putJsonAuth<{ step: GoalStepItem }>(
+    `/auth/goals/${encodeURIComponent(params.goalId)}/steps/${encodeURIComponent(params.stepId)}`,
+    body,
+    accessToken
+  );
+}
+
+export async function deleteGoalStep(
+  accessToken: string,
+  params: { goalId: string; stepId: string }
+): Promise<{ ok: true }>
+{
+  return deleteJsonAuth<{ ok: true }>(
+    `/auth/goals/${encodeURIComponent(params.goalId)}/steps/${encodeURIComponent(params.stepId)}`,
+    accessToken
+  );
 }
 
 export async function updateGoal(

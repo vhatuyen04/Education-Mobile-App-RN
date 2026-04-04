@@ -12,7 +12,7 @@ import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
 
-type ItemType = 'event' | 'goal';
+type ItemType = 'event' | 'goal' | 'step';
 
 type Item = {
   id: string;
@@ -20,6 +20,9 @@ type Item = {
   name: string;
   meta: string;
   seriesId?: string | null;
+  goalId?: string;
+  goalTitle?: string;
+  doneToday?: boolean;
 };
 
 export function TodayDetailsScreen() {
@@ -90,8 +93,18 @@ export function TodayDetailsScreen() {
       meta: g.dueAt ? formatDueBadge(g.dueAt) : 'No due date',
     }));
 
-    return [...events, ...goals];
-  }, [dash?.todayEvents, dash?.todayGoals]);
+    const steps = (dash?.todaySteps ?? []).map(s => ({
+      id: s.id,
+      goalId: s.goalId,
+      goalTitle: s.goalTitle,
+      type: 'step' as const,
+      name: s.text,
+      meta: s.repeat ? `Repeat: ${s.repeat}` : s.dueAt ? formatDueBadge(s.dueAt) : 'Step',
+      doneToday: s.doneToday,
+    }));
+
+    return [...events, ...goals, ...steps];
+  }, [dash?.todayEvents, dash?.todayGoals, dash?.todaySteps]);
 
   const confirmText = useMemo(() => {
     if (!confirm.item) return 'Are you sure you want to delete this item?';
@@ -129,6 +142,27 @@ export function TodayDetailsScreen() {
       await refresh();
     } catch (e: any) {
       toast(String(e?.message ?? 'Delete failed'));
+    }
+  }
+
+  async function toggleStepDone(item: Item) {
+    const token = state.accessToken;
+    if (!token) {
+      toast('Not signed in');
+      return;
+    }
+    if (item.type !== 'step' || !item.goalId) return;
+
+    try {
+      await authApi.toggleGoalStepCompletion(token, {
+        goalId: item.goalId,
+        stepId: item.id,
+        dateIso: new Date().toISOString(),
+        done: !item.doneToday,
+      });
+      await refresh();
+    } catch (e: any) {
+      toast(String(e?.message ?? 'Failed'));
     }
   }
 
@@ -170,15 +204,29 @@ export function TodayDetailsScreen() {
                   </View>
 
                   <View style={styles.actions}>
-                    {item.type === 'event' ? (
-                      <Button title="Delete" small variant="danger" onPress={() => requestDelete(item)} />
+                    {item.type === 'step' ? (
+                      <Button title={item.doneToday ? 'Done' : 'Do'} small onPress={() => toggleStepDone(item)} />
+                    ) : null}
+
+                    {item.type === 'step' ? (
+                      <Button
+                        title="Detail"
+                        small
+                        onPress={() =>
+                          item.goalId ? (nav as any).navigate('GoalDetail', { id: item.goalId, title: item.goalTitle ?? 'Goal detail' }) : null
+                        }
+                      />
                     ) : null}
 
                     {item.type === 'goal' ? (
                       <Button title="Detail" small onPress={() => (nav as any).navigate('GoalDetail', { id: item.id, title: item.name })} />
-                    ) : (
-                      <Button title="Detail" small onPress={() => toast('Event details (todo)')} />
-                    )}
+                    ) : item.type === 'event' ? (
+                      <Button
+                        title="Detail"
+                        small
+                        onPress={() => (nav as any).navigate('Tabs', { screen: 'Calendar', params: { openEventId: item.id } })}
+                      />
+                    ) : null}
                   </View>
                 </View>
               ))

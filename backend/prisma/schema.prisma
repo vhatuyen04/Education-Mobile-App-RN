@@ -48,10 +48,48 @@ model Goal {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  steps GoalStep[]
+
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([userId, completed, dueAt])
+}
+
+model GoalStep {
+  id        String   @id @default(uuid())
+  goalId    String
+  text      String
+  order     Int      @default(0)
+  dueAt     DateTime?
+  repeat    String?
+  repeatDay Int?
+  repeatMonth Int?
+  done      Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  goal        Goal                 @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  completions GoalStepCompletion[]
+
+  @@index([goalId])
+  @@index([goalId, order])
+  @@index([dueAt])
+  @@index([repeat])
+  @@index([repeat, repeatDay])
+}
+
+model GoalStepCompletion {
+  id        String   @id @default(uuid())
+  stepId    String
+  date      DateTime
+  createdAt DateTime @default(now())
+
+  step GoalStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
+
+  @@unique([stepId, date])
+  @@index([date])
+  @@index([stepId])
 }
 
 model Event {

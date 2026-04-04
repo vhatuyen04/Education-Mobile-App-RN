@@ -77,3 +77,26 @@ export const AiGoalSuggestSchema = z.object({
   deadline: z.string().min(1).optional(),
   intensity: z.enum(['Light', 'Normal', 'Hard']).optional(),
 });
+
+export const CreateGoalStepSchema = z.object({
+  text: z.string().min(1),
+  order: z.coerce.number().int().min(0).optional(),
+  dueAt: z.string().datetime().optional().nullable(),
+  repeat: z.string().min(1).optional().nullable(),
+  repeatDay: z.coerce.number().int().optional().nullable(),
+  repeatMonth: z.coerce.number().int().optional().nullable(),
+});
+
+export const UpdateGoalStepSchema = z.object({
+  text: z.string().min(1).optional(),
+  order: z.coerce.number().int().min(0).optional(),
+  dueAt: z.string().datetime().optional().nullable(),
+  repeat: z.string().min(1).optional().nullable(),
+  repeatDay: z.coerce.number().int().optional().nullable(),
+  repeatMonth: z.coerce.number().int().optional().nullable(),
+});
+
+export const ToggleGoalStepCompletionSchema = z.object({
+  date: z.string().datetime(),
+  done: z.boolean(),
+});

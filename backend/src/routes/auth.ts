@@ -9,6 +9,7 @@ import { getConfig } from '../utils/config.js';
 import {
   AiGoalSuggestSchema,
   ChangePasswordSchema,
+  CreateGoalStepSchema,
   CreateEventSchema,
   CreateGoalSchema,
   LeaderboardFieldQuerySchema,
@@ -16,7 +17,9 @@ import {
   LoginSchema,
   LogoutSchema,
   RegisterSchema,
+  ToggleGoalStepCompletionSchema,
   UpdateEventSchema,
+  UpdateGoalStepSchema,
   UpdateGoalSchema,
   UpdateMeSchema,
 } from '../schemas/authSchemas.js';
@@ -24,6 +27,137 @@ import {
 export const authRouter = Router();
 
 const prismaAny = prisma as any;
+
+function startOfLocalDay(d: Date) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+function endOfLocalDay(d: Date) {
+  const x = new Date(d);
+  x.setHours(23, 59, 59, 999);
+  return x;
+}
+
+function daysInMonth(year: number, monthIndex0: number) {
+  return new Date(year, monthIndex0 + 1, 0).getDate();
+}
+
+function normalizeRepeat(repeat: string | null | undefined) {
+  if (!repeat) return null;
+  const r = repeat.trim().toLowerCase();
+  return r || null;
+}
+
+function countRepeatOccurrencesBetween(
+  step: { repeat: string | null; repeatDay: number | null; repeatMonth: number | null },
+  fromDay: Date,
+  toDay: Date
+): number {
+  const repeat = normalizeRepeat(step.repeat);
+  if (!repeat) return 0;
+
+  const from = startOfLocalDay(fromDay);
+  const to = startOfLocalDay(toDay);
+  if (to.getTime() < from.getTime()) return 0;
+
+  if (repeat === 'daily') {
+    const ms = to.getTime() - from.getTime();
+    return Math.floor(ms / (24 * 60 * 60 * 1000)) + 1;
+  }
+
+  if (repeat === 'weekly') {
+    const targetDow = step.repeatDay;
+    if (targetDow === null || targetDow === undefined) return 0;
+    let count = 0;
+    const cur = new Date(from);
+    while (cur.getTime() <= to.getTime()) {
+      if (cur.getDay() === Number(targetDow)) count++;
+      cur.setDate(cur.getDate() + 1);
+    }
+    return count;
+  }
+
+  if (repeat === 'monthly') {
+    const targetDom = step.repeatDay;
+    if (targetDom === null || targetDom === undefined) return 0;
+    let count = 0;
+    const cur = new Date(from.getFullYear(), from.getMonth(), 1);
+    const end = new Date(to.getFullYear(), to.getMonth(), 1);
+    while (cur.getTime() <= end.getTime()) {
+      const year = cur.getFullYear();
+      const month0 = cur.getMonth();
+      const dim = daysInMonth(year, month0);
+      const day = Math.min(Number(targetDom), dim);
+      const occ = new Date(year, month0, day);
+      if (occ.getTime() >= from.getTime() && occ.getTime() <= to.getTime()) count++;
+      cur.setMonth(cur.getMonth() + 1);
+    }
+    return count;
+  }
+
+  if (repeat === 'yearly') {
+    const targetMonth = step.repeatMonth;
+    const targetDom = step.repeatDay;
+    if (!targetMonth || !targetDom) return 0;
+    let count = 0;
+    for (let y = from.getFullYear(); y <= to.getFullYear(); y++) {
+      const month0 = Number(targetMonth) - 1;
+      if (month0 < 0 || month0 > 11) continue;
+      const dim = daysInMonth(y, month0);
+      const day = Math.min(Number(targetDom), dim);
+      const occ = new Date(y, month0, day);
+      if (occ.getTime() >= from.getTime() && occ.getTime() <= to.getTime()) count++;
+    }
+    return count;
+  }
+
+  return 0;
+}
+
+function isStepScheduledToday(step: any, now: Date) {
+  const todayStart = startOfLocalDay(now);
+  const todayEnd = endOfLocalDay(now);
+  const repeat = normalizeRepeat(step.repeat);
+
+  if (!repeat || repeat === 'once') {
+    if (!step.dueAt) return false;
+    const due = new Date(step.dueAt);
+    return due.getTime() >= todayStart.getTime() && due.getTime() <= todayEnd.getTime();
+  }
+
+  if (repeat === 'daily') return true;
+
+  if (repeat === 'weekly') {
+    const dow = Number(step.repeatDay);
+    if (!Number.isFinite(dow)) return true;
+    return now.getDay() === dow;
+  }
+
+  if (repeat === 'monthly') {
+    const target = Number(step.repeatDay);
+    if (!Number.isFinite(target) || target <= 0) return true;
+    const last = daysInMonth(now.getFullYear(), now.getMonth());
+    const effective = Math.min(target, last);
+    return now.getDate() === effective;
+  }
+
+  if (repeat === 'yearly') {
+    const targetMonth = Number(step.repeatMonth);
+    const targetDay = Number(step.repeatDay);
+    if (!Number.isFinite(targetMonth) || targetMonth < 1 || targetMonth > 12) return true;
+    if (!Number.isFinite(targetDay) || targetDay <= 0) return true;
+    const monthIndex0 = targetMonth - 1;
+    if (now.getMonth() !== monthIndex0) return false;
+    const last = daysInMonth(now.getFullYear(), monthIndex0);
+    const effective = Math.min(targetDay, last);
+    return now.getDate() === effective;
+  }
+
+  // Unknown repeat type: do not schedule by default.
+  return false;
+}
 
 function isRepeating(repeat: string | null | undefined) {
   if (!repeat) return false;
@@ -327,7 +461,7 @@ authRouter.post('/ai/goal', async (req: Request, res: Response) => {
   const intensity = parsed.data.intensity ?? 'Normal';
 
   const system =
-    'You are a helpful planner. You must output ONLY valid JSON. Default behavior: generate a useful, actionable goal suggestion even if some details are missing, by making reasonable generic assumptions and keeping steps broadly applicable. Only return clarification (ok=false) if the user request does NOT contain a concrete outcome (e.g., no specific target, no clear deliverable, or it is purely vague like "study more" / "get healthier" without a measurable goal). If the user has a clear outcome (including rank/achievement goals like "reach Challenger in League of Legends") and/or a deadline, do NOT ask for clarification; instead generate a generic plan with steps that adapt to different starting levels. Writing style requirements for steps: use very simple, clear language (avoid jargon and complex words); each step must be 1-2 very brief sentences; start the first sentence with a verb ("Practice", "Review", "Track", "Schedule"); be concrete and specific; keep each sentence short; avoid filler phrases and motivational speech. If clarification is truly required, return: {"ok":false,"message":"...","questions":["...","...","..."]}. Otherwise return: {"ok":true,"suggestion":{"title":"...","field":"Sport|Academy|Entertainment","deadline":"YYYY-MM-DD","steps":["...", "..."]}}. Questions must be 1-3 short questions. Steps must be short, actionable, and ordered.';
+    'You are a helpful planner. You must output ONLY valid JSON. Default behavior: generate a useful, actionable goal suggestion even if some details are missing, by making reasonable generic assumptions and keeping steps broadly applicable. Only return clarification (ok=false) if the user request does NOT contain a concrete outcome (e.g., no specific target, no clear deliverable, or it is purely vague like "study more" / "get healthier" without a measurable goal). If the user has a clear outcome (including rank/achievement goals like "reach Challenger in League of Legends") and/or a deadline, do NOT ask for clarification; instead generate a generic plan with steps that adapt to different starting levels. Writing style requirements for steps: use very simple, clear language (avoid jargon and complex words); each step must be 1-2 very brief sentences; start the first sentence with a verb ("Practice", "Review", "Track", "Schedule"); be concrete and specific; keep each sentence short; avoid filler phrases and motivational speech. Step scheduling requirements: each step must include a schedule object so the app can show it in Todo Today. Use one of: (A) one-time: {"type":"once","due":"YYYY-MM-DD"}; (B) repeating: {"type":"repeat","repeat":"daily|weekly|monthly|yearly", "repeatDay":number, "repeatMonth":number}. For weekly, repeatDay is day-of-week 0=Sun..6=Sat. For monthly, repeatDay is day-of-month 1..31. For yearly, include repeatMonth 1..12 and repeatDay 1..31. If a step should be optional and not shown in Todo Today, use {"type":"none"}. If clarification is truly required, return: {"ok":false,"message":"...","questions":["...","...","..."]}. Otherwise return: {"ok":true,"suggestion":{"title":"...","field":"Sport|Academy|Entertainment","deadline":"YYYY-MM-DD","steps":[{"text":"...","schedule":{...}}, ...]}}. Questions must be 1-3 short questions. Steps must be short, actionable, and ordered.';
 
   const userMsg =
     `User info: name=${user.name ?? ''}, email=${user.email}.\n` +
@@ -382,7 +516,24 @@ authRouter.post('/ai/goal', async (req: Request, res: Response) => {
           title: z.string().min(1),
           field: z.enum(['Sport', 'Academy', 'Entertainment']),
           deadline: z.string().min(1),
-          steps: z.array(z.string().min(1)).min(1).max(12),
+          steps: z
+            .array(
+              z.object({
+                text: z.string().min(1),
+                schedule: z.union([
+                  z.object({ type: z.literal('none') }),
+                  z.object({ type: z.literal('once'), due: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }),
+                  z.object({
+                    type: z.literal('repeat'),
+                    repeat: z.string().min(1),
+                    repeatDay: z.number().int().optional(),
+                    repeatMonth: z.number().int().optional(),
+                  }),
+                ]),
+              })
+            )
+            .min(1)
+            .max(12),
         }),
       }),
     ]);
@@ -493,15 +644,13 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
   }
 
   const now = new Date();
-  const startOfDay = new Date(now);
-  startOfDay.setHours(0, 0, 0, 0);
-  const endOfDay = new Date(now);
-  endOfDay.setHours(23, 59, 59, 999);
+  const startOfDay = startOfLocalDay(now);
+  const endOfDay = endOfLocalDay(now);
 
   const nextGoalWithDue = await prismaAny.goal.findFirst({
     where: { userId, completed: false, dueAt: { not: null } },
     orderBy: [{ dueAt: 'asc' }, { createdAt: 'asc' }],
-    select: { id: true, title: true, description: true, progressPct: true, dueAt: true },
+    select: { id: true, title: true, description: true, progressPct: true, dueAt: true, createdAt: true },
   });
 
   const nextGoal =
@@ -509,8 +658,80 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
     (await prismaAny.goal.findFirst({
       where: { userId, completed: false },
       orderBy: [{ createdAt: 'asc' }],
-      select: { id: true, title: true, description: true, progressPct: true, dueAt: true },
+      select: { id: true, title: true, description: true, progressPct: true, dueAt: true, createdAt: true },
     }));
+
+  // Compute progress for nextGoal:
+  // - todayPct: how many of today's scheduled steps are done (per-day reset)
+  // - progressPct: overall goal progress that accumulates for repeating steps
+  let computedNextGoal = nextGoal;
+  if (nextGoal?.id) {
+    const goalSteps = await prismaAny.goalStep.findMany({
+      where: { goalId: nextGoal.id },
+      select: { id: true, dueAt: true, repeat: true, repeatDay: true, repeatMonth: true },
+      take: 200,
+    });
+
+    // Today progress
+    const scheduledToday = goalSteps.filter((s: any) => isStepScheduledToday(s, now));
+    let todayPct: number | null = null;
+    if (scheduledToday.length > 0) {
+      const completionsToday = await prismaAny.goalStepCompletion.findMany({
+        where: { stepId: { in: scheduledToday.map((s: any) => s.id) }, date: { gte: startOfDay, lte: endOfDay } },
+        select: { stepId: true },
+      });
+      const doneTodaySet = new Set(completionsToday.map((c: any) => String(c.stepId)));
+      const doneCount = scheduledToday.filter((s: any) => doneTodaySet.has(String(s.id))).length;
+      todayPct = Number((((doneCount / scheduledToday.length) * 100) as number).toFixed(2));
+    }
+
+    // Overall progress
+    if (goalSteps.length > 0) {
+      const completionCounts = await prismaAny.goalStepCompletion.groupBy({
+        by: ['stepId'],
+        where: { stepId: { in: goalSteps.map((s: any) => s.id) } },
+        _count: { stepId: true },
+      });
+      const countByStepId = new Map<string, number>(
+        (completionCounts as any[]).map((r: any) => [String(r.stepId), Number(r?._count?.stepId ?? 0)] as const)
+      );
+
+      const perStepWeight = 100 / goalSteps.length;
+      const goalStartDay = startOfLocalDay(new Date((nextGoal as any).createdAt ?? now));
+      const goalDueDay = nextGoal.dueAt ? startOfLocalDay(new Date(nextGoal.dueAt)) : null;
+
+      let overall = 0;
+      for (const s of goalSteps as any[]) {
+        const completedCount = Number(countByStepId.get(String(s.id)) ?? 0);
+        if (s.dueAt) {
+          // One-time step: any completion counts as done.
+          overall += completedCount > 0 ? perStepWeight : 0;
+          continue;
+        }
+
+        const repeat = normalizeRepeat(s.repeat);
+        if (!repeat) {
+          // Unscheduled step in DB: treat as not contributing.
+          continue;
+        }
+
+        // Repeating step: expected occurrences until goal deadline.
+        // If goal has no deadline, cap expected occurrences at 100 as a default horizon.
+        let expected: number = 0;
+        if (goalDueDay) {
+          expected = countRepeatOccurrencesBetween(s, goalStartDay, goalDueDay);
+        } else {
+          expected = 100;
+        }
+        if (expected <= 0) expected = 100;
+        const ratio = Math.min(Number(completedCount) / Number(expected), 1);
+        overall += ratio * perStepWeight;
+      }
+      computedNextGoal = { ...nextGoal, progressPct: Number((overall as number).toFixed(2)), todayPct } as any;
+    } else {
+      computedNextGoal = { ...nextGoal, todayPct } as any;
+    }
+  }
 
   const nextEvent = await prismaAny.event.findFirst({
     where: { userId, startAt: { gte: now } },
@@ -530,6 +751,47 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
   const tasksPlanned = await prismaAny.event.count({
     where: { userId, startAt: { gte: startOfDay, lte: endOfDay } },
   });
+
+  const candidateSteps = await prismaAny.goalStep.findMany({
+    where: {
+      goal: { userId, completed: false },
+      OR: [{ dueAt: { gte: startOfDay, lte: endOfDay } }, { repeat: { not: null } }],
+    },
+    select: {
+      id: true,
+      goalId: true,
+      text: true,
+      order: true,
+      dueAt: true,
+      repeat: true,
+      repeatDay: true,
+      repeatMonth: true,
+      goal: { select: { id: true, title: true } },
+    },
+    take: 200,
+  });
+
+  const scheduledSteps = candidateSteps.filter((s: any) => isStepScheduledToday(s, now));
+  const stepCompletions = scheduledSteps.length
+    ? await prismaAny.goalStepCompletion.findMany({
+        where: { stepId: { in: scheduledSteps.map((s: any) => s.id) }, date: { gte: startOfDay, lte: endOfDay } },
+        select: { stepId: true },
+      })
+    : [];
+  const stepDoneSet = new Set(stepCompletions.map((c: any) => String(c.stepId)));
+  const todaySteps = scheduledSteps
+    .sort((a: any, b: any) => (String(a.goalId) + '_' + String(a.order)).localeCompare(String(b.goalId) + '_' + String(b.order)))
+    .map((s: any) => ({
+      id: String(s.id),
+      goalId: String(s.goalId),
+      goalTitle: String(s.goal?.title ?? ''),
+      text: String(s.text ?? ''),
+      dueAt: s.dueAt ? new Date(s.dueAt).toISOString() : null,
+      repeat: s.repeat ? String(s.repeat) : null,
+      repeatDay: s.repeatDay ?? null,
+      repeatMonth: s.repeatMonth ?? null,
+      doneToday: stepDoneSet.has(String(s.id)),
+    }));
 
   const todayEvents = await prismaAny.event.findMany({
     where: { userId, startAt: { gte: startOfDay, lte: endOfDay } },
@@ -556,12 +818,181 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
 
   return res.json({
     score: user.score ?? 0,
-    tasksPlanned,
-    nextGoal,
+    tasksPlanned: tasksPlanned + todaySteps.length,
+    nextGoal: computedNextGoal,
     nextEvent,
     todayEvents,
     todayGoals,
+    todaySteps,
   });
+});
+
+authRouter.get('/goals/:id/steps', async (req: Request, res: Response) => {
+  const token = getAccessTokenFromReq(req);
+  if (!token) return res.status(401).json({ error: 'Missing access token' });
+
+  let userId: string;
+  try {
+    userId = verifyAccessToken(token).sub;
+  } catch {
+    return res.status(401).json({ error: 'Invalid access token' });
+  }
+
+  const goalId = String(req.params.id);
+  const goal = await prismaAny.goal.findFirst({ where: { id: goalId, userId }, select: { id: true } });
+  if (!goal) return res.status(404).json({ error: 'Not found' });
+
+  const steps = await prismaAny.goalStep.findMany({
+    where: { goalId },
+    orderBy: [{ order: 'asc' }, { createdAt: 'asc' }],
+    select: { id: true, goalId: true, text: true, order: true, dueAt: true, repeat: true, repeatDay: true, repeatMonth: true },
+    take: 200,
+  });
+
+  return res.json({ steps });
+});
+
+authRouter.post('/goals/:id/steps', async (req: Request, res: Response) => {
+  const token = getAccessTokenFromReq(req);
+  if (!token) return res.status(401).json({ error: 'Missing access token' });
+
+  let userId: string;
+  try {
+    userId = verifyAccessToken(token).sub;
+  } catch {
+    return res.status(401).json({ error: 'Invalid access token' });
+  }
+
+  const parsed = CreateGoalStepSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid payload' });
+
+  const goalId = String(req.params.id);
+  const goal = await prismaAny.goal.findFirst({ where: { id: goalId, userId }, select: { id: true } });
+  if (!goal) return res.status(404).json({ error: 'Not found' });
+
+  const text = parsed.data.text.trim();
+  if (!text) return res.status(400).json({ error: 'Invalid payload' });
+
+  const step = await prismaAny.goalStep.create({
+    data: {
+      goalId,
+      text,
+      order: parsed.data.order ?? 0,
+      dueAt: parsed.data.dueAt ? new Date(parsed.data.dueAt) : null,
+      repeat: parsed.data.repeat ? String(parsed.data.repeat) : null,
+      repeatDay: parsed.data.repeatDay ?? null,
+      repeatMonth: parsed.data.repeatMonth ?? null,
+    },
+    select: { id: true, goalId: true, text: true, order: true, dueAt: true, repeat: true, repeatDay: true, repeatMonth: true },
+  });
+
+  return res.status(201).json({ step });
+});
+
+authRouter.put('/goals/:goalId/steps/:stepId', async (req: Request, res: Response) => {
+  const token = getAccessTokenFromReq(req);
+  if (!token) return res.status(401).json({ error: 'Missing access token' });
+
+  let userId: string;
+  try {
+    userId = verifyAccessToken(token).sub;
+  } catch {
+    return res.status(401).json({ error: 'Invalid access token' });
+  }
+
+  const parsed = UpdateGoalStepSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid payload' });
+
+  const goalId = String(req.params.goalId);
+  const stepId = String(req.params.stepId);
+
+  const goal = await prismaAny.goal.findFirst({ where: { id: goalId, userId }, select: { id: true } });
+  if (!goal) return res.status(404).json({ error: 'Not found' });
+
+  const existing = await prismaAny.goalStep.findFirst({ where: { id: stepId, goalId }, select: { id: true } });
+  if (!existing) return res.status(404).json({ error: 'Not found' });
+
+  const data: any = {};
+  if (parsed.data.text !== undefined) data.text = parsed.data.text.trim();
+  if (parsed.data.order !== undefined) data.order = parsed.data.order;
+  if (parsed.data.dueAt !== undefined) data.dueAt = parsed.data.dueAt ? new Date(parsed.data.dueAt) : null;
+  if (parsed.data.repeat !== undefined) data.repeat = parsed.data.repeat ? String(parsed.data.repeat) : null;
+  if (parsed.data.repeatDay !== undefined) data.repeatDay = parsed.data.repeatDay;
+  if (parsed.data.repeatMonth !== undefined) data.repeatMonth = parsed.data.repeatMonth;
+
+  if (data.text !== undefined && !data.text) return res.status(400).json({ error: 'Invalid payload' });
+
+  const step = await prismaAny.goalStep.update({
+    where: { id: stepId },
+    data,
+    select: { id: true, goalId: true, text: true, order: true, dueAt: true, repeat: true, repeatDay: true, repeatMonth: true },
+  });
+
+  return res.json({ step });
+});
+
+authRouter.delete('/goals/:goalId/steps/:stepId', async (req: Request, res: Response) => {
+  const token = getAccessTokenFromReq(req);
+  if (!token) return res.status(401).json({ error: 'Missing access token' });
+
+  let userId: string;
+  try {
+    userId = verifyAccessToken(token).sub;
+  } catch {
+    return res.status(401).json({ error: 'Invalid access token' });
+  }
+
+  const goalId = String(req.params.goalId);
+  const stepId = String(req.params.stepId);
+
+  const goal = await prismaAny.goal.findFirst({ where: { id: goalId, userId }, select: { id: true } });
+  if (!goal) return res.status(404).json({ error: 'Not found' });
+
+  const existing = await prismaAny.goalStep.findFirst({ where: { id: stepId, goalId }, select: { id: true } });
+  if (!existing) return res.status(404).json({ error: 'Not found' });
+
+  await prismaAny.goalStep.delete({ where: { id: stepId }, select: { id: true } });
+  return res.json({ ok: true });
+});
+
+authRouter.post('/goals/:goalId/steps/:stepId/completion', async (req: Request, res: Response) => {
+  const token = getAccessTokenFromReq(req);
+  if (!token) return res.status(401).json({ error: 'Missing access token' });
+
+  let userId: string;
+  try {
+    userId = verifyAccessToken(token).sub;
+  } catch {
+    return res.status(401).json({ error: 'Invalid access token' });
+  }
+
+  const parsed = ToggleGoalStepCompletionSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid payload' });
+
+  const goalId = String(req.params.goalId);
+  const stepId = String(req.params.stepId);
+
+  const goal = await prismaAny.goal.findFirst({ where: { id: goalId, userId }, select: { id: true } });
+  if (!goal) return res.status(404).json({ error: 'Not found' });
+
+  const step = await prismaAny.goalStep.findFirst({ where: { id: stepId, goalId }, select: { id: true } });
+  if (!step) return res.status(404).json({ error: 'Not found' });
+
+  const date = startOfLocalDay(new Date(parsed.data.date));
+  if (!Number.isFinite(date.getTime())) return res.status(400).json({ error: 'Invalid payload' });
+
+  if (parsed.data.done) {
+    await prismaAny.goalStepCompletion.upsert({
+      where: { stepId_date: { stepId, date } },
+      update: {},
+      create: { stepId, date },
+      select: { id: true },
+    });
+  } else {
+    await prismaAny.goalStepCompletion.deleteMany({ where: { stepId, date } });
+  }
+
+  return res.json({ ok: true });
 });
 
 authRouter.get('/events', async (req: Request, res: Response) => {

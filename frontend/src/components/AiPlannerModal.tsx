@@ -21,6 +21,85 @@ function makeId() {
   return `s_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
+function formatWeekday(d: number | undefined) {
+  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  if (d === undefined || d === null) return '';
+  const idx = Number(d);
+  if (!Number.isFinite(idx) || idx < 0 || idx > 6) return '';
+  return days[idx];
+}
+
+function parseWeekdayToken(token: string): number | null {
+  const t = token.trim().toLowerCase();
+  const map: Record<string, number> = { sun: 0, mon: 1, tue: 2, tues: 2, wed: 3, thu: 4, thur: 4, thurs: 4, fri: 5, sat: 6 };
+  if (t in map) return map[t];
+  const n = Number(t);
+  if (Number.isFinite(n) && n >= 0 && n <= 6) return n;
+  return null;
+}
+
+function scheduleToShortText(s?: authApi.AiGoalStepSchedule) {
+  if (!s || s.type === 'none') return '';
+  if (s.type === 'once') return `once:${s.due}`;
+  const r = (s.repeat ?? '').trim();
+  const rLower = r.toLowerCase();
+  if (rLower === 'daily') return 'daily';
+  if (rLower === 'weekly') return s.repeatDay !== undefined ? `weekly:${formatWeekday(s.repeatDay) || String(s.repeatDay)}` : 'weekly';
+  if (rLower === 'monthly') return s.repeatDay !== undefined ? `monthly:${String(s.repeatDay)}` : 'monthly';
+  if (rLower === 'yearly') {
+    const mm = s.repeatMonth !== undefined ? String(s.repeatMonth).padStart(2, '0') : '';
+    const dd = s.repeatDay !== undefined ? String(s.repeatDay).padStart(2, '0') : '';
+    return mm && dd ? `yearly:${mm}-${dd}` : 'yearly';
+  }
+  return `repeat:${r}`;
+}
+
+function parseScheduleShortText(input: string): authApi.AiGoalStepSchedule {
+  const raw = String(input ?? '').trim();
+  if (!raw) return { type: 'none' };
+
+  const lower = raw.toLowerCase();
+  if (lower.startsWith('once:')) {
+    const due = raw.slice(5).trim();
+    return { type: 'once', due };
+  }
+
+  if (lower === 'daily') return { type: 'repeat', repeat: 'daily' };
+
+  if (lower === 'weekly') return { type: 'repeat', repeat: 'weekly' };
+  if (lower.startsWith('weekly:')) {
+    const tok = raw.slice(7).trim();
+    const dow = parseWeekdayToken(tok);
+    return { type: 'repeat', repeat: 'weekly', ...(dow !== null ? { repeatDay: dow } : null) } as any;
+  }
+
+  if (lower === 'monthly') return { type: 'repeat', repeat: 'monthly' };
+  if (lower.startsWith('monthly:')) {
+    const tok = raw.slice(8).trim();
+    const day = Number(tok);
+    return { type: 'repeat', repeat: 'monthly', ...(Number.isFinite(day) ? { repeatDay: day } : null) } as any;
+  }
+
+  if (lower === 'yearly') return { type: 'repeat', repeat: 'yearly' };
+  if (lower.startsWith('yearly:')) {
+    const tok = raw.slice(7).trim();
+    const m = tok.match(/^(\d{1,2})\s*[-/.,]\s*(\d{1,2})$/);
+    if (m) {
+      const month = Number(m[1]);
+      const day = Number(m[2]);
+      return { type: 'repeat', repeat: 'yearly', ...(Number.isFinite(month) ? { repeatMonth: month } : null), ...(Number.isFinite(day) ? { repeatDay: day } : null) } as any;
+    }
+    return { type: 'repeat', repeat: 'yearly' };
+  }
+
+  if (lower.startsWith('repeat:')) {
+    const repeat = raw.slice(7).trim();
+    return repeat ? { type: 'repeat', repeat } : { type: 'none' };
+  }
+
+  return { type: 'repeat', repeat: raw };
+}
+
 function formatDateYmd(d: Date) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -110,7 +189,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
   const [goalTitle, setGoalTitle] = useState('');
   const [goalField, setGoalField] = useState<'Sport' | 'Academy' | 'Entertainment'>('Academy');
   const [goalDeadline, setGoalDeadline] = useState('');
-  const [steps, setSteps] = useState<Step[]>([]);
+  const [steps, setSteps] = useState<Array<Step & { schedule?: authApi.AiGoalStepSchedule }>>([]);
 
   const stepCount = steps.length;
 
@@ -199,7 +278,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
   }
 
   function addStep() {
-    setSteps(prev => [...prev, { id: makeId(), text: 'New step' }]);
+    setSteps(prev => [...prev, { id: makeId(), text: 'New step', schedule: { type: 'none' } }]);
   }
 
   function removeStep(id: string) {
@@ -267,7 +346,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
       setGoalTitle(resp.suggestion.title || defaultGoalTitle(planText));
       setGoalField(resp.suggestion.field);
       setGoalDeadline(resp.suggestion.deadline || resolvedDeadline);
-      setSteps(resp.suggestion.steps.map(s => ({ id: makeId(), text: s })));
+      setSteps(resp.suggestion.steps.map(s => ({ id: makeId(), text: s.text, schedule: s.schedule })));
       setGenerated(true);
       setDirty(false);
       toast('AI suggestions ready');
@@ -299,9 +378,6 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
     if (loading) return;
     setLoading(true);
     try {
-      const prefix = goalField === 'Sport' ? 'Fitness' : goalField === 'Entertainment' ? 'Music' : 'Study';
-      const withSteps = `${prefix}: ${title}\n\nSteps:\n${stepTexts.map(s => `- [ ] ${s}`).join('\n')}`;
-
       const resolvedDeadline = await resolveDeadlineForPlan(goalDeadline || deadline);
       if (!resolvedDeadline) return;
 
@@ -311,7 +387,31 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
         return;
       }
 
-      await authApi.createGoal(token, { title: withSteps, description: planText.trim() ? planText.trim() : null, dueAt: dueIso });
+      const created = await authApi.createGoal(token, { title, description: planText.trim() ? planText.trim() : null, dueAt: dueIso });
+
+      const goalId = created.goal.id;
+
+      const scheduledSteps = steps
+        .map((s, idx) => ({ s, idx, text: s.text.trim() }))
+        .filter(x => x.text)
+        .filter(x => x.s.schedule && x.s.schedule.type !== 'none');
+
+      for (const { s, idx, text } of scheduledSteps) {
+        const schedule = s.schedule as authApi.AiGoalStepSchedule;
+        const body: any = { text, order: idx };
+        if (schedule.type === 'once') {
+          const d = parseYmd(schedule.due);
+          if (!d) continue;
+          d.setHours(23, 59, 59, 999);
+          body.dueAt = d.toISOString();
+        } else if (schedule.type === 'repeat') {
+          body.repeat = schedule.repeat;
+          body.repeatDay = schedule.repeatDay ?? null;
+          body.repeatMonth = schedule.repeatMonth ?? null;
+        }
+        await authApi.createGoalStep(token, goalId, body);
+      }
+
       toast('Saved');
       onSaved?.();
       onClose();
@@ -461,6 +561,23 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
                           <Text style={styles.stepItemText}>
                             {s.text}
                           </Text>
+                          <View style={{ gap: 6, alignItems: 'flex-end' }}>
+                            <TextInput
+                              value={scheduleToShortText(s.schedule)}
+                              onChangeText={t => {
+                                setSteps(prev =>
+                                  prev.map(p => {
+                                    if (p.id !== s.id) return p;
+                                    return { ...p, schedule: parseScheduleShortText(t) };
+                                  })
+                                );
+                              }}
+                              placeholder="daily | weekly:Mon | monthly:15 | yearly:01-15 | once:2027-01-01"
+                              placeholderTextColor={colors.muted}
+                              style={[styles.input, { paddingVertical: 6, paddingHorizontal: 8, minWidth: 160 }]}
+                            />
+                            <Text style={styles.mutedSmall}>Optional. Leave empty to ignore.</Text>
+                          </View>
                           <Pressable onPress={() => removeStep(s.id)} hitSlop={10} style={styles.stepRemove}>
                             <Text style={styles.stepRemoveText}>🗑</Text>
                           </Pressable>
