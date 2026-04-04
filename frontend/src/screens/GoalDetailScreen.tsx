@@ -189,7 +189,7 @@ export function GoalDetailScreen() {
     setSteps(prev => prev.map(s => (s.id === id ? { ...s, scheduleText } : s)));
   }
 
-  async function save() {
+  async function saveImpl(opts: { finish: boolean }) {
     if (saving) return;
     const t = stripLegacyStepsFromGoalTitle(title);
     const stepTexts = steps.map(s => s.text.trim()).filter(Boolean);
@@ -250,6 +250,10 @@ export function GoalDetailScreen() {
 
       setSteps(updatedSteps);
 
+      if (opts.finish && effectiveGoalId) {
+        await authApi.updateGoal(token, effectiveGoalId, { completed: true });
+      }
+
       toast('Saved');
       nav.goBack();
     } catch (e: any) {
@@ -257,6 +261,14 @@ export function GoalDetailScreen() {
     } finally {
       setSaving(false);
     }
+  }
+
+  async function save() {
+    await saveImpl({ finish: false });
+  }
+
+  async function finish() {
+    await saveImpl({ finish: true });
   }
 
   return (
@@ -340,10 +352,11 @@ export function GoalDetailScreen() {
           </View>
 
           <View style={{ height: 10 }} />
-          <Button title={'+ Add step'} full onPress={addStep} />
-
-          <View style={styles.divider} />
-          <Button title={'Save'} variant="primary" full onPress={save} />
+          <View style={{ gap: 10 }}>
+            <Button title={'+ Add step'} full onPress={addStep} />
+            <Button title={'Save'} full onPress={save} />
+            <Button title={'Finish'} variant="primary" full onPress={finish} />
+          </View>
         </Card>
       </ScrollView>
     </Screen>
