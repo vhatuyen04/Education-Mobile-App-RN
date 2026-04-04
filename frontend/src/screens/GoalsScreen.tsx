@@ -29,7 +29,9 @@ export function GoalsScreen() {
 
   function displayGoalTitle(raw: string) {
     const first = String(raw ?? '').split(/\r?\n/)[0] ?? '';
-    return first.trim() || 'Untitled goal';
+    const idx = first.toLowerCase().indexOf('steps:');
+    const cleaned = (idx >= 0 ? first.slice(0, idx) : first).trim();
+    return cleaned || 'Untitled goal';
   }
 
   const refresh = useCallback(async () => {

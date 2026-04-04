@@ -18,6 +18,12 @@ import type { RootStackParamList } from '../navigation/types';
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 type R = RouteProp<RootStackParamList, 'GoalDetail'>;
 
+function stripLegacyStepsFromGoalTitle(raw: string): string {
+  const s = String(raw ?? '');
+  const idx = s.toLowerCase().indexOf('steps:');
+  return (idx >= 0 ? s.slice(0, idx) : s).trim();
+}
+
 function makeId() {
   return `s_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
@@ -131,7 +137,7 @@ export function GoalDetailScreen() {
   const { state } = useAuth();
 
   const goalId = route.params?.id;
-  const initialTitle = route.params?.title || 'New goal';
+  const initialTitle = stripLegacyStepsFromGoalTitle(route.params?.title || 'New goal');
 
   const [title, setTitle] = useState(initialTitle);
   const [desc, setDesc] = useState('');
@@ -146,7 +152,7 @@ export function GoalDetailScreen() {
     if (!token) return;
     try {
       const resp = await authApi.getGoal(token, goalId);
-      setTitle(resp.goal.title);
+      setTitle(stripLegacyStepsFromGoalTitle(resp.goal.title));
       setDesc(resp.goal.description ?? '');
       const stepResp = await authApi.listGoalSteps(token, goalId);
       const uiSteps: UiStep[] = stepResp.steps.map(s => ({
@@ -185,7 +191,7 @@ export function GoalDetailScreen() {
 
   async function save() {
     if (saving) return;
-    const t = title.trim();
+    const t = stripLegacyStepsFromGoalTitle(title);
     const stepTexts = steps.map(s => s.text.trim()).filter(Boolean);
     if (!t) {
       toast('Goal name is required');
