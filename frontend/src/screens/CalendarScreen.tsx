@@ -66,7 +66,7 @@ function mondayIndexOfFirstDay(year: number, monthIndex0: number) {
 
 export function CalendarScreen() {
   const nav = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
-  const route = useRoute<RouteProp<{ Calendar: { openEventId?: string } | undefined }, 'Calendar'>>();
+  const route = useRoute<RouteProp<{ Calendar: { openEventId?: string; openEventStartAt?: string } | undefined }, 'Calendar'>>();
   const { state } = useAuth();
 
   const [viewDate, setViewDate] = useState(() => {
@@ -139,6 +139,16 @@ export function CalendarScreen() {
     return { from, to };
   }, [monthIndex0, year]);
 
+  useEffect(() => {
+    const startAt = route.params?.openEventStartAt;
+    if (!startAt) return;
+    const d = new Date(startAt);
+    if (Number.isNaN(d.getTime())) return;
+    const target = new Date(d.getFullYear(), d.getMonth(), 1);
+    if (target.getFullYear() === viewDate.getFullYear() && target.getMonth() === viewDate.getMonth()) return;
+    setViewDate(target);
+  }, [route.params?.openEventStartAt, viewDate]);
+
   const refresh = useCallback(async () => {
     const token = state.accessToken;
     if (!token) return;
@@ -166,7 +176,7 @@ export function CalendarScreen() {
     openEdit(eventId);
     // Clear the param so closing the modal doesn't immediately reopen it.
     // Navigating here again with openEventId will set it back.
-    (nav as any).setParams?.({ openEventId: undefined });
+    (nav as any).setParams?.({ openEventId: undefined, openEventStartAt: undefined });
   }, [route.params?.openEventId, events, edit.open]);
 
   useFocusEffect(
@@ -528,7 +538,7 @@ export function CalendarScreen() {
                 <TextInput
                   value={form.repeat}
                   onChangeText={t => setForm(s => ({ ...s, repeat: t }))}
-                  placeholder="Once | Daily | Weekly | Custom"
+                  placeholder="Once | Daily | Weekly | Monthly | Yearly"
                   placeholderTextColor={colors.muted}
                   style={styles.input}
                 />

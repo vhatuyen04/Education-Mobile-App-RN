@@ -103,6 +103,15 @@ export function HomeScreen() {
     return endTxt ? `${startTxt} – ${endTxt}` : startTxt;
   }
 
+  function formatDateRange(startAt: string, endAt: string | null) {
+    const start = new Date(startAt);
+    const end = endAt ? new Date(endAt) : null;
+    const startDate = start.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
+    if (!end) return startDate;
+    const endDate = end.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
+    return startDate === endDate ? startDate : `${startDate} – ${endDate}`;
+  }
+
   return (
     <Screen style={{ padding: 0 }}>
       <ScrollView contentContainerStyle={styles.content}>
@@ -166,27 +175,35 @@ export function HomeScreen() {
             </Card>
           </Pressable>
 
-          <Card>
-            <View style={styles.cardTitleRow}>
-              <Text style={styles.cardTitle}>Next event</Text>
-              <Badge>{nextEvent?.repeat ?? 'Upcoming'}</Badge>
-            </View>
+          <Pressable
+            onPress={() => {
+              if (!nextEvent) return;
+              (nav as any).navigate('Tabs', { screen: 'Calendar', params: { openEventId: nextEvent.id, openEventStartAt: nextEvent.startAt } });
+            }}
+          >
+            <Card>
+              <View style={styles.cardTitleRow}>
+                <Text style={styles.cardTitle}>Next event</Text>
+                <Badge>{nextEvent?.repeat ?? 'Upcoming'}</Badge>
+              </View>
 
-            <View style={[styles.row, { marginTop: 10 }]}>
-              {nextEvent ? (
-                <>
+              <View style={[styles.row, { marginTop: 10 }]}>
+                {nextEvent ? (
+                  <>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.eventTitle}>{nextEvent.title}</Text>
+                      <Text style={styles.muted12}>{formatDateRange(nextEvent.startAt, nextEvent.endAt)}</Text>
+                      <Text style={styles.muted12}>{formatTimeRange(nextEvent.startAt, nextEvent.endAt)}</Text>
+                    </View>
+                  </>
+                ) : (
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.eventTitle}>{nextEvent.title}</Text>
-                    <Text style={styles.muted12}>{formatTimeRange(nextEvent.startAt, nextEvent.endAt)}</Text>
+                    <Text style={styles.muted12}>No upcoming events.</Text>
                   </View>
-                </>
-              ) : (
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.muted12}>No upcoming events.</Text>
-                </View>
-              )}
-            </View>
-          </Card>
+                )}
+              </View>
+            </Card>
+          </Pressable>
 
           <Card>
             <View style={styles.cardTitleRow}>

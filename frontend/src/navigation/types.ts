@@ -8,7 +8,7 @@ export type RootStackParamList = {
 
 export type TabsParamList = {
   Home: undefined;
-  Calendar: { openEventId?: string } | undefined;
+  Calendar: { openEventId?: string; openEventStartAt?: string } | undefined;
   Goals: undefined;
   Ranking: undefined;
   Profile: undefined;
