@@ -1,8 +1,6 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
-import type { RouteProp } from '@react-navigation/native';
-import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
 import { Screen } from '../components/Screen';
 import { Card } from '../components/Card';
@@ -13,29 +11,36 @@ import { Pill } from '../components/Pill';
 import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
-import type { RootStackParamList } from '../navigation/types';
-
-type R = RouteProp<RootStackParamList, 'EventDetail'>;
-type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 export function EventDetailScreen() {
-  const nav = useNavigation<Nav>();
-  const route = useRoute<R>();
+  const nav = useNavigation<any>();
+  const route = useRoute<any>();
   const { state } = useAuth();
 
-  const id = route.params.id;
+  const id: string | undefined = route.params?.id;
 
   const [event, setEvent] = useState<authApi.EventItem | null>(null);
   const [loading, setLoading] = useState(false);
 
   const refresh = useCallback(async () => {
+    if (!id) return;
     const token = state.accessToken;
     if (!token) return;
 
     setLoading(true);
     try {
-      const resp = await authApi.getEvent(token, id);
-      setEvent(resp.event);
+      const now = new Date();
+      const from = new Date(now);
+      from.setMonth(from.getMonth() - 6);
+      const to = new Date(now);
+      to.setMonth(to.getMonth() + 18);
+
+      const resp = await authApi.listEvents(token, {
+        from: from.toISOString(),
+        to: to.toISOString(),
+      });
+      const found = resp.events.find((e) => e.id === id) ?? null;
+      setEvent(found);
     } catch (e: any) {
       toast(String(e?.message ?? 'Failed to load'));
     } finally {
@@ -109,7 +114,16 @@ export function EventDetailScreen() {
               </View>
 
               <View style={{ height: 6 }} />
-              <Button title="Open calendar" full onPress={() => (nav as any).navigate('Tabs', { screen: 'Calendar', params: { openEventId: id } })} />
+              <Button
+                title="Open calendar"
+                full
+                onPress={() =>
+                  nav.navigate('Tabs', {
+                    screen: 'Calendar',
+                    params: { openEventId: id, openEventStartAt: event.startAt },
+                  })
+                }
+              />
             </View>
           ) : (
             <Text style={styles.muted12}>Event not found.</Text>
