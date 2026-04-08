@@ -50,14 +50,6 @@ async function ensurePermission(): Promise<boolean> {
   return !!req.granted;
 }
 
-function startOfDay(d: Date) {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
-}
-
-function sameDay(a: Date, b: Date) {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-}
-
 function daysUntil(date: Date) {
   const dayMs = 24 * 60 * 60 * 1000;
   const today0 = new Date();
@@ -573,7 +565,8 @@ export function NotificationSettingsScreen() {
                 }
 
                 const dash = await authApi.getDashboard(token);
-                const due = dash.nextGoal?.dueAt ? new Date(dash.nextGoal.dueAt) : null;
+                const goal = dash.nextGoal;
+                const due = goal?.dueAt ? new Date(goal.dueAt) : null;
                 if (!due || Number.isNaN(due.getTime()) || daysUntil(due) !== 1) {
                   toast('Next goal is not due tomorrow.');
                   return;
@@ -581,7 +574,7 @@ export function NotificationSettingsScreen() {
 
                 await scheduleAt(KEY_GOAL_DUE_ID, new Date(Date.now() + 60_000), {
                   title: 'Goal due tomorrow',
-                  body: `${dash.nextGoal.title}`,
+                  body: `${goal?.title ?? 'Your goal'}`,
                 });
                 toast('Goal reminder scheduled (60s).');
               } catch (e: any) {
