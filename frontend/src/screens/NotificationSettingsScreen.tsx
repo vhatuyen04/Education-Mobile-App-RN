@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
@@ -19,8 +19,87 @@ const KEY_DAILY_ID = 'notif_daily_id';
 const KEY_EVENT_ID = 'notif_event_id';
 const KEY_GOAL_DUE_ID = 'notif_goal_due_id';
 const KEY_STEP_DUE_ID = 'notif_step_due_id';
+const KEY_EVENT_OFFSET_MIN = 'notif_event_offset_min';
+const KEY_GOAL_OFFSET_DAYS = 'notif_goal_offset_days';
+const KEY_STEP_OFFSET_HOURS = 'notif_step_offset_hours';
+const KEY_EVENT_OFFSET_VALUE = 'notif_event_offset_value';
+const KEY_EVENT_OFFSET_UNIT = 'notif_event_offset_unit';
+const KEY_GOAL_OFFSET_VALUE = 'notif_goal_offset_value';
+const KEY_GOAL_OFFSET_UNIT = 'notif_goal_offset_unit';
+const KEY_STEP_OFFSET_VALUE = 'notif_step_offset_value';
+const KEY_STEP_OFFSET_UNIT = 'notif_step_offset_unit';
+const KEY_EVENT_OFFSETS = 'notif_event_offsets_v3';
+const KEY_GOAL_OFFSETS = 'notif_goal_offsets_v3';
+const KEY_STEP_OFFSETS = 'notif_step_offsets_v3';
+const KEY_EVENT_BEFORE = 'notif_event_before_v4';
+const KEY_GOAL_BEFORE = 'notif_goal_before_v4';
+const KEY_STEP_BEFORE = 'notif_step_before_v4';
 
 type DailyTime = { hour: number; minute: number };
+
+type OffsetUnit = 'minutes' | 'hours' | 'days';
+
+type CompoundBefore = { days: number; hours: number; minutes: number };
+
+const DEFAULT_EVENT_OFFSET_VALUE = 30;
+const DEFAULT_EVENT_OFFSET_UNIT: OffsetUnit = 'minutes';
+const DEFAULT_GOAL_OFFSET_VALUE = 1;
+const DEFAULT_GOAL_OFFSET_UNIT: OffsetUnit = 'days';
+const DEFAULT_STEP_OFFSET_VALUE = 3;
+const DEFAULT_STEP_OFFSET_UNIT: OffsetUnit = 'hours';
+
+function offsetToMs(value: number, unit: OffsetUnit) {
+  const v = Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+  if (unit === 'minutes') return v * 60 * 1000;
+  if (unit === 'hours') return v * 60 * 60 * 1000;
+  return v * 24 * 60 * 60 * 1000;
+}
+
+function clampCompoundBefore(v: CompoundBefore): CompoundBefore {
+  const n = (x: any) => {
+    const raw = Number(x);
+    return Number.isFinite(raw) ? Math.max(0, Math.floor(raw)) : 0;
+  };
+  return { days: n(v.days), hours: n(v.hours), minutes: n(v.minutes) };
+}
+
+function compoundToMs(v: CompoundBefore) {
+  const x = clampCompoundBefore(v);
+  return x.days * 24 * 60 * 60 * 1000 + x.hours * 60 * 60 * 1000 + x.minutes * 60 * 1000;
+}
+
+function beforeToAnnouncement(v: CompoundBefore) {
+  const x = clampCompoundBefore(v);
+  const d = x.days;
+  const h = x.hours;
+  const m = x.minutes;
+
+  if (d === 0 && h === 0 && m === 0) return 'Current';
+
+  const parts: string[] = [];
+  if (d > 0) parts.push(`${d} day${d === 1 ? '' : 's'}`);
+
+  // If days exist, always include hours, even when 0.
+  // If days don't exist, include hours only when > 0.
+  if (d > 0) parts.push(`${h} hour${h === 1 ? '' : 's'}`);
+  else if (h > 0) parts.push(`${h} hour${h === 1 ? '' : 's'}`);
+
+  // Minutes included only when > 0.
+  if (m > 0) parts.push(`${m} minute${m === 1 ? '' : 's'}`);
+
+  return `In ${parts.join(' ')}`;
+}
+
+function parseCompoundBefore(raw: string | null): CompoundBefore | null {
+  if (!raw) return null;
+  try {
+    const x = JSON.parse(raw);
+    if (!x || typeof x !== 'object') return null;
+    return clampCompoundBefore({ days: x.days ?? 0, hours: x.hours ?? 0, minutes: x.minutes ?? 0 });
+  } catch {
+    return null;
+  }
+}
 
 function pad2(v: number) {
   return String(v).padStart(2, '0');
@@ -146,6 +225,33 @@ async function cancelIfExists(key: string) {
   }
 }
 
+async function cancelAnyIfExists(key: string) {
+  const raw = await AsyncStorage.getItem(key);
+  if (!raw) return;
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      await Promise.all(
+        parsed.map(async (id: any) => {
+          if (!id) return;
+          try {
+            await Notifications.cancelScheduledNotificationAsync(String(id));
+          } catch {
+            // ignore
+          }
+        })
+      );
+      await AsyncStorage.removeItem(key);
+      return;
+    }
+  } catch {
+    // ignore
+  }
+
+  // fallback to single ID
+  await cancelIfExists(key);
+}
+
 async function scheduleAt(key: string, when: Date, content: { title: string; body: string }) {
   if (!(when instanceof Date) || Number.isNaN(when.getTime())) return;
   if (when.getTime() <= Date.now() + 15_000) return; // ignore too-soon / past
@@ -156,6 +262,31 @@ async function scheduleAt(key: string, when: Date, content: { title: string; bod
     trigger: { type: 'date', date: when, channelId: 'default' } as any,
   });
   await AsyncStorage.setItem(key, id);
+}
+
+async function scheduleManyAt(key: string, items: Array<{ when: Date; content: { title: string; body: string } }>) {
+  const now = Date.now();
+  const valid = items
+    .filter(x => x.when instanceof Date && !Number.isNaN(x.when.getTime()))
+    .filter(x => x.when.getTime() > now + 15_000);
+
+  await cancelAnyIfExists(key);
+
+  if (!valid.length) {
+    await AsyncStorage.removeItem(key);
+    return;
+  }
+
+  const ids: string[] = [];
+  for (const it of valid) {
+    const id = await Notifications.scheduleNotificationAsync({
+      content: it.content,
+      trigger: { type: 'date', date: it.when, channelId: 'default' } as any,
+    });
+    ids.push(id);
+  }
+
+  await AsyncStorage.setItem(key, JSON.stringify(ids));
 }
 
 function getTriggerFireTimeMs(trigger: any, now: Date): number | null {
@@ -193,6 +324,10 @@ export function NotificationSettingsScreen() {
   const [permissionGranted, setPermissionGranted] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(false);
 
+  const [eventBefore, setEventBefore] = useState<CompoundBefore>({ days: 0, hours: 0, minutes: 30 });
+  const [goalBefore, setGoalBefore] = useState<CompoundBefore>({ days: 1, hours: 0, minutes: 0 });
+  const [stepBefore, setStepBefore] = useState<CompoundBefore>({ days: 0, hours: 3, minutes: 0 });
+
   const timePresets: DailyTime[] = useMemo(
     () => [
       { hour: 8, minute: 0 },
@@ -204,13 +339,63 @@ export function NotificationSettingsScreen() {
     []
   );
 
+  const saveBeforeV4 = useCallback(
+    async (v: { event: CompoundBefore; goal: CompoundBefore; step: CompoundBefore }) => {
+      await AsyncStorage.setItem(KEY_EVENT_BEFORE, JSON.stringify(clampCompoundBefore(v.event)));
+      await AsyncStorage.setItem(KEY_GOAL_BEFORE, JSON.stringify(clampCompoundBefore(v.goal)));
+      await AsyncStorage.setItem(KEY_STEP_BEFORE, JSON.stringify(clampCompoundBefore(v.step)));
+
+      // Keep writing older keys so older builds don't break completely
+      await saveOffsetsV2({
+        event: { value: clampCompoundBefore(v.event).minutes || DEFAULT_EVENT_OFFSET_VALUE, unit: 'minutes' },
+        goal: { value: clampCompoundBefore(v.goal).days || DEFAULT_GOAL_OFFSET_VALUE, unit: 'days' },
+        step: { value: clampCompoundBefore(v.step).hours || DEFAULT_STEP_OFFSET_VALUE, unit: 'hours' },
+      });
+    },
+    [saveOffsetsV2]
+  );
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [en, t, dailyId] = await Promise.all([
+      const [
+        en,
+        t,
+        dailyId,
+        evOff,
+        goalOff,
+        stepOff,
+        evVal,
+        evUnit,
+        goalVal,
+        goalUnit,
+        stepVal,
+        stepUnit,
+        evList,
+        goalList,
+        stepList,
+        evBeforeRaw,
+        goalBeforeRaw,
+        stepBeforeRaw,
+      ] = await Promise.all([
         AsyncStorage.getItem(KEY_ENABLED),
         AsyncStorage.getItem(KEY_DAILY_TIME),
         AsyncStorage.getItem(KEY_DAILY_ID),
+        AsyncStorage.getItem(KEY_EVENT_OFFSET_MIN),
+        AsyncStorage.getItem(KEY_GOAL_OFFSET_DAYS),
+        AsyncStorage.getItem(KEY_STEP_OFFSET_HOURS),
+        AsyncStorage.getItem(KEY_EVENT_OFFSET_VALUE),
+        AsyncStorage.getItem(KEY_EVENT_OFFSET_UNIT),
+        AsyncStorage.getItem(KEY_GOAL_OFFSET_VALUE),
+        AsyncStorage.getItem(KEY_GOAL_OFFSET_UNIT),
+        AsyncStorage.getItem(KEY_STEP_OFFSET_VALUE),
+        AsyncStorage.getItem(KEY_STEP_OFFSET_UNIT),
+        AsyncStorage.getItem(KEY_EVENT_OFFSETS),
+        AsyncStorage.getItem(KEY_GOAL_OFFSETS),
+        AsyncStorage.getItem(KEY_STEP_OFFSETS),
+        AsyncStorage.getItem(KEY_EVENT_BEFORE),
+        AsyncStorage.getItem(KEY_GOAL_BEFORE),
+        AsyncStorage.getItem(KEY_STEP_BEFORE),
       ]);
 
       setEnabled(en === '1');
@@ -221,6 +406,89 @@ export function NotificationSettingsScreen() {
       const perm = await Notifications.getPermissionsAsync();
       const granted = !!perm.granted;
       setPermissionGranted(granted);
+
+      const v4Ev = parseCompoundBefore(evBeforeRaw);
+      const v4Goal = parseCompoundBefore(goalBeforeRaw);
+      const v4Step = parseCompoundBefore(stepBeforeRaw);
+      if (v4Ev) setEventBefore(v4Ev);
+      if (v4Goal) setGoalBefore(v4Goal);
+      if (v4Step) setStepBefore(v4Step);
+
+      const validUnit = (u: any): u is OffsetUnit => u === 'minutes' || u === 'hours' || u === 'days';
+      const legacyOne = (v: any, u: any, fallback: { value: number; unit: OffsetUnit }, legacyNumeric: any, legacyUnit: OffsetUnit): { value: number; unit: OffsetUnit } => {
+        const vv = Number(v);
+        const uu = (u as OffsetUnit) || null;
+        if (Number.isFinite(vv) && vv >= 0 && validUnit(uu)) return { value: Math.floor(vv), unit: uu };
+        if (legacyNumeric !== null && legacyNumeric !== undefined) {
+          const x = Number(legacyNumeric);
+          if (Number.isFinite(x) && x >= 0) return { value: Math.floor(x), unit: legacyUnit };
+        }
+        return fallback;
+      };
+
+      // Migrate from v3 list or v2 single-unit to compound (only if v4 not present)
+      if (!v4Ev) {
+        let migrated: CompoundBefore | null = null;
+        try {
+          const parsed = JSON.parse(evList ?? 'null');
+          const first = Array.isArray(parsed) ? parsed[0] : null;
+          if (first && (first.unit === 'minutes' || first.unit === 'hours' || first.unit === 'days')) {
+            const vv = Number(first.value);
+            if (Number.isFinite(vv) && vv >= 0) {
+              migrated = first.unit === 'days' ? { days: Math.floor(vv), hours: 0, minutes: 0 } : first.unit === 'hours' ? { days: 0, hours: Math.floor(vv), minutes: 0 } : { days: 0, hours: 0, minutes: Math.floor(vv) };
+            }
+          }
+        } catch {
+          // ignore
+        }
+        if (!migrated) {
+          const one = legacyOne(evVal, evUnit, { value: DEFAULT_EVENT_OFFSET_VALUE, unit: DEFAULT_EVENT_OFFSET_UNIT }, evOff, 'minutes');
+          migrated = one.unit === 'days' ? { days: one.value, hours: 0, minutes: 0 } : one.unit === 'hours' ? { days: 0, hours: one.value, minutes: 0 } : { days: 0, hours: 0, minutes: one.value };
+        }
+        setEventBefore(clampCompoundBefore(migrated));
+      }
+
+      if (!v4Goal) {
+        let migrated: CompoundBefore | null = null;
+        try {
+          const parsed = JSON.parse(goalList ?? 'null');
+          const first = Array.isArray(parsed) ? parsed[0] : null;
+          if (first && (first.unit === 'minutes' || first.unit === 'hours' || first.unit === 'days')) {
+            const vv = Number(first.value);
+            if (Number.isFinite(vv) && vv >= 0) {
+              migrated = first.unit === 'days' ? { days: Math.floor(vv), hours: 0, minutes: 0 } : first.unit === 'hours' ? { days: 0, hours: Math.floor(vv), minutes: 0 } : { days: 0, hours: 0, minutes: Math.floor(vv) };
+            }
+          }
+        } catch {
+          // ignore
+        }
+        if (!migrated) {
+          const one = legacyOne(goalVal, goalUnit, { value: DEFAULT_GOAL_OFFSET_VALUE, unit: DEFAULT_GOAL_OFFSET_UNIT }, goalOff, 'days');
+          migrated = one.unit === 'days' ? { days: one.value, hours: 0, minutes: 0 } : one.unit === 'hours' ? { days: 0, hours: one.value, minutes: 0 } : { days: 0, hours: 0, minutes: one.value };
+        }
+        setGoalBefore(clampCompoundBefore(migrated));
+      }
+
+      if (!v4Step) {
+        let migrated: CompoundBefore | null = null;
+        try {
+          const parsed = JSON.parse(stepList ?? 'null');
+          const first = Array.isArray(parsed) ? parsed[0] : null;
+          if (first && (first.unit === 'minutes' || first.unit === 'hours' || first.unit === 'days')) {
+            const vv = Number(first.value);
+            if (Number.isFinite(vv) && vv >= 0) {
+              migrated = first.unit === 'days' ? { days: Math.floor(vv), hours: 0, minutes: 0 } : first.unit === 'hours' ? { days: 0, hours: Math.floor(vv), minutes: 0 } : { days: 0, hours: 0, minutes: Math.floor(vv) };
+            }
+          }
+        } catch {
+          // ignore
+        }
+        if (!migrated) {
+          const one = legacyOne(stepVal, stepUnit, { value: DEFAULT_STEP_OFFSET_VALUE, unit: DEFAULT_STEP_OFFSET_UNIT }, stepOff, 'hours');
+          migrated = one.unit === 'days' ? { days: one.value, hours: 0, minutes: 0 } : one.unit === 'hours' ? { days: 0, hours: one.value, minutes: 0 } : { days: 0, hours: 0, minutes: one.value };
+        }
+        setStepBefore(clampCompoundBefore(migrated));
+      }
 
       const isEnabled = en === '1';
       if (isEnabled && granted && !dailyId) {
@@ -255,6 +523,35 @@ export function NotificationSettingsScreen() {
     []
   );
 
+  const saveOffsets = useCallback(async (v: { eventMin: number; goalDays: number; stepHours: number }) => {
+    await AsyncStorage.setItem(KEY_EVENT_OFFSET_MIN, String(v.eventMin));
+    await AsyncStorage.setItem(KEY_GOAL_OFFSET_DAYS, String(v.goalDays));
+    await AsyncStorage.setItem(KEY_STEP_OFFSET_HOURS, String(v.stepHours));
+  }, []);
+
+  const saveOffsetsV2 = useCallback(
+    async (v: {
+      event: { value: number; unit: OffsetUnit };
+      goal: { value: number; unit: OffsetUnit };
+      step: { value: number; unit: OffsetUnit };
+    }) => {
+      await AsyncStorage.setItem(KEY_EVENT_OFFSET_VALUE, String(v.event.value));
+      await AsyncStorage.setItem(KEY_EVENT_OFFSET_UNIT, v.event.unit);
+      await AsyncStorage.setItem(KEY_GOAL_OFFSET_VALUE, String(v.goal.value));
+      await AsyncStorage.setItem(KEY_GOAL_OFFSET_UNIT, v.goal.unit);
+      await AsyncStorage.setItem(KEY_STEP_OFFSET_VALUE, String(v.step.value));
+      await AsyncStorage.setItem(KEY_STEP_OFFSET_UNIT, v.step.unit);
+
+      // Keep writing legacy keys for older code paths
+      await saveOffsets({
+        eventMin: v.event.unit === 'minutes' ? v.event.value : v.event.unit === 'hours' ? v.event.value * 60 : v.event.value * 24 * 60,
+        goalDays: v.goal.unit === 'days' ? v.goal.value : v.goal.unit === 'hours' ? Math.ceil(v.goal.value / 24) : Math.ceil(v.goal.value / (24 * 60)),
+        stepHours: v.step.unit === 'hours' ? v.step.value : v.step.unit === 'days' ? v.step.value * 24 : Math.ceil(v.step.value / 60),
+      });
+    },
+    [saveOffsets]
+  );
+
   const cancelDaily = useCallback(async () => {
     const id = await AsyncStorage.getItem(KEY_DAILY_ID);
     if (id) {
@@ -268,7 +565,7 @@ export function NotificationSettingsScreen() {
   }, []);
 
   const cancelRuleNotifications = useCallback(async () => {
-    await Promise.all([cancelIfExists(KEY_EVENT_ID), cancelIfExists(KEY_GOAL_DUE_ID), cancelIfExists(KEY_STEP_DUE_ID)]);
+    await Promise.all([cancelAnyIfExists(KEY_EVENT_ID), cancelAnyIfExists(KEY_GOAL_DUE_ID), cancelAnyIfExists(KEY_STEP_DUE_ID)]);
   }, []);
 
   const scheduleDaily = useCallback(
@@ -296,35 +593,41 @@ export function NotificationSettingsScreen() {
 
     // (1) Event reminder: 30 minutes before nextEvent.startAt
     if (dash.nextEvent?.startAt) {
+      const ev = dash.nextEvent;
       const start = new Date(dash.nextEvent.startAt);
-      const when = new Date(start.getTime() - 30 * 60 * 1000);
-      await scheduleAt(KEY_EVENT_ID, when, {
-        title: 'Upcoming event',
-        body: `In 30 minutes: ${dash.nextEvent.title}`,
-      });
+      const ms = compoundToMs(eventBefore);
+      const ann = beforeToAnnouncement(eventBefore);
+      await scheduleManyAt(KEY_EVENT_ID, [
+        {
+          when: new Date(start.getTime() - ms),
+          content: {
+            title: 'Upcoming event',
+            body: `${ann}: ${ev.title}`,
+          },
+        },
+      ]);
     } else {
-      await cancelIfExists(KEY_EVENT_ID);
+      await cancelAnyIfExists(KEY_EVENT_ID);
     }
 
-    // (2) Goal due tomorrow reminder (based on nextGoal.dueAt)
+    // (2) Goal reminder (relative to nextGoal.dueAt)
     if (dash.nextGoal?.dueAt) {
+      const goal = dash.nextGoal;
       const due = new Date(dash.nextGoal.dueAt);
-      const now = new Date();
-      if (!Number.isNaN(due.getTime()) && daysUntil(due) === 1) {
-        // Prefer the user's reminder time today. If already passed, schedule soon so the user still gets the reminder.
-        const t = dailyTime;
-        const preferred = new Date(now.getFullYear(), now.getMonth(), now.getDate(), t.hour, t.minute, 0, 0);
-        const when = preferred.getTime() > now.getTime() ? preferred : new Date(now.getTime() + 60_000);
-
-        await scheduleAt(KEY_GOAL_DUE_ID, when, {
-          title: 'Goal due tomorrow',
-          body: `${dash.nextGoal.title}`,
-        });
+      if (!Number.isNaN(due.getTime())) {
+        const ms = compoundToMs(goalBefore);
+        const ann = beforeToAnnouncement(goalBefore);
+        await scheduleManyAt(KEY_GOAL_DUE_ID, [
+          {
+            when: new Date(due.getTime() - ms),
+            content: { title: 'Goal reminder', body: `${ann}: ${goal.title}` },
+          },
+        ]);
       } else {
-        await cancelIfExists(KEY_GOAL_DUE_ID);
+        await cancelAnyIfExists(KEY_GOAL_DUE_ID);
       }
     } else {
-      await cancelIfExists(KEY_GOAL_DUE_ID);
+      await cancelAnyIfExists(KEY_GOAL_DUE_ID);
     }
 
     // (3) Step deadline reminder: 3 hours before the earliest due step (not doneToday)
@@ -339,15 +642,22 @@ export function NotificationSettingsScreen() {
 
     const nextStep = dueSteps[0] ?? null;
     if (nextStep) {
-      const when = new Date((nextStep.due as Date).getTime() - 3 * 60 * 60 * 1000);
-      await scheduleAt(KEY_STEP_DUE_ID, when, {
-        title: 'Deadline soon',
-        body: `3 hours left: ${nextStep.text}`,
-      });
+      const dueMs = (nextStep.due as Date).getTime();
+      const ms = compoundToMs(stepBefore);
+      const ann = beforeToAnnouncement(stepBefore);
+      await scheduleManyAt(KEY_STEP_DUE_ID, [
+        {
+          when: new Date(dueMs - ms),
+          content: {
+            title: 'Deadline soon',
+            body: `${ann}: ${nextStep.text}`,
+          },
+        },
+      ]);
     } else {
-      await cancelIfExists(KEY_STEP_DUE_ID);
+      await cancelAnyIfExists(KEY_STEP_DUE_ID);
     }
-  }, [dailyTime, state.accessToken]);
+  }, [eventBefore, goalBefore, state.accessToken, stepBefore]);
 
   const toggleEnabled = useCallback(
     async (value: boolean) => {
@@ -409,6 +719,24 @@ export function NotificationSettingsScreen() {
       }
     },
     [cancelDaily, enabled, save, scheduleDaily, scheduleRuleNotifications]
+  );
+
+  const setBeforeSafe = useCallback(
+    async (next: { event?: CompoundBefore; goal?: CompoundBefore; step?: CompoundBefore }) => {
+      const ev = clampCompoundBefore(next.event ?? eventBefore);
+      const goal = clampCompoundBefore(next.goal ?? goalBefore);
+      const step = clampCompoundBefore(next.step ?? stepBefore);
+      setEventBefore(ev);
+      setGoalBefore(goal);
+      setStepBefore(step);
+
+      await saveBeforeV4({ event: ev, goal, step });
+
+      if (enabled) {
+        await scheduleRuleNotifications();
+      }
+    },
+    [enabled, eventBefore, goalBefore, saveBeforeV4, scheduleRuleNotifications, stepBefore]
   );
 
   return (
@@ -572,16 +900,154 @@ export function NotificationSettingsScreen() {
                   return;
                 }
 
-                await scheduleAt(KEY_GOAL_DUE_ID, new Date(Date.now() + 60_000), {
-                  title: 'Goal due tomorrow',
-                  body: `${goal?.title ?? 'Your goal'}`,
-                });
+                await scheduleManyAt(KEY_GOAL_DUE_ID, [
+                  {
+                    when: new Date(Date.now() + 60_000),
+                    content: {
+                      title: 'Goal due tomorrow',
+                      body: `${goal?.title ?? 'Your goal'}`,
+                    },
+                  },
+                ]);
                 toast('Goal reminder scheduled (60s).');
               } catch (e: any) {
                 toast(String(e?.message ?? 'Failed to schedule goal reminder'));
               }
             }}
           />
+        </Card>
+
+        <Card>
+          <Text style={styles.cardTitle}>Send reminder</Text>
+          <View style={{ height: 10 }} />
+
+          <Text style={styles.muted12}>Event reminder (before start)</Text>
+          <View style={{ height: 8 }} />
+          <View style={styles.beforeRow}>
+            <View style={styles.beforeField}>
+              <Text style={styles.beforeLabel}>Days</Text>
+              <TextInput
+                value={String(eventBefore.days)}
+                onChangeText={t => {
+                  const n = Number(t.replace(/[^0-9]/g, ''));
+                  if (Number.isFinite(n)) void setBeforeSafe({ event: { ...eventBefore, days: n } });
+                }}
+                keyboardType="number-pad"
+                style={styles.beforeInput}
+              />
+            </View>
+            <View style={styles.beforeField}>
+              <Text style={styles.beforeLabel}>Hours</Text>
+              <TextInput
+                value={String(eventBefore.hours)}
+                onChangeText={t => {
+                  const n = Number(t.replace(/[^0-9]/g, ''));
+                  if (Number.isFinite(n)) void setBeforeSafe({ event: { ...eventBefore, hours: n } });
+                }}
+                keyboardType="number-pad"
+                style={styles.beforeInput}
+              />
+            </View>
+            <View style={styles.beforeField}>
+              <Text style={styles.beforeLabel}>Minutes</Text>
+              <TextInput
+                value={String(eventBefore.minutes)}
+                onChangeText={t => {
+                  const n = Number(t.replace(/[^0-9]/g, ''));
+                  if (Number.isFinite(n)) void setBeforeSafe({ event: { ...eventBefore, minutes: n } });
+                }}
+                keyboardType="number-pad"
+                style={styles.beforeInput}
+              />
+            </View>
+          </View>
+
+          <View style={{ height: 12 }} />
+          <Text style={styles.muted12}>Goal reminder (before due date)</Text>
+          <View style={{ height: 8 }} />
+          <View style={styles.beforeRow}>
+            <View style={styles.beforeField}>
+              <Text style={styles.beforeLabel}>Days</Text>
+              <TextInput
+                value={String(goalBefore.days)}
+                onChangeText={t => {
+                  const n = Number(t.replace(/[^0-9]/g, ''));
+                  if (Number.isFinite(n)) void setBeforeSafe({ goal: { ...goalBefore, days: n } });
+                }}
+                keyboardType="number-pad"
+                style={styles.beforeInput}
+              />
+            </View>
+            <View style={styles.beforeField}>
+              <Text style={styles.beforeLabel}>Hours</Text>
+              <TextInput
+                value={String(goalBefore.hours)}
+                onChangeText={t => {
+                  const n = Number(t.replace(/[^0-9]/g, ''));
+                  if (Number.isFinite(n)) void setBeforeSafe({ goal: { ...goalBefore, hours: n } });
+                }}
+                keyboardType="number-pad"
+                style={styles.beforeInput}
+              />
+            </View>
+            <View style={styles.beforeField}>
+              <Text style={styles.beforeLabel}>Minutes</Text>
+              <TextInput
+                value={String(goalBefore.minutes)}
+                onChangeText={t => {
+                  const n = Number(t.replace(/[^0-9]/g, ''));
+                  if (Number.isFinite(n)) void setBeforeSafe({ goal: { ...goalBefore, minutes: n } });
+                }}
+                keyboardType="number-pad"
+                style={styles.beforeInput}
+              />
+            </View>
+          </View>
+
+          <View style={{ height: 12 }} />
+          <Text style={styles.muted12}>Step reminder (before deadline)</Text>
+          <View style={{ height: 8 }} />
+          <View style={styles.beforeRow}>
+            <View style={styles.beforeField}>
+              <Text style={styles.beforeLabel}>Days</Text>
+              <TextInput
+                value={String(stepBefore.days)}
+                onChangeText={t => {
+                  const n = Number(t.replace(/[^0-9]/g, ''));
+                  if (Number.isFinite(n)) void setBeforeSafe({ step: { ...stepBefore, days: n } });
+                }}
+                keyboardType="number-pad"
+                style={styles.beforeInput}
+              />
+            </View>
+            <View style={styles.beforeField}>
+              <Text style={styles.beforeLabel}>Hours</Text>
+              <TextInput
+                value={String(stepBefore.hours)}
+                onChangeText={t => {
+                  const n = Number(t.replace(/[^0-9]/g, ''));
+                  if (Number.isFinite(n)) void setBeforeSafe({ step: { ...stepBefore, hours: n } });
+                }}
+                keyboardType="number-pad"
+                style={styles.beforeInput}
+              />
+            </View>
+            <View style={styles.beforeField}>
+              <Text style={styles.beforeLabel}>Minutes</Text>
+              <TextInput
+                value={String(stepBefore.minutes)}
+                onChangeText={t => {
+                  const n = Number(t.replace(/[^0-9]/g, ''));
+                  if (Number.isFinite(n)) void setBeforeSafe({ step: { ...stepBefore, minutes: n } });
+                }}
+                keyboardType="number-pad"
+                style={styles.beforeInput}
+              />
+            </View>
+          </View>
+
+          <View style={{ height: 12 }} />
+          <Text style={styles.muted12}>All reminders are scheduled relative to their due/start times using the offset you select.</Text>
         </Card>
       </ScrollView>
     </Screen>
@@ -641,5 +1107,40 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
+  },
+  beforeRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  beforeField: {
+    flex: 1,
+  },
+  beforeLabel: {
+    color: colors.muted,
+    fontSize: 12,
+    fontWeight: '700',
+    marginBottom: 6,
+  },
+  beforeInput: {
+    width: '100%',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: colors.surface2,
+    color: colors.text,
+    fontWeight: '800',
+  },
+  offsetInput: {
+    minWidth: 54,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: colors.surface2,
+    color: colors.text,
+    fontWeight: '800',
   },
 });
