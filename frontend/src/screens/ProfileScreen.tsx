@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 
 import { Screen } from '../components/Screen';
 import { Card } from '../components/Card';
@@ -20,6 +21,7 @@ type Row = {
 };
 
 export function ProfileScreen() {
+  const nav = useNavigation<any>();
   const { signOut, state, updateName, changePassword } = useAuth();
   const { settings, setRankingMode, setInterestedFields, setHobbies, setBackgroundColor, resetBackgroundColor } = useSettings();
 
@@ -244,6 +246,14 @@ export function ProfileScreen() {
                 <Text style={styles.meta}>Current: {currentBgName}</Text>
               </View>
               <Button title="Change" small onPress={openEditBg} />
+            </View>
+
+            <View style={styles.item}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.name}>Notification</Text>
+                <Text style={styles.meta}>Reminders & schedule</Text>
+              </View>
+              <Button title="Open" small onPress={() => nav.navigate('NotificationSettings')} />
             </View>
           </View>
 

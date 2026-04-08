@@ -10,6 +10,7 @@ import * as Notifications from 'expo-notifications';
 import { RootStack } from './src/navigation/RootStack';
 import { AuthProvider } from './src/auth/AuthContext';
 import { SettingsProvider } from './src/settings/SettingsContext';
+import { appendInbox } from './src/notifications/inbox';
 
 export default function App() {
   useEffect(() => {
@@ -22,6 +23,27 @@ export default function App() {
       }),
     });
 
+    const subRecv = Notifications.addNotificationReceivedListener(n => {
+      const title = String(n.request.content?.title ?? 'Notification');
+      const body = String(n.request.content?.body ?? '');
+      void appendInbox({
+        receivedAt: Date.now(),
+        title,
+        body,
+      });
+    });
+
+    const subResp = Notifications.addNotificationResponseReceivedListener(r => {
+      const content = r.notification.request.content;
+      const title = String(content?.title ?? 'Notification');
+      const body = String(content?.body ?? '');
+      void appendInbox({
+        receivedAt: Date.now(),
+        title,
+        body,
+      });
+    });
+
     if (Platform.OS === 'android') {
       void Notifications.setNotificationChannelAsync('default', {
         name: 'Default',
@@ -29,6 +51,11 @@ export default function App() {
         vibrationPattern: [0, 250, 250, 250],
       });
     }
+
+    return () => {
+      subRecv.remove();
+      subResp.remove();
+    };
   }, []);
 
   return (

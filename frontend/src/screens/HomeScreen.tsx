@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 
 import { Screen } from '../components/Screen';
@@ -15,6 +15,7 @@ import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
 import type { RootStackParamList } from '../navigation/types';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { clearInbox, getInbox, removeInboxItem } from '../notifications/inbox';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -22,6 +23,20 @@ export function HomeScreen() {
   const nav = useNavigation<Nav>();
   const { state } = useAuth();
   const [aiOpen, setAiOpen] = useState(false);
+
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [notifLoading, setNotifLoading] = useState(false);
+  const [notifItems, setNotifItems] = useState<Array<{ id: string; title: string; body: string; receivedAt: number }>>([]);
+
+  const loadInbox = useCallback(async () => {
+    setNotifLoading(true);
+    try {
+      const items = await getInbox();
+      setNotifItems(items);
+    } finally {
+      setNotifLoading(false);
+    }
+  }, []);
 
   const [dash, setDash] = useState<authApi.DashboardResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -143,7 +158,10 @@ export function HomeScreen() {
           </View>
 
           <Pressable
-            onPress={() => nav.navigate('NotificationSettings')}
+            onPress={() => {
+              setNotifOpen(true);
+              void loadInbox();
+            }}
             style={({ pressed }) => [styles.iconBtn, pressed ? { opacity: 0.85 } : null]}
           >
             <Text style={styles.iconText}>🔔</Text>
@@ -293,6 +311,49 @@ export function HomeScreen() {
 
       <AiPlannerModal visible={aiOpen} onClose={() => setAiOpen(false)} onSaved={refresh} />
 
+      <Modal visible={notifOpen} animationType="slide" transparent onRequestClose={() => setNotifOpen(false)}>
+        <View style={styles.notifOverlay}>
+          <View style={styles.notifModal}>
+            <View style={styles.notifHeader}>
+              <Text style={styles.notifTitle}>Notifications</Text>
+              <View style={{ flexDirection: 'row', gap: 10 }}>
+                <Button
+                  title="Clear"
+                  small
+                  onPress={async () => {
+                    await clearInbox();
+                    setNotifItems([]);
+                  }}
+                />
+                <Button title="Close" small onPress={() => setNotifOpen(false)} />
+              </View>
+            </View>
+
+            <ScrollView contentContainerStyle={{ paddingBottom: 8 }}>
+              {notifLoading ? <Text style={styles.notifEmpty}>Loading…</Text> : null}
+              {!notifLoading && notifItems.length === 0 ? <Text style={styles.notifEmpty}>No notifications yet.</Text> : null}
+              {notifItems.map(n => (
+                <View key={n.id} style={styles.notifItem}>
+                  <View style={styles.notifItemTopRow}>
+                    <Text style={styles.notifItemTitle}>{n.title}</Text>
+                    <Button
+                      title="Delete"
+                      small
+                      onPress={async () => {
+                        await removeInboxItem(n.id);
+                        setNotifItems(prev => prev.filter(x => x.id !== n.id));
+                      }}
+                    />
+                  </View>
+                  {n.body ? <Text style={styles.notifItemBody}>{n.body}</Text> : null}
+                  <Text style={styles.notifItemWhen}>{new Date(n.receivedAt).toLocaleString()}</Text>
+                </View>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
       <Pressable onPress={() => setAiOpen(true)} style={({ pressed }) => [styles.fab, pressed ? { opacity: 0.9 } : null]}>
         <Text style={styles.fabText}>✨</Text>
       </Pressable>
@@ -332,18 +393,74 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderWidth: 1,
     borderColor: colors.line,
-    backgroundColor: colors.surface,
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
   },
   iconText: {
-    fontSize: 16,
+    fontSize: 22,
   },
   cardTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: 10,
+  },
+  notifOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'flex-start',
+    paddingTop: 70,
+    paddingHorizontal: 12,
+  },
+  notifModal: {
+    backgroundColor: colors.bg,
+    borderRadius: 18,
+    padding: 16,
+    maxHeight: '75%',
+  },
+  notifHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     gap: 12,
+  },
+  notifTitle: {
+    color: colors.text,
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  notifEmpty: {
+    color: colors.muted,
+    fontSize: 12,
+    marginTop: 12,
+  },
+  notifItem: {
+    borderTopWidth: 1,
+    borderTopColor: colors.line,
+    paddingTop: 12,
+    marginTop: 12,
+  },
+  notifItemTitle: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  notifItemTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  notifItemBody: {
+    marginTop: 6,
+    color: colors.text,
+    fontSize: 12,
+  },
+  notifItemWhen: {
+    marginTop: 8,
+    color: colors.muted,
+    fontSize: 12,
   },
   cardTitle: {
     color: colors.text,
