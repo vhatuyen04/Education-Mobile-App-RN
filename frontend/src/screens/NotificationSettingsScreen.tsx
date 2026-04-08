@@ -42,18 +42,9 @@ type OffsetUnit = 'minutes' | 'hours' | 'days';
 type CompoundBefore = { days: number; hours: number; minutes: number };
 
 const DEFAULT_EVENT_OFFSET_VALUE = 30;
-const DEFAULT_EVENT_OFFSET_UNIT: OffsetUnit = 'minutes';
 const DEFAULT_GOAL_OFFSET_VALUE = 1;
-const DEFAULT_GOAL_OFFSET_UNIT: OffsetUnit = 'days';
 const DEFAULT_STEP_OFFSET_VALUE = 3;
-const DEFAULT_STEP_OFFSET_UNIT: OffsetUnit = 'hours';
-
-function offsetToMs(value: number, unit: OffsetUnit) {
-  const v = Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
-  if (unit === 'minutes') return v * 60 * 1000;
-  if (unit === 'hours') return v * 60 * 60 * 1000;
-  return v * 24 * 60 * 60 * 1000;
-}
+ 
 
 function clampCompoundBefore(v: CompoundBefore): CompoundBefore {
   const n = (x: any) => {
@@ -442,7 +433,7 @@ export function NotificationSettingsScreen() {
           // ignore
         }
         if (!migrated) {
-          const one = legacyOne(evVal, evUnit, { value: DEFAULT_EVENT_OFFSET_VALUE, unit: DEFAULT_EVENT_OFFSET_UNIT }, evOff, 'minutes');
+          const one = legacyOne(evVal, evUnit, { value: DEFAULT_EVENT_OFFSET_VALUE, unit: 'minutes' }, evOff, 'minutes');
           migrated = one.unit === 'days' ? { days: one.value, hours: 0, minutes: 0 } : one.unit === 'hours' ? { days: 0, hours: one.value, minutes: 0 } : { days: 0, hours: 0, minutes: one.value };
         }
         setEventBefore(clampCompoundBefore(migrated));
@@ -463,7 +454,7 @@ export function NotificationSettingsScreen() {
           // ignore
         }
         if (!migrated) {
-          const one = legacyOne(goalVal, goalUnit, { value: DEFAULT_GOAL_OFFSET_VALUE, unit: DEFAULT_GOAL_OFFSET_UNIT }, goalOff, 'days');
+          const one = legacyOne(goalVal, goalUnit, { value: DEFAULT_GOAL_OFFSET_VALUE, unit: 'days' }, goalOff, 'days');
           migrated = one.unit === 'days' ? { days: one.value, hours: 0, minutes: 0 } : one.unit === 'hours' ? { days: 0, hours: one.value, minutes: 0 } : { days: 0, hours: 0, minutes: one.value };
         }
         setGoalBefore(clampCompoundBefore(migrated));
@@ -484,7 +475,7 @@ export function NotificationSettingsScreen() {
           // ignore
         }
         if (!migrated) {
-          const one = legacyOne(stepVal, stepUnit, { value: DEFAULT_STEP_OFFSET_VALUE, unit: DEFAULT_STEP_OFFSET_UNIT }, stepOff, 'hours');
+          const one = legacyOne(stepVal, stepUnit, { value: DEFAULT_STEP_OFFSET_VALUE, unit: 'hours' }, stepOff, 'hours');
           migrated = one.unit === 'days' ? { days: one.value, hours: 0, minutes: 0 } : one.unit === 'hours' ? { days: 0, hours: one.value, minutes: 0 } : { days: 0, hours: 0, minutes: one.value };
         }
         setStepBefore(clampCompoundBefore(migrated));
@@ -615,11 +606,10 @@ export function NotificationSettingsScreen() {
       const goal = dash.nextGoal;
       const due = new Date(dash.nextGoal.dueAt);
       if (!Number.isNaN(due.getTime())) {
-        const ms = compoundToMs(goalBefore);
         const ann = beforeToAnnouncement(goalBefore);
         await scheduleManyAt(KEY_GOAL_DUE_ID, [
           {
-            when: new Date(due.getTime() - ms),
+            when: new Date(due.getTime() - compoundToMs(goalBefore)),
             content: { title: 'Goal reminder', body: `${ann}: ${goal.title}` },
           },
         ]);
