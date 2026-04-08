@@ -47,7 +47,7 @@ export function ProfileScreen() {
 
   const currentBg = settings.backgroundColor || colors.bg;
   const currentBgName = useMemo(() => {
-    const hit = backgroundPresets.find(p => p.value.toLowerCase() === String(currentBg).toLowerCase());
+    const hit = backgroundPresets.find(p => p.color.toLowerCase() === String(currentBg).toLowerCase());
     return hit?.name ?? 'Custom';
   }, [currentBg]);
 
@@ -338,7 +338,7 @@ export function ProfileScreen() {
                 <Pressable
                   key={p.key}
                   onPress={() => {
-                    void setBackgroundColor(p.value);
+                    void setBackgroundColor(p.color);
                     setEditBgOpen(false);
                     toast('Saved');
                   }}
@@ -346,9 +346,9 @@ export function ProfileScreen() {
                 >
                   <View style={{ flex: 1 }}>
                     <Text style={styles.name}>{p.name}</Text>
-                    <Text style={styles.meta}>{p.value}</Text>
+                    <Text style={styles.meta}>{p.color}</Text>
                   </View>
-                  <View style={[styles.swatch, { backgroundColor: p.value }]} />
+                  <View style={[styles.swatch, { backgroundColor: p.color }]} />
                 </Pressable>
               ))}
             </View>

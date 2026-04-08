@@ -58,8 +58,14 @@ export function TodayDetailsScreen() {
   function formatDueBadge(dueAt: string | null) {
     if (!dueAt) return 'No due date';
     const due = new Date(dueAt);
-    const ms = due.getTime() - Date.now();
-    const days = Math.ceil(ms / (1000 * 60 * 60 * 24));
+    if (Number.isNaN(due.getTime())) return 'Due date';
+
+    const dayMs = 1000 * 60 * 60 * 24;
+    const today0 = new Date();
+    today0.setHours(0, 0, 0, 0);
+    const due0 = new Date(due);
+    due0.setHours(0, 0, 0, 0);
+    const days = Math.round((due0.getTime() - today0.getTime()) / dayMs);
     if (Number.isNaN(days)) return 'Due date';
     if (days < 0) return 'Overdue';
     if (days === 0) return 'Due today';
@@ -99,7 +105,7 @@ export function TodayDetailsScreen() {
       goalTitle: s.goalTitle,
       type: 'step' as const,
       name: s.text,
-      meta: s.repeat ? `Repeat: ${s.repeat}` : s.dueAt ? formatDueBadge(s.dueAt) : 'Step',
+      meta: s.dueAt ? formatDueBadge(s.dueAt) : s.repeat ? `Repeat: ${s.repeat}` : 'Step',
       doneToday: s.doneToday,
     }));
 

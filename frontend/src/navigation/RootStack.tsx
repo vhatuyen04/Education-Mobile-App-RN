@@ -7,6 +7,7 @@ import { AuthStack } from './AuthStack';
 import { GoalDetailScreen } from '../screens/GoalDetailScreen';
 import { TodayDetailsScreen } from '../screens/TodayDetailsScreen';
 import { ScheduleWeekScreen } from '../screens/ScheduleWeekScreen';
+import { NotificationSettingsScreen } from '../screens/NotificationSettingsScreen';
 import { colors } from '../theme/colors';
 import { useAuth } from '../auth/AuthContext';
 
@@ -33,6 +34,7 @@ export function RootStack() {
           <Stack.Screen name="GoalDetail" component={GoalDetailScreen} options={{ title: 'Goal detail', headerShown: false }} />
           <Stack.Screen name="TodayDetails" component={TodayDetailsScreen} options={{ title: 'Details', headerShown: false }} />
           <Stack.Screen name="ScheduleWeek" component={ScheduleWeekScreen} options={{ title: 'Modify schedule', headerShown: false }} />
+          <Stack.Screen name="NotificationSettings" component={NotificationSettingsScreen} options={{ title: 'Notifications', headerShown: false }} />
         </>
       ) : (
         <Stack.Screen name="Auth" component={AuthStack} options={{ headerShown: false }} />

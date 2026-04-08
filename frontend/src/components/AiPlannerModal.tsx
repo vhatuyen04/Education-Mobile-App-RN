@@ -125,6 +125,152 @@ function parseDmy(raw: string): Date | null {
   return d;
 }
 
+function toEndOfDay(d: Date) {
+  const x = new Date(d);
+  x.setHours(23, 59, 59, 999);
+  return x;
+}
+
+function clampToDeadline(d: Date, deadline: Date) {
+  return d.getTime() > deadline.getTime() ? new Date(deadline) : d;
+}
+
+function nextOrSameWeekday(from: Date, targetDow: number) {
+  const base = new Date(from);
+  base.setHours(0, 0, 0, 0);
+  const cur = base.getDay();
+  const delta = (targetDow - cur + 7) % 7;
+  const out = new Date(base);
+  out.setDate(out.getDate() + delta);
+  return out;
+}
+
+function countRepeatOccurrencesUntilDeadline(params: {
+  repeat: string;
+  repeatDay?: number;
+  repeatMonth?: number;
+  start: Date;
+  deadline: Date;
+}): { count: number; lastOccurrence: Date | null } {
+  const repeat = params.repeat.trim().toLowerCase();
+  const start0 = new Date(params.start);
+  start0.setHours(0, 0, 0, 0);
+  const dl0 = toEndOfDay(params.deadline);
+
+  if (dl0.getTime() < start0.getTime()) return { count: 0, lastOccurrence: null };
+
+  if (repeat === 'daily') {
+    const dayMs = 24 * 60 * 60 * 1000;
+    const days = Math.floor((dl0.getTime() - start0.getTime()) / dayMs) + 1;
+    const last = new Date(start0.getTime() + (days - 1) * dayMs);
+    return { count: Math.max(0, days), lastOccurrence: last };
+  }
+
+  if (repeat === 'weekly') {
+    const dow = params.repeatDay;
+    if (dow === undefined || dow === null || !Number.isFinite(Number(dow))) return { count: 0, lastOccurrence: null };
+    const target = Number(dow);
+    if (target < 0 || target > 6) return { count: 0, lastOccurrence: null };
+
+    let first = nextOrSameWeekday(start0, target);
+    if (first.getTime() < start0.getTime()) first = nextOrSameWeekday(new Date(start0.getTime() + 24 * 60 * 60 * 1000), target);
+    if (first.getTime() > dl0.getTime()) return { count: 0, lastOccurrence: null };
+
+    const weekMs = 7 * 24 * 60 * 60 * 1000;
+    const diff = dl0.getTime() - first.getTime();
+    const n = Math.floor(diff / weekMs) + 1;
+    const last = new Date(first.getTime() + (n - 1) * weekMs);
+    return { count: Math.max(0, n), lastOccurrence: last };
+  }
+
+  if (repeat === 'monthly') {
+    const day = params.repeatDay;
+    if (day === undefined || day === null || !Number.isFinite(Number(day))) return { count: 0, lastOccurrence: null };
+    const targetDay = Math.max(1, Math.min(31, Number(day)));
+
+    let y = start0.getFullYear();
+    let m = start0.getMonth();
+    let cand = new Date(y, m, targetDay);
+    if (cand.getTime() < start0.getTime()) {
+      m += 1;
+      cand = new Date(y, m, targetDay);
+    }
+    if (cand.getTime() > dl0.getTime()) return { count: 0, lastOccurrence: null };
+
+    let count = 0;
+    let last: Date | null = null;
+    while (cand.getTime() <= dl0.getTime() && count < 400) {
+      count += 1;
+      last = new Date(cand);
+      m += 1;
+      cand = new Date(y, m, targetDay);
+      y = cand.getFullYear();
+    }
+    return { count, lastOccurrence: last };
+  }
+
+  if (repeat === 'yearly') {
+    const mm = params.repeatMonth;
+    const dd = params.repeatDay;
+    if (mm === undefined || mm === null || dd === undefined || dd === null) return { count: 0, lastOccurrence: null };
+    const month = Number(mm);
+    const day = Number(dd);
+    if (!Number.isFinite(month) || !Number.isFinite(day)) return { count: 0, lastOccurrence: null };
+    if (month < 1 || month > 12) return { count: 0, lastOccurrence: null };
+    if (day < 1 || day > 31) return { count: 0, lastOccurrence: null };
+
+    let y = start0.getFullYear();
+    let cand = new Date(y, month - 1, day);
+    if (cand.getTime() < start0.getTime()) {
+      y += 1;
+      cand = new Date(y, month - 1, day);
+    }
+    if (cand.getTime() > dl0.getTime()) return { count: 0, lastOccurrence: null };
+
+    let count = 0;
+    let last: Date | null = null;
+    while (cand.getTime() <= dl0.getTime() && count < 50) {
+      count += 1;
+      last = new Date(cand);
+      y += 1;
+      cand = new Date(y, month - 1, day);
+    }
+    return { count, lastOccurrence: last };
+  }
+
+  return { count: 0, lastOccurrence: null };
+}
+
+function normalizeAiStepSchedule(schedule: authApi.AiGoalStepSchedule | undefined, deadlineYmd: string) {
+  if (!schedule) return schedule;
+  if (schedule.type !== 'repeat') return schedule;
+
+  const dl = parseYmd(deadlineYmd) ?? parseDmy(deadlineYmd);
+  if (!dl) return schedule;
+
+  const repeat = String(schedule.repeat ?? '').trim().toLowerCase();
+  if (!repeat) return { type: 'none' } as authApi.AiGoalStepSchedule;
+
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+
+  const { count, lastOccurrence } = countRepeatOccurrencesUntilDeadline({
+    repeat,
+    repeatDay: schedule.repeatDay,
+    repeatMonth: schedule.repeatMonth,
+    start,
+    deadline: dl,
+  });
+
+  // If it can happen 2+ times before the deadline, keep the repeat schedule.
+  if (count >= 2) return schedule;
+
+  // Otherwise convert to once, at the last possible occurrence on/before the deadline.
+  const pick = lastOccurrence ? clampToDeadline(lastOccurrence, dl) : new Date(dl);
+  const ymd = formatDateYmd(pick);
+  return { type: 'once', due: ymd } as authApi.AiGoalStepSchedule;
+}
+
 type PlanDeadline = { date: Date; label: string };
 
 function parseDeadlineFromPlanText(planText: string): PlanDeadline | null {
@@ -289,8 +435,9 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
     const raw = v.trim();
     if (!raw) return null;
 
-    const d = new Date(raw);
-    if (!Number.isFinite(d.getTime())) return null;
+    const parsed = parseYmd(raw) ?? parseDmy(raw);
+    if (!parsed) return null;
+    const d = new Date(parsed);
 
     d.setHours(23, 59, 59, 999);
 
@@ -346,7 +493,16 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
       setGoalTitle(resp.suggestion.title || defaultGoalTitle(planText));
       setGoalField(resp.suggestion.field);
       setGoalDeadline(resp.suggestion.deadline || resolvedDeadline);
-      setSteps(resp.suggestion.steps.map(s => ({ id: makeId(), text: s.text, schedule: s.schedule })));
+      const effectiveDeadline = resp.suggestion.deadline || resolvedDeadline;
+      setSteps(
+        resp.suggestion.steps
+          .map(s => ({
+            id: makeId(),
+            text: String(s.text ?? ''),
+            schedule: normalizeAiStepSchedule(s.schedule, effectiveDeadline),
+          }))
+          .filter(s => s.text.trim().length > 0)
+      );
       setGenerated(true);
       setDirty(false);
       toast('AI suggestions ready');

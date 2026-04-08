@@ -74,6 +74,12 @@ export function HomeScreen() {
     return Array.from(map.entries()).map(([goalId, v]) => ({ goalId, goalTitle: v.goalTitle, steps: v.steps }));
   }, [todaySteps]);
 
+  function stepMeta(s: (typeof todaySteps)[number]) {
+    if (s.dueAt) return formatDueBadge(s.dueAt);
+    if (s.repeat) return `Repeat: ${s.repeat}`;
+    return 'Step';
+  }
+
   function displayGoalTitle(raw: string) {
     const first = String(raw ?? '').split(/\r?\n/)[0] ?? '';
     const idx = first.toLowerCase().indexOf('steps:');
@@ -84,8 +90,14 @@ export function HomeScreen() {
   function formatDueBadge(dueAt: string | null) {
     if (!dueAt) return 'No due date';
     const due = new Date(dueAt);
-    const ms = due.getTime() - Date.now();
-    const days = Math.ceil(ms / (1000 * 60 * 60 * 24));
+    if (Number.isNaN(due.getTime())) return 'Due date';
+
+    const dayMs = 1000 * 60 * 60 * 24;
+    const today0 = new Date();
+    today0.setHours(0, 0, 0, 0);
+    const due0 = new Date(due);
+    due0.setHours(0, 0, 0, 0);
+    const days = Math.round((due0.getTime() - today0.getTime()) / dayMs);
     if (Number.isNaN(days)) return 'Due date';
     if (days < 0) return 'Overdue';
     if (days === 0) return 'Due today';
@@ -131,7 +143,7 @@ export function HomeScreen() {
           </View>
 
           <Pressable
-            onPress={() => toast('No notifications in prototype')}
+            onPress={() => nav.navigate('NotificationSettings')}
             style={({ pressed }) => [styles.iconBtn, pressed ? { opacity: 0.85 } : null]}
           >
             <Text style={styles.iconText}>🔔</Text>
