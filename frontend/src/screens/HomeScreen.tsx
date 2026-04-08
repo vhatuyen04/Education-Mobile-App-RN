@@ -16,6 +16,8 @@ import * as authApi from '../api/auth';
 import type { RootStackParamList } from '../navigation/types';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { clearInbox, getInbox, removeInboxItem } from '../notifications/inbox';
+import * as Notifications from 'expo-notifications';
+import { listRecommendations, upsertRecommendation } from '../ai/recommendations';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -26,7 +28,7 @@ export function HomeScreen() {
 
   const [notifOpen, setNotifOpen] = useState(false);
   const [notifLoading, setNotifLoading] = useState(false);
-  const [notifItems, setNotifItems] = useState<Array<{ id: string; title: string; body: string; receivedAt: number }>>([]);
+  const [notifItems, setNotifItems] = useState<Array<{ id: string; title: string; body: string; receivedAt: number; data?: any }>>([]);
 
   const loadInbox = useCallback(async () => {
     setNotifLoading(true);
@@ -60,6 +62,105 @@ export function HomeScreen() {
       setLoading(false);
     }
   }, [state.accessToken]);
+
+  const createAiRecoFromBehavior = useCallback(async () => {
+    const token = state.accessToken;
+    if (!token) {
+      toast('Not signed in');
+      return;
+    }
+
+    try {
+      const goalsResp = await authApi.listGoals(token);
+      const goals = goalsResp.goals ?? [];
+
+      const stepsByGoal: Array<{ goalId: string; goalTitle: string; completed: boolean; dueAt: string | null; steps: authApi.GoalStepItem[] }> = [];
+      for (const g of goals.slice(0, 12)) {
+        const stepResp = await authApi.listGoalSteps(token, g.id);
+        stepsByGoal.push({
+          goalId: g.id,
+          goalTitle: g.title,
+          completed: !!g.completed,
+          dueAt: g.dueAt ?? null,
+          steps: stepResp.steps ?? [],
+        });
+      }
+
+      const todaySteps = dash?.todaySteps ?? [];
+      const todayDone = todaySteps.filter(s => s.doneToday).length;
+      const todayTotal = todaySteps.length;
+
+      const summaryLines: string[] = [];
+      summaryLines.push(`Score=${dash?.score ?? 0}, tasksPlanned=${dash?.tasksPlanned ?? 0}`);
+      summaryLines.push(`Today steps done=${todayDone}/${todayTotal}`);
+      summaryLines.push('Goals snapshot:');
+      for (const g of stepsByGoal) {
+        const stepCount = g.steps.length;
+        const due = g.dueAt ? `due=${g.dueAt}` : 'no-due';
+        summaryLines.push(`- ${g.completed ? '[Completed]' : '[Active]'} ${g.goalTitle} (${due}, steps=${stepCount})`);
+        for (const s of g.steps.slice(0, 8)) {
+          const sched = s.dueAt ? `once:${s.dueAt.slice(0, 10)}` : s.repeat ? `repeat:${s.repeat}` : 'none';
+          summaryLines.push(`  * ${s.text} [${sched}]`);
+        }
+      }
+
+      const contextSummary = summaryLines.join('\n');
+      const prevRecos = await listRecommendations();
+      const recent = prevRecos
+        .filter(r => r.status === 'pending' || r.status === 'accepted' || r.status === 'rejected')
+        .slice(0, 5);
+      const avoidLines: string[] = [];
+      if (recent.length) {
+        avoidLines.push('Do NOT repeat the following previously recommended goals (choose a different goal topic and different steps):');
+        for (const r of recent) {
+          const t = String(r.suggestion?.title ?? '').trim();
+          const stepTxt = (r.suggestion?.steps ?? [])
+            .slice(0, 6)
+            .map(s => String(s.text ?? '').trim())
+            .filter(Boolean)
+            .join(' | ');
+          if (t) avoidLines.push(`- ${t}${stepTxt ? ` (steps: ${stepTxt})` : ''}`);
+        }
+      }
+
+      const prompt =
+        'You are a goal coach. Based on the user behavior summary below, suggest ONE new goal with steps. ' +
+        'The goal should be realistic and aligned with past completion patterns. Prefer measurable steps. ' +
+        'The suggestion should be novel compared to recent recommendations.\n\n' +
+        contextSummary +
+        (avoidLines.length ? `\n\n${avoidLines.join('\n')}` : '');
+
+      // Let backend AI decide the deadline; we omit deadline here.
+      const ai = await authApi.aiSuggestGoal(token, { prompt, intensity: 'Normal' });
+      if (!ai.ok) {
+        toast(ai.message || 'AI needs more info');
+        return;
+      }
+
+      const recoId = `reco_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+      await upsertRecommendation({
+        id: recoId,
+        createdAt: Date.now(),
+        status: 'pending',
+        suggestion: ai.suggestion,
+        contextSummary,
+      });
+
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: 'SmartGoal recommend a new goal',
+          body: ai.suggestion.title,
+          data: { type: 'ai_goal_reco', recoId },
+        },
+        trigger: null,
+      });
+
+      toast('SmartGoal recommendation created');
+      await loadInbox();
+    } catch (e: any) {
+      toast(String(e?.message ?? 'AI recommendation failed'));
+    }
+  }, [dash?.score, dash?.tasksPlanned, dash?.todaySteps, loadInbox, state.accessToken]);
 
   useFocusEffect(
     useCallback(() => {
@@ -317,6 +418,7 @@ export function HomeScreen() {
             <View style={styles.notifHeader}>
               <Text style={styles.notifTitle}>Notifications</Text>
               <View style={{ flexDirection: 'row', gap: 10 }}>
+                <Button title="New goal" small onPress={createAiRecoFromBehavior} />
                 <Button
                   title="Clear"
                   small
@@ -333,7 +435,17 @@ export function HomeScreen() {
               {notifLoading ? <Text style={styles.notifEmpty}>Loading…</Text> : null}
               {!notifLoading && notifItems.length === 0 ? <Text style={styles.notifEmpty}>No notifications yet.</Text> : null}
               {notifItems.map(n => (
-                <View key={n.id} style={styles.notifItem}>
+                <Pressable
+                  key={n.id}
+                  onPress={() => {
+                    const d: any = n.data;
+                    if (d?.type === 'ai_goal_reco' && d?.recoId) {
+                      setNotifOpen(false);
+                      (nav as any).navigate('AiGoalRecommendation', { id: String(d.recoId) });
+                    }
+                  }}
+                  style={({ pressed }) => [styles.notifItem, pressed ? { opacity: 0.9 } : null]}
+                >
                   <View style={styles.notifItemTopRow}>
                     <Text style={styles.notifItemTitle}>{n.title}</Text>
                     <Button
@@ -347,7 +459,7 @@ export function HomeScreen() {
                   </View>
                   {n.body ? <Text style={styles.notifItemBody}>{n.body}</Text> : null}
                   <Text style={styles.notifItemWhen}>{new Date(n.receivedAt).toLocaleString()}</Text>
-                </View>
+                </Pressable>
               ))}
             </ScrollView>
           </View>

@@ -5,6 +5,7 @@ type InboxItem = {
   receivedAt: number;
   title: string;
   body: string;
+  data?: Record<string, any> | null;
 };
 
 const KEY_INBOX = 'notif_inbox_v1';
@@ -21,6 +22,7 @@ function safeParse(raw: string | null): InboxItem[] {
         receivedAt: Number(x?.receivedAt ?? 0),
         title: String(x?.title ?? ''),
         body: String(x?.body ?? ''),
+        data: x?.data && typeof x.data === 'object' ? (x.data as any) : null,
       }))
       .filter(x => x.id && Number.isFinite(x.receivedAt));
   } catch {
@@ -42,6 +44,7 @@ export async function appendInbox(item: Omit<InboxItem, 'id'> & { id?: string })
     receivedAt: item.receivedAt,
     title: item.title,
     body: item.body,
+    data: item.data ?? null,
   };
 
   const prev = await getInbox();

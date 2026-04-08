@@ -6,6 +6,7 @@ export type RootStackParamList = {
   ScheduleWeek: undefined;
   NotificationList: undefined;
   NotificationSettings: undefined;
+  AiGoalRecommendation: { id: string };
 };
 
 export type TabsParamList = {

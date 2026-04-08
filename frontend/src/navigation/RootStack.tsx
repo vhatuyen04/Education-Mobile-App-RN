@@ -9,6 +9,7 @@ import { TodayDetailsScreen } from '../screens/TodayDetailsScreen';
 import { ScheduleWeekScreen } from '../screens/ScheduleWeekScreen';
 import { NotificationListScreen } from '../screens/NotificationListScreen';
 import { NotificationSettingsScreen } from '../screens/NotificationSettingsScreen';
+import { AiGoalRecommendationScreen } from '../screens/AiGoalRecommendationScreen';
 import { colors } from '../theme/colors';
 import { useAuth } from '../auth/AuthContext';
 
@@ -37,6 +38,7 @@ export function RootStack() {
           <Stack.Screen name="ScheduleWeek" component={ScheduleWeekScreen} options={{ title: 'Modify schedule', headerShown: false }} />
           <Stack.Screen name="NotificationList" component={NotificationListScreen} options={{ title: 'Notifications', headerShown: false }} />
           <Stack.Screen name="NotificationSettings" component={NotificationSettingsScreen} options={{ title: 'Notifications', headerShown: false }} />
+          <Stack.Screen name="AiGoalRecommendation" component={AiGoalRecommendationScreen} options={{ title: 'AI recommendation', headerShown: false }} />
         </>
       ) : (
         <Stack.Screen name="Auth" component={AuthStack} options={{ headerShown: false }} />

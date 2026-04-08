@@ -26,10 +26,12 @@ export default function App() {
     const subRecv = Notifications.addNotificationReceivedListener(n => {
       const title = String(n.request.content?.title ?? 'Notification');
       const body = String(n.request.content?.body ?? '');
+      const data = (n.request.content as any)?.data ?? null;
       void appendInbox({
         receivedAt: Date.now(),
         title,
         body,
+        data,
       });
     });
 
@@ -37,10 +39,12 @@ export default function App() {
       const content = r.notification.request.content;
       const title = String(content?.title ?? 'Notification');
       const body = String(content?.body ?? '');
+      const data = (content as any)?.data ?? null;
       void appendInbox({
         receivedAt: Date.now(),
         title,
         body,
+        data,
       });
     });
 
