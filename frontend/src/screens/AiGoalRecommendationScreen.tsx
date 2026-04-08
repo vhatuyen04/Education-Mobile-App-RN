@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 
 import { Screen } from '../components/Screen';
@@ -10,9 +10,103 @@ import { colors } from '../theme/colors';
 import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
-import { getRecommendation, setRecommendationStatus } from '../ai/recommendations';
+import { getRecommendation, setRecommendationStatus, upsertRecommendation } from '../ai/recommendations';
 
 type RouteParams = { id: string };
+
+type UiStep = {
+  id: string;
+  text: string;
+  scheduleText: string;
+};
+
+function makeId() {
+  return `rs_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function formatWeekday(d: number | undefined) {
+  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  if (d === undefined || d === null) return '';
+  const idx = Number(d);
+  if (!Number.isFinite(idx) || idx < 0 || idx > 6) return '';
+  return days[idx];
+}
+
+function parseWeekdayToken(token: string): number | null {
+  const t = token.trim().toLowerCase();
+  const map: Record<string, number> = { sun: 0, mon: 1, tue: 2, tues: 2, wed: 3, thu: 4, thur: 4, thurs: 4, fri: 5, sat: 6 };
+  if (t in map) return map[t];
+  const n = Number(t);
+  if (Number.isFinite(n) && n >= 0 && n <= 6) return n;
+  return null;
+}
+
+function scheduleToShortText(s?: authApi.AiGoalStepSchedule) {
+  if (!s || s.type === 'none') return '';
+  if (s.type === 'once') return `once:${s.due}`;
+  const r = (s.repeat ?? '').trim();
+  const rLower = r.toLowerCase();
+  if (rLower === 'daily') return 'daily';
+  if (rLower === 'weekly') return s.repeatDay !== undefined ? `weekly:${formatWeekday(s.repeatDay) || String(s.repeatDay)}` : 'weekly';
+  if (rLower === 'monthly') return s.repeatDay !== undefined ? `monthly:${String(s.repeatDay)}` : 'monthly';
+  if (rLower === 'yearly') {
+    const mm = s.repeatMonth !== undefined ? String(s.repeatMonth).padStart(2, '0') : '';
+    const dd = s.repeatDay !== undefined ? String(s.repeatDay).padStart(2, '0') : '';
+    return mm && dd ? `yearly:${mm}-${dd}` : 'yearly';
+  }
+  return `repeat:${r}`;
+}
+
+function parseScheduleShortText(input: string): authApi.AiGoalStepSchedule {
+  const raw = String(input ?? '').trim();
+  if (!raw) return { type: 'none' };
+
+  const lower = raw.toLowerCase();
+  if (lower.startsWith('once:')) {
+    const due = raw.slice(5).trim();
+    return { type: 'once', due };
+  }
+
+  if (lower === 'daily') return { type: 'repeat', repeat: 'daily' };
+
+  if (lower === 'weekly') return { type: 'repeat', repeat: 'weekly' };
+  if (lower.startsWith('weekly:')) {
+    const tok = raw.slice(7).trim();
+    const dow = parseWeekdayToken(tok);
+    return { type: 'repeat', repeat: 'weekly', ...(dow !== null ? { repeatDay: dow } : null) } as any;
+  }
+
+  if (lower === 'monthly') return { type: 'repeat', repeat: 'monthly' };
+  if (lower.startsWith('monthly:')) {
+    const tok = raw.slice(8).trim();
+    const day = Number(tok);
+    return { type: 'repeat', repeat: 'monthly', ...(Number.isFinite(day) ? { repeatDay: day } : null) } as any;
+  }
+
+  if (lower === 'yearly') return { type: 'repeat', repeat: 'yearly' };
+  if (lower.startsWith('yearly:')) {
+    const tok = raw.slice(7).trim();
+    const m = tok.match(/^(\d{1,2})\s*[-/.,]\s*(\d{1,2})$/);
+    if (m) {
+      const month = Number(m[1]);
+      const day = Number(m[2]);
+      return {
+        type: 'repeat',
+        repeat: 'yearly',
+        ...(Number.isFinite(month) ? { repeatMonth: month } : null),
+        ...(Number.isFinite(day) ? { repeatDay: day } : null),
+      } as any;
+    }
+    return { type: 'repeat', repeat: 'yearly' };
+  }
+
+  if (lower.startsWith('repeat:')) {
+    const repeat = raw.slice(7).trim();
+    return repeat ? { type: 'repeat', repeat } : { type: 'none' };
+  }
+
+  return { type: 'repeat', repeat: raw };
+}
 
 function parseDeadlineToISOEndOfDay(v: string): string | null {
   const raw = String(v ?? '').trim();
@@ -46,6 +140,9 @@ export function AiGoalRecommendationScreen() {
   const [loading, setLoading] = useState(false);
   const [rec, setRec] = useState<Awaited<ReturnType<typeof getRecommendation>>>(null);
 
+  const [deadlineDraft, setDeadlineDraft] = useState('');
+  const [stepsDraft, setStepsDraft] = useState<UiStep[]>([]);
+
   const load = useCallback(async () => {
     if (!recoId) return;
     const r = await getRecommendation(recoId);
@@ -56,7 +153,43 @@ export function AiGoalRecommendationScreen() {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    if (!rec) return;
+    setDeadlineDraft(String(rec.suggestion?.deadline ?? ''));
+    setStepsDraft(
+      (rec.suggestion?.steps ?? []).map(s => ({
+        id: makeId(),
+        text: String(s.text ?? ''),
+        scheduleText: scheduleToShortText(s.schedule),
+      }))
+    );
+  }, [rec?.id]);
+
   const steps = useMemo(() => rec?.suggestion?.steps ?? [], [rec]);
+
+  async function saveEdits() {
+    if (!rec) return;
+
+    const nextSteps: authApi.AiGoalStep[] = stepsDraft
+      .map(s => ({
+        text: s.text.trim(),
+        schedule: parseScheduleShortText(s.scheduleText),
+      }))
+      .filter(s => s.text);
+
+    const nextRec = {
+      ...rec,
+      suggestion: {
+        ...rec.suggestion,
+        deadline: deadlineDraft.trim(),
+        steps: nextSteps,
+      },
+    };
+
+    await upsertRecommendation(nextRec);
+    setRec(nextRec);
+    toast('Saved');
+  }
 
   async function accept() {
     if (!rec) return;
@@ -151,32 +284,47 @@ export function AiGoalRecommendationScreen() {
             <Pill>Deadline: {rec.suggestion.deadline}</Pill>
             <Pill>Status: {rec.status}</Pill>
           </View>
+
+          <View style={{ height: 12 }} />
+          <Text style={styles.label}>Edit deadline</Text>
+          <TextInput value={deadlineDraft} onChangeText={setDeadlineDraft} placeholder="YYYY-MM-DD" placeholderTextColor={colors.muted} style={styles.input} />
         </Card>
 
         <Card>
           <Text style={styles.sectionTitle}>Steps</Text>
           <View style={{ height: 10 }} />
-          {steps.length === 0 ? <Text style={styles.muted}>No steps.</Text> : null}
-          {steps.map((s, idx) => (
-            <View key={`${idx}_${s.text}`} style={styles.stepRow}>
+          {stepsDraft.length === 0 ? <Text style={styles.muted}>No steps.</Text> : null}
+          {stepsDraft.map((s, idx) => (
+            <View key={s.id} style={styles.stepEditRow}>
               <Text style={styles.stepNum}>{idx + 1}.</Text>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.stepText}>{s.text}</Text>
-                {s.schedule && s.schedule.type !== 'none' ? (
-                  <Text style={styles.mutedSmall}>
-                    {s.schedule.type === 'once'
-                      ? `Once: ${s.schedule.due}`
-                      : `Repeat: ${s.schedule.repeat}${s.schedule.repeatDay != null ? `, day=${s.schedule.repeatDay}` : ''}${
-                          s.schedule.repeatMonth != null ? `, month=${s.schedule.repeatMonth}` : ''
-                        }`}
-                  </Text>
-                ) : null}
+              <View style={{ flex: 1, gap: 8 }}>
+                <TextInput
+                  value={s.text}
+                  onChangeText={t => setStepsDraft(prev => prev.map(p => (p.id === s.id ? { ...p, text: t } : p)))}
+                  placeholder="Step"
+                  placeholderTextColor={colors.muted}
+                  style={styles.input}
+                />
+                <TextInput
+                  value={s.scheduleText}
+                  onChangeText={t => setStepsDraft(prev => prev.map(p => (p.id === s.id ? { ...p, scheduleText: t } : p)))}
+                  placeholder="daily | weekly:1 | monthly:15 | yearly:01-15 | once:2027-01-01"
+                  placeholderTextColor={colors.muted}
+                  style={styles.inputSmall}
+                />
+              </View>
+              <View style={{ gap: 8 }}>
+                <Button title="Remove" small onPress={() => setStepsDraft(prev => prev.filter(p => p.id !== s.id))} />
               </View>
             </View>
           ))}
+
+          <View style={{ height: 10 }} />
+          <Button title={'+ Add step'} full onPress={() => setStepsDraft(prev => [...prev, { id: makeId(), text: 'New step', scheduleText: '' }])} />
         </Card>
 
         <View style={{ gap: 10 }}>
+          <Button title="Save changes" full onPress={saveEdits} />
           <Button title={loading ? 'Accepting…' : 'Accept & add to my goals'} variant="primary" full onPress={accept} />
           <Button title="Reject" full onPress={reject} />
         </View>
@@ -220,6 +368,34 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '900',
   },
+  label: {
+    color: colors.text,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  input: {
+    width: '100%',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: colors.surface2,
+    color: colors.text,
+    fontWeight: '800',
+  },
+  inputSmall: {
+    width: '100%',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: colors.surface2,
+    color: colors.text,
+    fontWeight: '800',
+    fontSize: 12,
+  },
   muted: {
     color: colors.muted,
     fontSize: 12,
@@ -234,6 +410,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 10,
     marginTop: 10,
+  },
+  stepEditRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 10,
+    alignItems: 'flex-start',
   },
   stepNum: {
     color: colors.muted,
