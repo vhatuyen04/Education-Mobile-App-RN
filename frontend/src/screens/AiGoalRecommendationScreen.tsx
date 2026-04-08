@@ -10,7 +10,8 @@ import { colors } from '../theme/colors';
 import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
-import { getRecommendation, setRecommendationStatus, upsertRecommendation } from '../ai/recommendations';
+import { getRecommendation, removeRecommendation, upsertRecommendation } from '../ai/recommendations';
+import { removeInboxItemsByRecoId } from '../notifications/inbox';
 
 type RouteParams = { id: string };
 
@@ -239,7 +240,8 @@ export function AiGoalRecommendationScreen() {
         await authApi.createGoalStep(token, goalId, body);
       }
 
-      await setRecommendationStatus(rec.id, 'accepted');
+      await removeRecommendation(rec.id);
+      await removeInboxItemsByRecoId(rec.id);
       toast('Goal added');
       nav.goBack();
     } catch (e: any) {
@@ -251,7 +253,8 @@ export function AiGoalRecommendationScreen() {
 
   async function reject() {
     if (!rec) return;
-    await setRecommendationStatus(rec.id, 'rejected');
+    await removeRecommendation(rec.id);
+    await removeInboxItemsByRecoId(rec.id);
     toast('Rejected');
     nav.goBack();
   }
@@ -282,7 +285,6 @@ export function AiGoalRecommendationScreen() {
           <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
             <Pill>Field: {rec.suggestion.field}</Pill>
             <Pill>Deadline: {rec.suggestion.deadline}</Pill>
-            <Pill>Status: {rec.status}</Pill>
           </View>
 
           <View style={{ height: 12 }} />
@@ -328,14 +330,6 @@ export function AiGoalRecommendationScreen() {
           <Button title={loading ? 'Accepting…' : 'Accept & add to my goals'} variant="primary" full onPress={accept} />
           <Button title="Reject" full onPress={reject} />
         </View>
-
-        {rec.contextSummary ? (
-          <Card>
-            <Text style={styles.sectionTitle}>Why this was suggested</Text>
-            <View style={{ height: 10 }} />
-            <Text style={styles.mutedSmall}>{rec.contextSummary}</Text>
-          </Card>
-        ) : null}
       </ScrollView>
     </Screen>
   );

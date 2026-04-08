@@ -62,4 +62,11 @@ export async function removeInboxItem(id: string): Promise<void> {
   await AsyncStorage.setItem(KEY_INBOX, JSON.stringify(next));
 }
 
+export async function removeInboxItemsByRecoId(recoId: string): Promise<void> {
+  const prev = await getInbox();
+  const rid = String(recoId);
+  const next = prev.filter(x => String((x as any)?.data?.recoId ?? '') !== rid);
+  await AsyncStorage.setItem(KEY_INBOX, JSON.stringify(next));
+}
+
 export type { InboxItem };
