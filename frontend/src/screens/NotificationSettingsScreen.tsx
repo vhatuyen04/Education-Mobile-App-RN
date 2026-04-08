@@ -330,22 +330,6 @@ export function NotificationSettingsScreen() {
     []
   );
 
-  const saveBeforeV4 = useCallback(
-    async (v: { event: CompoundBefore; goal: CompoundBefore; step: CompoundBefore }) => {
-      await AsyncStorage.setItem(KEY_EVENT_BEFORE, JSON.stringify(clampCompoundBefore(v.event)));
-      await AsyncStorage.setItem(KEY_GOAL_BEFORE, JSON.stringify(clampCompoundBefore(v.goal)));
-      await AsyncStorage.setItem(KEY_STEP_BEFORE, JSON.stringify(clampCompoundBefore(v.step)));
-
-      // Keep writing older keys so older builds don't break completely
-      await saveOffsetsV2({
-        event: { value: clampCompoundBefore(v.event).minutes || DEFAULT_EVENT_OFFSET_VALUE, unit: 'minutes' },
-        goal: { value: clampCompoundBefore(v.goal).days || DEFAULT_GOAL_OFFSET_VALUE, unit: 'days' },
-        step: { value: clampCompoundBefore(v.step).hours || DEFAULT_STEP_OFFSET_VALUE, unit: 'hours' },
-      });
-    },
-    [saveOffsetsV2]
-  );
-
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -541,6 +525,22 @@ export function NotificationSettingsScreen() {
       });
     },
     [saveOffsets]
+  );
+
+  const saveBeforeV4 = useCallback(
+    async (v: { event: CompoundBefore; goal: CompoundBefore; step: CompoundBefore }) => {
+      await AsyncStorage.setItem(KEY_EVENT_BEFORE, JSON.stringify(clampCompoundBefore(v.event)));
+      await AsyncStorage.setItem(KEY_GOAL_BEFORE, JSON.stringify(clampCompoundBefore(v.goal)));
+      await AsyncStorage.setItem(KEY_STEP_BEFORE, JSON.stringify(clampCompoundBefore(v.step)));
+
+      // Keep writing older keys so older builds don't break completely
+      await saveOffsetsV2({
+        event: { value: clampCompoundBefore(v.event).minutes || DEFAULT_EVENT_OFFSET_VALUE, unit: 'minutes' },
+        goal: { value: clampCompoundBefore(v.goal).days || DEFAULT_GOAL_OFFSET_VALUE, unit: 'days' },
+        step: { value: clampCompoundBefore(v.step).hours || DEFAULT_STEP_OFFSET_VALUE, unit: 'hours' },
+      });
+    },
+    [saveOffsetsV2]
   );
 
   const cancelDaily = useCallback(async () => {
