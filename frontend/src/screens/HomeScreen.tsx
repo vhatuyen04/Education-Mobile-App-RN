@@ -172,7 +172,7 @@ export function HomeScreen() {
     }, [refresh])
   );
 
-  const score = localProgress?.smartGoalPoints ?? 0;
+  const score = dash?.score ?? 0;
   const tasksPlanned = dash?.tasksPlanned ?? 0;
   const nextGoal = dash?.nextGoal ?? null;
   const nextEvent = dash?.nextEvent ?? null;
@@ -478,7 +478,11 @@ export function HomeScreen() {
         </View>
       </Modal>
 
-      <Pressable onPress={() => setAiOpen(true)} style={({ pressed }) => [styles.fab, pressed ? { opacity: 0.9 } : null]}>
+      <Pressable
+        onPress={() => setAiOpen(true)}
+        accessibilityLabel="Open SmartGoal Planner"
+        style={({ pressed }) => [styles.fab, pressed ? { opacity: 0.9 } : null]}
+      >
         <Text style={styles.fabText}>✨</Text>
       </Pressable>
     </Screen>

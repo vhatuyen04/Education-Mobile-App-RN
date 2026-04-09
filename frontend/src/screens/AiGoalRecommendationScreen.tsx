@@ -219,6 +219,7 @@ export function AiGoalRecommendationScreen() {
       const created = await authApi.createGoal(token, {
         title,
         description: 'AI recommended goal',
+        rankField: rec.suggestion.field,
         dueAt: dueIso,
       });
 

@@ -191,18 +191,18 @@ function addRepeatInterval(date: Date, repeat: string) {
   return d;
 }
 
-function inferRankFieldFromText(text: string): 'Sport' | 'Academy' | 'Entertainment' {
-  const t = (text || '').toLowerCase();
-  if (t.includes('gym') || t.includes('run') || t.includes('basket') || t.includes('swim') || t.includes('fitness')) return 'Sport';
-  if (t.includes('thesis') || t.includes('study') || t.includes('exam') || t.includes('database') || t.includes('ielts')) return 'Academy';
-  if (t.includes('game') || t.includes('lol') || t.includes('movie') || t.includes('music')) return 'Entertainment';
-  return 'Academy';
-}
-
 function scoreFieldForRankField(field: 'Sport' | 'Academy' | 'Entertainment') {
   if (field === 'Sport') return 'sportScore';
   if (field === 'Entertainment') return 'entertainmentScore';
   return 'academyScore';
+}
+
+function inferRankFieldFromDescription(desc: string | null | undefined): 'Sport' | 'Academy' | 'Entertainment' | null {
+  const t = (desc || '').toLowerCase();
+  if (t.includes('field:sport') || t.includes('field: sport')) return 'Sport';
+  if (t.includes('field:entertainment') || t.includes('field: entertainment')) return 'Entertainment';
+  if (t.includes('field:academy') || t.includes('field: academy')) return 'Academy';
+  return null;
 }
 
 async function refreshLeaderboardTop(field: 'Sport' | 'Academy' | 'Entertainment') {
@@ -636,7 +636,7 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
 
   const user = await prismaAny.user.findUnique({
     where: { id: userId },
-    select: { id: true, email: true, name: true, score: true },
+    select: { id: true, email: true, name: true, sportScore: true, academyScore: true, entertainmentScore: true },
   });
 
   if (!user) {
@@ -650,7 +650,7 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
   const nextGoalWithDue = await prismaAny.goal.findFirst({
     where: { userId, completed: false, dueAt: { not: null } },
     orderBy: [{ dueAt: 'asc' }, { createdAt: 'asc' }],
-    select: { id: true, title: true, description: true, progressPct: true, dueAt: true, createdAt: true },
+    select: { id: true, title: true, description: true, rankField: true, progressPct: true, dueAt: true, createdAt: true },
   });
 
   const nextGoal =
@@ -658,7 +658,7 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
     (await prismaAny.goal.findFirst({
       where: { userId, completed: false },
       orderBy: [{ createdAt: 'asc' }],
-      select: { id: true, title: true, description: true, progressPct: true, dueAt: true, createdAt: true },
+      select: { id: true, title: true, description: true, rankField: true, progressPct: true, dueAt: true, createdAt: true },
     }));
 
   // Compute progress for nextGoal:
@@ -812,12 +812,12 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
   const todayGoals = await prismaAny.goal.findMany({
     where: { userId, completed: false, dueAt: { gte: startOfDay, lte: endOfDay } },
     orderBy: [{ dueAt: 'asc' }, { createdAt: 'asc' }],
-    select: { id: true, title: true, description: true, progressPct: true, dueAt: true },
+    select: { id: true, title: true, description: true, rankField: true, progressPct: true, dueAt: true },
     take: 20,
   });
 
   return res.json({
-    score: user.score ?? 0,
+    score: Number(user.sportScore ?? 0) + Number(user.academyScore ?? 0) + Number(user.entertainmentScore ?? 0),
     tasksPlanned: tasksPlanned + todaySteps.length,
     nextGoal: computedNextGoal,
     nextEvent,
@@ -1071,10 +1071,11 @@ authRouter.post('/goals', async (req: Request, res: Response) => {
       userId,
       title,
       description: parsed.data.description ?? null,
+      rankField: parsed.data.rankField ?? null,
       progressPct: parsed.data.progressPct ?? 0,
       dueAt: parsed.data.dueAt ? new Date(parsed.data.dueAt) : null,
     },
-    select: { id: true, title: true, description: true, progressPct: true, dueAt: true, completed: true },
+    select: { id: true, title: true, description: true, rankField: true, progressPct: true, dueAt: true, completed: true },
   });
 
   return res.status(201).json({ goal });
@@ -1096,7 +1097,7 @@ authRouter.get('/goals', async (req: Request, res: Response) => {
   const goals = await prismaAny.goal.findMany({
     where: { userId },
     orderBy: [{ completed: 'asc' }, { dueAt: 'asc' }, { createdAt: 'asc' }],
-    select: { id: true, title: true, description: true, progressPct: true, dueAt: true, completed: true },
+    select: { id: true, title: true, description: true, rankField: true, progressPct: true, dueAt: true, completed: true },
     take: 200,
   });
 
@@ -1119,7 +1120,7 @@ authRouter.get('/goals/:id', async (req: Request, res: Response) => {
   const id = String(req.params.id);
   const goal = await prismaAny.goal.findFirst({
     where: { id, userId },
-    select: { id: true, title: true, description: true, progressPct: true, dueAt: true, completed: true },
+    select: { id: true, title: true, description: true, rankField: true, progressPct: true, dueAt: true, completed: true },
   });
 
   if (!goal) {
@@ -1148,7 +1149,7 @@ authRouter.put('/goals/:id', async (req: Request, res: Response) => {
   }
 
   const id = String(req.params.id);
-  const existing = await prismaAny.goal.findFirst({ where: { id, userId }, select: { id: true, title: true, completed: true } });
+  const existing = await prismaAny.goal.findFirst({ where: { id, userId }, select: { id: true, description: true, rankField: true, completed: true } });
   if (!existing) {
     return res.status(404).json({ error: 'Not found' });
   }
@@ -1156,9 +1157,15 @@ authRouter.put('/goals/:id', async (req: Request, res: Response) => {
   const data: any = {};
   if (parsed.data.title !== undefined) data.title = parsed.data.title.trim();
   if (parsed.data.description !== undefined) data.description = parsed.data.description;
+  if ((parsed.data as any).rankField !== undefined) data.rankField = (parsed.data as any).rankField;
   if (parsed.data.progressPct !== undefined) data.progressPct = parsed.data.progressPct;
   if (parsed.data.dueAt !== undefined) data.dueAt = parsed.data.dueAt ? new Date(parsed.data.dueAt) : null;
   if (parsed.data.completed !== undefined) data.completed = parsed.data.completed;
+
+  if (data.rankField === undefined && !existing.rankField) {
+    const inferred = inferRankFieldFromDescription(existing.description);
+    if (inferred) data.rankField = inferred;
+  }
 
   if (data.title !== undefined && !data.title) {
     return res.status(400).json({ error: 'Invalid payload' });
@@ -1168,21 +1175,19 @@ authRouter.put('/goals/:id', async (req: Request, res: Response) => {
   const goal = await prismaAny.goal.update({
     where: { id },
     data,
-    select: { id: true, title: true, description: true, progressPct: true, dueAt: true, completed: true },
+    select: { id: true, title: true, description: true, rankField: true, progressPct: true, dueAt: true, completed: true },
   });
 
-  if (willComplete) {
-    const field = inferRankFieldFromText(existing.title);
-    const scoreField = scoreFieldForRankField(field);
+  if (willComplete && existing.rankField) {
+    const scoreField = scoreFieldForRankField(existing.rankField);
     await prismaAny.user.update({
       where: { id: userId },
       data: {
-        score: { increment: 1 },
         [scoreField]: { increment: 1 },
       },
       select: { id: true },
     });
-    await refreshLeaderboardTop(field);
+    await refreshLeaderboardTop(existing.rankField);
   }
 
   return res.json({ goal });
@@ -1253,6 +1258,52 @@ authRouter.get('/leaderboard', async (req: Request, res: Response) => {
   );
 
   return res.json({ leaderboards });
+});
+
+authRouter.post('/recompute-scores', async (req: Request, res: Response) => {
+  const token = getAccessTokenFromReq(req);
+  if (!token) {
+    return res.status(401).json({ error: 'Missing access token' });
+  }
+
+  let userId: string;
+  try {
+    userId = verifyAccessToken(token).sub;
+  } catch {
+    return res.status(401).json({ error: 'Invalid access token' });
+  }
+
+  const completed = await prismaAny.goal.findMany({
+    where: { userId, completed: true },
+    select: { description: true, rankField: true },
+    take: 500,
+  });
+
+  let sportScore = 0;
+  let academyScore = 0;
+  let entertainmentScore = 0;
+
+  for (const g of completed as any[]) {
+    if (!g.rankField) continue;
+    if (g.rankField === 'Sport') sportScore += 1;
+    else if (g.rankField === 'Entertainment') entertainmentScore += 1;
+    else academyScore += 1;
+  }
+
+  await prismaAny.user.update({
+    where: { id: userId },
+    data: {
+      sportScore,
+      academyScore,
+      entertainmentScore,
+    },
+    select: { id: true },
+  });
+
+  const fields: Array<'Sport' | 'Academy' | 'Entertainment'> = ['Sport', 'Academy', 'Entertainment'];
+  await Promise.all(fields.map(f => refreshLeaderboardTop(f)));
+
+  return res.json({ ok: true, sportScore, academyScore, entertainmentScore, score: sportScore + academyScore + entertainmentScore });
 });
 
 authRouter.get('/leaderboard/field', async (req: Request, res: Response) => {

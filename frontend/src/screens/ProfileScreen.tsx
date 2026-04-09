@@ -255,6 +255,14 @@ export function ProfileScreen() {
               </View>
               <Button title="Open" small onPress={() => nav.navigate('NotificationSettings')} />
             </View>
+
+            <View style={styles.item}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.name}>Progress</Text>
+                <Text style={styles.meta}>Graphs & achievements</Text>
+              </View>
+              <Button title="Open" small onPress={() => nav.navigate('Progress')} />
+            </View>
           </View>
 
           <View style={styles.divider} />

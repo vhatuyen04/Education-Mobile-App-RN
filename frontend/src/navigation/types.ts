@@ -7,6 +7,7 @@ export type RootStackParamList = {
   NotificationList: undefined;
   NotificationSettings: undefined;
   AiGoalRecommendation: { id: string };
+  Progress: undefined;
 };
 
 export type TabsParamList = {

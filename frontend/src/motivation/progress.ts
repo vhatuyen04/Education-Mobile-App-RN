@@ -4,6 +4,7 @@ export type LocalProgress = {
   xp: number;
   level: number;
   smartGoalPoints: number;
+  pointsHistory: Array<{ ymd: string; points: number }>;
   goalStreakDays: number;
   lastGoalCompletedYmd: string | null;
 };
@@ -31,18 +32,26 @@ function computeLevel(xp: number) {
 
 export async function getLocalProgress(): Promise<LocalProgress> {
   const raw = await AsyncStorage.getItem(KEY);
-  if (!raw) return { xp: 0, level: 1, smartGoalPoints: 0, goalStreakDays: 0, lastGoalCompletedYmd: null };
+  if (!raw) {
+    return { xp: 0, level: 1, smartGoalPoints: 0, pointsHistory: [], goalStreakDays: 0, lastGoalCompletedYmd: null };
+  }
   try {
     const parsed = JSON.parse(raw) as Partial<LocalProgress>;
     const xp = Number(parsed.xp ?? 0);
     const smartGoalPoints = Number((parsed as any).smartGoalPoints ?? 0);
+    const rawHist = (parsed as any).pointsHistory as unknown;
+    const pointsHistory = Array.isArray(rawHist)
+      ? rawHist
+          .map(v => ({ ymd: String((v as any)?.ymd ?? ''), points: Number((v as any)?.points ?? 0) }))
+          .filter(x => x.ymd && Number.isFinite(x.points))
+      : [];
     const goalStreakDays = Number((parsed as any).goalStreakDays ?? 0);
     const lastGoalCompletedYmd =
       typeof (parsed as any).lastGoalCompletedYmd === 'string' ? ((parsed as any).lastGoalCompletedYmd as string) : null;
     const level = computeLevel(xp);
-    return { xp, level, smartGoalPoints, goalStreakDays, lastGoalCompletedYmd };
+    return { xp, level, smartGoalPoints, pointsHistory, goalStreakDays, lastGoalCompletedYmd };
   } catch {
-    return { xp: 0, level: 1, smartGoalPoints: 0, goalStreakDays: 0, lastGoalCompletedYmd: null };
+    return { xp: 0, level: 1, smartGoalPoints: 0, pointsHistory: [], goalStreakDays: 0, lastGoalCompletedYmd: null };
   }
 }
 
@@ -53,6 +62,7 @@ export async function setLocalProgress(p: LocalProgress) {
       xp: p.xp,
       level: computeLevel(p.xp),
       smartGoalPoints: p.smartGoalPoints,
+      pointsHistory: p.pointsHistory,
       goalStreakDays: p.goalStreakDays,
       lastGoalCompletedYmd: p.lastGoalCompletedYmd,
     })
@@ -89,6 +99,16 @@ export async function applyGoalCompletedBonus(opts?: { now?: Date }): Promise<Pr
   const xp = prev.xp + xpDelta;
   const smartGoalPoints = (prev.smartGoalPoints ?? 0) + 1;
 
+  const prevHist = Array.isArray(prev.pointsHistory) ? prev.pointsHistory : [];
+  const filtered = prevHist.filter(x => x && typeof x.ymd === 'string' && x.ymd);
+  const last = filtered[filtered.length - 1] ?? null;
+  let pointsHistory = filtered;
+  if (last?.ymd === today) {
+    pointsHistory = [...filtered.slice(0, -1), { ymd: today, points: smartGoalPoints }];
+  } else {
+    pointsHistory = [...filtered, { ymd: today, points: smartGoalPoints }];
+  }
+
   let goalStreakDays = prev.goalStreakDays;
   let lastGoalCompletedYmd = prev.lastGoalCompletedYmd;
   let goalStreakChanged = false;
@@ -109,7 +129,7 @@ export async function applyGoalCompletedBonus(opts?: { now?: Date }): Promise<Pr
     goalStreakChanged = true;
   }
 
-  const next: LocalProgress = { xp, level: computeLevel(xp), smartGoalPoints, goalStreakDays, lastGoalCompletedYmd };
+  const next: LocalProgress = { xp, level: computeLevel(xp), smartGoalPoints, pointsHistory, goalStreakDays, lastGoalCompletedYmd };
   await setLocalProgress(next);
   return { type: 'goal_completed', xpDelta, newProgress: next, goalStreakChanged };
 }

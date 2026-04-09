@@ -170,12 +170,14 @@ export type DashboardGoal = {
   progressPct: number;
   todayPct?: number | null;
   dueAt: string | null;
+  rankField?: LeaderboardField | null;
 } | null;
 
 export type GoalItem = {
   id: string;
   title: string;
   description?: string | null;
+  rankField?: LeaderboardField | null;
   progressPct: number;
   dueAt: string | null;
   completed: boolean;
@@ -289,9 +291,19 @@ export async function getGoal(accessToken: string, id: string): Promise<{ goal: 
 
 export async function createGoal(
   accessToken: string,
-  body: { title: string; description?: string | null; progressPct?: number; dueAt?: string }
+  body: { title: string; description?: string | null; rankField?: LeaderboardField; progressPct?: number; dueAt?: string }
 ): Promise<{ goal: GoalItem }> {
   return postJsonAuth<{ goal: GoalItem }>('/auth/goals', body, accessToken);
+}
+
+export async function recomputeScores(
+  accessToken: string
+): Promise<{ ok: true; sportScore: number; academyScore: number; entertainmentScore: number; score: number }> {
+  return postJsonAuth<{ ok: true; sportScore: number; academyScore: number; entertainmentScore: number; score: number }>(
+    '/auth/recompute-scores',
+    {},
+    accessToken
+  );
 }
 
 export async function createGoalStep(
@@ -352,7 +364,7 @@ export async function deleteGoalStep(
 export async function updateGoal(
   accessToken: string,
   id: string,
-  body: { title?: string; description?: string | null; progressPct?: number; dueAt?: string | null; completed?: boolean }
+  body: { title?: string; description?: string | null; rankField?: LeaderboardField | null; progressPct?: number; dueAt?: string | null; completed?: boolean }
 ): Promise<{ goal: GoalItem }> {
   return putJsonAuth<{ goal: GoalItem }>(`/auth/goals/${id}`, body, accessToken);
 }

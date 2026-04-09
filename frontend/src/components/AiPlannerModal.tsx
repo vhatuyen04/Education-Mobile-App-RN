@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { colors } from '../theme/colors';
@@ -17,6 +17,105 @@ type Props = {
   onClose: () => void;
   onSaved?: () => void;
 };
+
+function normStepText(t: unknown) {
+  return String(t ?? '')
+    // Strip common invisible/format characters that make a step look blank.
+    .replace(
+      /[\u00A0\u180E\u2000-\u200F\u202A-\u202E\u202F\u205F\u2060\u2066-\u2069\u200B\u200C\u200D\u2007\u3000\u2800\u3164\uFEFF]/g,
+      ' '
+    )
+    .replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isScheduleTemplateText(t: unknown) {
+  const s = normStepText(t);
+  if (!s) return false;
+  const lower = s.toLowerCase();
+  const hasScheduleTokens =
+    lower.includes('daily') || lower.includes('weekly') || lower.includes('monthly') || lower.includes('yearly') || lower.includes('once');
+  if (!hasScheduleTokens) return false;
+
+  // Remove schedule keywords + common schedule payload; if nothing meaningful remains, it's just a template.
+  const remainder = lower
+    .replace(/daily/g, '')
+    .replace(/weekly/g, '')
+    .replace(/monthly/g, '')
+    .replace(/yearly/g, '')
+    .replace(/once/g, '')
+    .replace(/[:]/g, '')
+    .replace(/[0-9\-|/.,]/g, '')
+    .replace(/\b(mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)\b/g, '')
+    .replace(/\s+/g, '')
+    .replace(/[|｜¦∣]/g, '');
+
+  return remainder.length === 0;
+}
+
+function isMeaningfulStepText(t: unknown) {
+  const s = normStepText(t);
+  if (!s) return false;
+  // If AI outputs a schedule template (uses pipe separators), it's not a real step.
+  if (/[|｜¦∣]/.test(s)) return false;
+  if (isScheduleTemplateText(s)) return false;
+  // If AI accidentally returns a schedule string as the step text, hide it.
+  // Example: "daily | weekly:Mon | monthly:15 | yearly:01-15 | once:2026-06-06"
+  const lower = s.toLowerCase();
+  const hasScheduleTokens =
+    lower.includes('daily') || lower.includes('weekly:') || lower.includes('monthly:') || lower.includes('yearly:') || lower.includes('once:');
+  if (hasScheduleTokens) {
+    const stripped = lower
+      .replace(/daily/g, '')
+      .replace(/weekly:/g, '')
+      .replace(/monthly:/g, '')
+      .replace(/yearly:/g, '')
+      .replace(/once:/g, '')
+      .replace(/[0-9\-|:/.]/g, '')
+      .replace(/\b(mon|tue|wed|thu|fri|sat|sun)\b/g, '')
+      .replace(/\s+/g, '')
+      .replace(/\|/g, '');
+    // If nothing remains besides schedule tokens, it's not a real step description.
+    if (!/[a-z]/i.test(stripped)) return false;
+  }
+
+  // Require at least one alphabetic character to avoid rendering garbage like only numbers/symbols.
+  return /[a-z]/i.test(s);
+}
+
+function sanitizePlannerSteps(input: Array<Step & { schedule?: authApi.AiGoalStepSchedule }>) {
+  const out = (Array.isArray(input) ? input : [])
+    .map(s => {
+      const text = normStepText(s.text);
+      if (!text) return null;
+
+      const schedule = s.schedule;
+
+      // If schedule is a placeholder/template string, drop it.
+      if (schedule && schedule.type === 'repeat') {
+        const rep = String((schedule as any).repeat ?? '').trim();
+        const repLower = rep.toLowerCase();
+        const tokenHits = [
+          repLower.includes('daily'),
+          repLower.includes('weekly'),
+          repLower.includes('monthly'),
+          repLower.includes('yearly'),
+          repLower.includes('once'),
+        ].filter(Boolean).length;
+
+        // If it looks like the AI "options" template (contains multiple schedule tokens), treat as none.
+        if (/[|｜¦∣]/.test(rep) || tokenHits >= 2) {
+          return { ...s, text, schedule: { type: 'none' } as authApi.AiGoalStepSchedule };
+        }
+      }
+
+      return { ...s, text, schedule };
+    })
+    .filter(Boolean) as Array<Step & { schedule?: authApi.AiGoalStepSchedule }>;
+
+  return out.filter(s => isMeaningfulStepText(s.text));
+}
 
 function makeId() {
   return `s_${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -43,6 +142,16 @@ function scheduleToShortText(s?: authApi.AiGoalStepSchedule) {
   if (!s || s.type === 'none') return '';
   if (s.type === 'once') return `once:${s.due}`;
   const r = (s.repeat ?? '').trim();
+  // Drop AI placeholder/template schedule strings.
+  const rLowerAll = r.toLowerCase();
+  const tokenHits = [
+    rLowerAll.includes('daily'),
+    rLowerAll.includes('weekly'),
+    rLowerAll.includes('monthly'),
+    rLowerAll.includes('yearly'),
+    rLowerAll.includes('once'),
+  ].filter(Boolean).length;
+  if (/[|｜¦∣]/.test(r) || tokenHits >= 2) return '';
   const rLower = r.toLowerCase();
   if (rLower === 'daily') return 'daily';
   if (rLower === 'weekly') return s.repeatDay !== undefined ? `weekly:${formatWeekday(s.repeatDay) || String(s.repeatDay)}` : 'weekly';
@@ -58,6 +167,9 @@ function scheduleToShortText(s?: authApi.AiGoalStepSchedule) {
 function parseScheduleShortText(input: string): authApi.AiGoalStepSchedule {
   const raw = String(input ?? '').trim();
   if (!raw) return { type: 'none' };
+
+  // Reject the placeholder/template string format ("daily | weekly:Mon | ...").
+  if (/[|｜¦∣]/.test(raw)) return { type: 'none' };
 
   const lower = raw.toLowerCase();
   if (lower.startsWith('once:')) {
@@ -246,6 +358,11 @@ function normalizeAiStepSchedule(schedule: authApi.AiGoalStepSchedule | undefine
   if (!schedule) return schedule;
   if (schedule.type !== 'repeat') return schedule;
 
+  // Sometimes AI returns multiple schedule options as one string ("daily | weekly:Mon | ...").
+  // Treat that as invalid/no schedule.
+  const rawRepeat = String((schedule as any).repeat ?? '').trim();
+  if (!rawRepeat || /[|｜¦∣]/.test(rawRepeat)) return { type: 'none' } as any;
+
   const dl = parseYmd(deadlineYmd) ?? parseDmy(deadlineYmd);
   if (!dl) return schedule;
 
@@ -338,7 +455,8 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
   const [goalDeadline, setGoalDeadline] = useState('');
   const [steps, setSteps] = useState<Array<Step & { schedule?: authApi.AiGoalStepSchedule }>>([]);
 
-  const stepCount = steps.length;
+  const displaySteps = useMemo(() => sanitizePlannerSteps(steps), [steps]);
+  const stepCount = displaySteps.length;
 
   const templates = useMemo(
     () => [
@@ -359,6 +477,11 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
     setAiHelp(null);
     setDirty(false);
   }
+
+  const closeAndReset = useCallback(() => {
+    resetGenerated();
+    onClose();
+  }, [onClose, resetGenerated]);
 
   async function resolveDeadlineForPlan(override?: string): Promise<string | null> {
     const input = String(override ?? deadline ?? '').trim();
@@ -436,6 +559,23 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
     const raw = v.trim();
     if (!raw) return null;
 
+    // Accept ISO datetime strings too.
+    if (raw.includes('T')) {
+      const iso = new Date(raw);
+      if (!Number.isNaN(iso.getTime())) {
+        iso.setHours(23, 59, 59, 999);
+
+        if (opts?.mustBeFuture) {
+          const now = new Date();
+          const today0 = new Date(now);
+          today0.setHours(0, 0, 0, 0);
+          if (iso.getTime() < today0.getTime()) return null;
+        }
+
+        return iso.toISOString();
+      }
+    }
+
     const parsed = parseYmd(raw) ?? parseDmy(raw);
     if (!parsed) return null;
     const d = new Date(parsed);
@@ -444,7 +584,9 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
 
     if (opts?.mustBeFuture) {
       const now = new Date();
-      if (d.getTime() < now.getTime()) return null;
+      const today0 = new Date(now);
+      today0.setHours(0, 0, 0, 0);
+      if (d.getTime() < today0.getTime()) return null;
     }
 
     return d.toISOString();
@@ -495,18 +637,16 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
       setGoalField(resp.suggestion.field);
       setGoalDeadline(resp.suggestion.deadline || resolvedDeadline);
       const effectiveDeadline = resp.suggestion.deadline || resolvedDeadline;
-      setSteps(
-        resp.suggestion.steps
-          .map(s => ({
-            id: makeId(),
-            text: String(s.text ?? ''),
-            schedule: normalizeAiStepSchedule(s.schedule, effectiveDeadline),
-          }))
-          .filter(s => s.text.trim().length > 0)
-      );
+      const mapped = resp.suggestion.steps.map(s => ({
+        id: makeId(),
+        text: s.text,
+        schedule: normalizeAiStepSchedule(s.schedule, effectiveDeadline),
+      }));
+      const sanitized = sanitizePlannerSteps(mapped);
+      setSteps(sanitized);
       setGenerated(true);
       setDirty(false);
-      toast('AI suggestions ready');
+      toast('SmartGoal suggestion ready');
     } catch (e: any) {
       toast(String(e?.message ?? 'AI failed'));
     } finally {
@@ -516,7 +656,8 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
 
   async function save() {
     const title = goalTitle.trim();
-    const stepTexts = steps.map(s => s.text.trim()).filter(Boolean);
+    const nonEmptySteps = sanitizePlannerSteps(steps);
+    const stepTexts = nonEmptySteps.map(s => s.text);
     if (!title) {
       toast('Goal title is required');
       return;
@@ -544,34 +685,42 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
         return;
       }
 
-      const created = await authApi.createGoal(token, { title, description: planText.trim() ? planText.trim() : null, dueAt: dueIso });
+      const created = await authApi.createGoal(token, {
+        title,
+        description: planText.trim() ? planText.trim() : null,
+        rankField: goalField,
+        dueAt: dueIso,
+      });
 
       const goalId = created.goal.id;
       await markAppGoal(goalId);
 
-      const scheduledSteps = steps
+      const allSteps = nonEmptySteps
         .map((s, idx) => ({ s, idx, text: s.text.trim() }))
-        .filter(x => x.text)
-        .filter(x => x.s.schedule && x.s.schedule.type !== 'none');
+        .filter(x => x.text);
 
-      for (const { s, idx, text } of scheduledSteps) {
-        const schedule = s.schedule as authApi.AiGoalStepSchedule;
+      for (const { s, idx, text } of allSteps) {
+        const schedule = (s.schedule ?? { type: 'none' }) as authApi.AiGoalStepSchedule;
         const body: any = { text, order: idx };
+
         if (schedule.type === 'once') {
           const d = parseYmd(schedule.due);
-          if (!d) continue;
-          d.setHours(23, 59, 59, 999);
-          body.dueAt = d.toISOString();
+          if (d) {
+            d.setHours(23, 59, 59, 999);
+            body.dueAt = d.toISOString();
+          }
         } else if (schedule.type === 'repeat') {
           body.repeat = schedule.repeat;
           body.repeatDay = schedule.repeatDay ?? null;
           body.repeatMonth = schedule.repeatMonth ?? null;
         }
+
         await authApi.createGoalStep(token, goalId, body);
       }
 
       toast('Saved');
       onSaved?.();
+      resetGenerated();
       onClose();
     } catch (e: any) {
       toast(String(e?.message ?? 'Save failed'));
@@ -581,14 +730,14 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
   }
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={closeAndReset}>
       <View style={styles.backdrop}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <Pressable style={StyleSheet.absoluteFill} onPress={closeAndReset} />
 
         <View style={styles.sheet}>
           <View style={styles.sheetHead}>
-            <Text style={styles.sheetTitle}>AI Planner</Text>
-            <Pressable onPress={onClose} hitSlop={10}>
+            <Text style={styles.sheetTitle}>SmartGoal Planner</Text>
+            <Pressable onPress={closeAndReset} hitSlop={10}>
               <Text style={styles.close}>✕</Text>
             </Pressable>
           </View>
@@ -713,13 +862,13 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
 
                   <View style={{ marginTop: 10 }}>
                     <View style={{ gap: 10 }}>
-                      {steps.map((s, idx) => (
+                      {displaySteps.map((s, idx) => (
                         <View key={s.id} style={styles.stepItemRow}>
                           <Text style={styles.stepNum}>{idx + 1}.</Text>
-                          <Text style={styles.stepItemText}>
-                            {s.text}
-                          </Text>
-                          <View style={{ gap: 6, alignItems: 'flex-end' }}>
+                          <View style={styles.stepTextCol}>
+                            <Text style={styles.stepItemText}>{s.text}</Text>
+                          </View>
+                          <View style={styles.stepScheduleCol}>
                             <TextInput
                               value={scheduleToShortText(s.schedule)}
                               onChangeText={t => {
@@ -732,7 +881,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
                               }}
                               placeholder="daily | weekly:Mon | monthly:15 | yearly:01-15 | once:2027-01-01"
                               placeholderTextColor={colors.muted}
-                              style={[styles.input, { paddingVertical: 6, paddingHorizontal: 8, minWidth: 160 }]}
+                              style={[styles.input, styles.stepScheduleInput]}
                             />
                             <Text style={styles.mutedSmall}>Optional. Leave empty to ignore.</Text>
                           </View>
@@ -952,11 +1101,27 @@ const styles = StyleSheet.create({
     paddingTop: 1,
   },
   stepItemText: {
-    flex: 1,
     color: colors.text,
     fontSize: 13,
     fontWeight: '800',
     lineHeight: 18,
+  },
+  stepTextCol: {
+    flex: 1,
+    minWidth: 0,
+  },
+  stepScheduleCol: {
+    gap: 6,
+    alignItems: 'flex-end',
+    flexShrink: 1,
+    maxWidth: 170,
+  },
+  stepScheduleInput: {
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    minWidth: 120,
+    maxWidth: 170,
+    flexShrink: 1,
   },
   stepRemove: {
     paddingHorizontal: 6,

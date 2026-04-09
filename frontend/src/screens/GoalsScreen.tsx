@@ -16,6 +16,7 @@ import { applyGoalCompletedBonus } from '../motivation/progress';
 import { messageForCustomGoalCompleted, messageForProgressEvent } from '../motivation/messages';
 import { isAppGoal, markAppGoal, unmarkAppGoal } from '../motivation/appGoals';
 import { getLocalProgress, setLocalProgress } from '../motivation/progress';
+import { appendScorePoint } from '../motivation/scoreHistory';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -102,6 +103,13 @@ export function GoalsScreen() {
     try {
       await authApi.updateGoal(token, g.id, { completed: true });
       await refresh();
+
+      try {
+        const dash = await authApi.getDashboard(token);
+        await appendScorePoint(dash.score ?? 0);
+      } catch {
+        // ignore
+      }
 
       const app = await isAppGoal(g.id);
       if (app) {
