@@ -14,8 +14,8 @@ import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
 import { applyGoalCompletedBonus } from '../motivation/progress';
-import { messageForProgressEvent } from '../motivation/messages';
-import { isAppGoal } from '../motivation/appGoals';
+import { messageForCustomGoalCompleted, messageForProgressEvent } from '../motivation/messages';
+import { isAppGoal, unmarkAppGoal } from '../motivation/appGoals';
 import type { RootStackParamList } from '../navigation/types';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -146,6 +146,7 @@ export function GoalDetailScreen() {
   const [desc, setDesc] = useState('');
   const [steps, setSteps] = useState<UiStep[]>([]);
   const [saving, setSaving] = useState(false);
+  const [completed, setCompleted] = useState(false);
 
   const stepCount = useMemo(() => steps.filter(s => s.text.trim()).length, [steps]);
 
@@ -157,6 +158,7 @@ export function GoalDetailScreen() {
       const resp = await authApi.getGoal(token, goalId);
       setTitle(stripLegacyStepsFromGoalTitle(resp.goal.title));
       setDesc(resp.goal.description ?? '');
+      setCompleted(!!resp.goal.completed);
       const stepResp = await authApi.listGoalSteps(token, goalId);
       const uiSteps: UiStep[] = stepResp.steps.map(s => ({
         id: makeId(),
@@ -177,23 +179,31 @@ export function GoalDetailScreen() {
   );
 
   function addStep() {
+    if (completed) return;
     setSteps(prev => [...prev, { id: makeId(), text: 'New step', scheduleText: '' }]);
   }
 
   function removeStep(id: string) {
+    if (completed) return;
     setSteps(prev => prev.filter(s => s.id !== id));
   }
 
   function setStepText(id: string, text: string) {
+    if (completed) return;
     setSteps(prev => prev.map(s => (s.id === id ? { ...s, text } : s)));
   }
 
   function setStepScheduleText(id: string, scheduleText: string) {
+    if (completed) return;
     setSteps(prev => prev.map(s => (s.id === id ? { ...s, scheduleText } : s)));
   }
 
   async function saveImpl(opts: { finish: boolean }) {
     if (saving) return;
+    if (completed) {
+      toast('Completed goals cannot be edited');
+      return;
+    }
     const t = stripLegacyStepsFromGoalTitle(title);
     const stepTexts = steps.map(s => s.text.trim()).filter(Boolean);
     if (!t) {
@@ -214,11 +224,15 @@ export function GoalDetailScreen() {
     setSaving(true);
     try {
       let effectiveGoalId = goalId;
+      const wasNew = !effectiveGoalId;
       if (effectiveGoalId) {
         await authApi.updateGoal(token, effectiveGoalId, { title: t, description: desc.trim() ? desc : null });
       } else {
         const created = await authApi.createGoal(token, { title: t, description: desc.trim() ? desc : null });
         effectiveGoalId = created.goal.id;
+
+        // Explicitly treat goals created from this screen as user custom goals.
+        await unmarkAppGoal(effectiveGoalId);
       }
 
       const serverSteps = effectiveGoalId ? await authApi.listGoalSteps(token, effectiveGoalId) : { steps: [] as authApi.GoalStepItem[] };
@@ -253,18 +267,15 @@ export function GoalDetailScreen() {
 
       setSteps(updatedSteps);
 
-      if (opts.finish && effectiveGoalId) {
-        const before = await authApi.getDashboard(token);
+      if (opts.finish && effectiveGoalId && !wasNew) {
         await authApi.updateGoal(token, effectiveGoalId, { completed: true });
-        const after = await authApi.getDashboard(token);
-        const scoreDelta = (after?.score ?? 0) - (before?.score ?? 0);
         const app = await isAppGoal(effectiveGoalId);
         if (app) {
           const localEv = await applyGoalCompletedBonus();
           const msg = messageForProgressEvent(localEv);
-          toast(scoreDelta > 0 ? `${msg} +${scoreDelta} points.` : msg);
+          toast(`${msg} +1 point.`);
         } else {
-          toast(scoreDelta > 0 ? `Completed. +${scoreDelta} points.` : 'Completed.');
+          toast(messageForCustomGoalCompleted());
         }
       } else {
         toast('Saved');
@@ -307,7 +318,14 @@ export function GoalDetailScreen() {
         <Card>
           <View style={[styles.field, { marginTop: 0 }]}>
             <Text style={styles.label}>Goal name</Text>
-            <TextInput value={title} onChangeText={setTitle} placeholder="" placeholderTextColor={colors.muted} style={styles.input} />
+            <TextInput
+              value={title}
+              onChangeText={setTitle}
+              editable={!completed}
+              placeholder=""
+              placeholderTextColor={colors.muted}
+              style={styles.input}
+            />
           </View>
 
           <View style={styles.field}>
@@ -315,6 +333,7 @@ export function GoalDetailScreen() {
             <TextInput
               value={desc}
               onChangeText={setDesc}
+              editable={!completed}
               placeholder="Describe your goal..."
               placeholderTextColor={colors.muted}
               multiline
@@ -340,6 +359,7 @@ export function GoalDetailScreen() {
                     <TextInput
                       value={s.text}
                       onChangeText={t2 => setStepText(s.id, t2)}
+                      editable={!completed}
                       placeholder=""
                       placeholderTextColor={colors.muted}
                       multiline
@@ -351,26 +371,31 @@ export function GoalDetailScreen() {
                     <TextInput
                       value={s.scheduleText}
                       onChangeText={t2 => setStepScheduleText(s.id, t2)}
+                      editable={!completed}
                       placeholder="daily | weekly:Mon | monthly:15 | yearly:01-15 | once:2027-01-01"
                       placeholderTextColor={colors.muted}
                       style={styles.stepScheduleInput}
                     />
                   </View>
 
-                  <Pressable onPress={() => removeStep(s.id)} hitSlop={10} style={styles.stepTrash}>
-                    <Text style={{ color: colors.danger, fontWeight: '900' }}>🗑</Text>
-                  </Pressable>
+                  {!completed ? (
+                    <Pressable onPress={() => removeStep(s.id)} hitSlop={10} style={styles.stepTrash}>
+                      <Text style={{ color: colors.danger, fontWeight: '900' }}>🗑</Text>
+                    </Pressable>
+                  ) : null}
                 </View>
               ))}
             </View>
           </View>
 
           <View style={{ height: 10 }} />
-          <View style={{ gap: 10 }}>
-            <Button title={'+ Add step'} full onPress={addStep} />
-            <Button title={'Save'} full onPress={save} />
-            <Button title={'Finish'} variant="primary" full onPress={finish} />
-          </View>
+          {!completed ? (
+            <View style={{ gap: 10 }}>
+              <Button title={'+ Add step'} full onPress={addStep} />
+              <Button title={'Save'} full onPress={save} />
+              {goalId ? <Button title={'Complete goal'} variant="primary" full onPress={finish} /> : null}
+            </View>
+          ) : null}
         </Card>
       </ScrollView>
     </Screen>

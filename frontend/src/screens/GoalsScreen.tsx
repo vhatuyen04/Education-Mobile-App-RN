@@ -13,8 +13,8 @@ import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
 import type { RootStackParamList } from '../navigation/types';
 import { applyGoalCompletedBonus } from '../motivation/progress';
-import { messageForProgressEvent } from '../motivation/messages';
-import { isAppGoal, unmarkAppGoal } from '../motivation/appGoals';
+import { messageForCustomGoalCompleted, messageForProgressEvent } from '../motivation/messages';
+import { isAppGoal, markAppGoal, unmarkAppGoal } from '../motivation/appGoals';
 import { getLocalProgress, setLocalProgress } from '../motivation/progress';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -27,8 +27,13 @@ export function GoalsScreen() {
 
   const [goals, setGoals] = useState<Goal[]>([]);
   const [loading, setLoading] = useState(false);
+  const [smartGoalIds, setSmartGoalIds] = useState<Set<string>>(new Set());
 
   const activeCount = useMemo(() => goals.filter(g => !g.completed).length, [goals]);
+  const completedCount = useMemo(() => goals.filter(g => g.completed).length, [goals]);
+
+  const activeGoals = useMemo(() => goals.filter(g => !g.completed), [goals]);
+  const completedGoals = useMemo(() => goals.filter(g => g.completed), [goals]);
   const [confirm, setConfirm] = useState<{ open: boolean; goal?: Goal }>({ open: false });
 
   function displayGoalTitle(raw: string) {
@@ -45,7 +50,25 @@ export function GoalsScreen() {
     setLoading(true);
     try {
       const resp = await authApi.listGoals(token);
-      setGoals(resp.goals);
+      const list = resp.goals ?? [];
+      setGoals(list);
+
+      const inferredIds = await Promise.all(
+        list.map(async g => {
+          const already = await isAppGoal(g.id);
+          if (already) return g.id;
+
+          const desc = String(g.description ?? '').toLowerCase();
+          if (desc.includes('ai recommended goal') || desc.includes('smartgoal')) {
+            await markAppGoal(g.id);
+            return g.id;
+          }
+          return null;
+        })
+      );
+
+      const ids = new Set<string>(inferredIds.filter(Boolean) as string[]);
+      setSmartGoalIds(ids);
     } catch (e: any) {
       toast(String(e?.message ?? 'Failed to load'));
     } finally {
@@ -63,6 +86,10 @@ export function GoalsScreen() {
     nav.navigate('GoalDetail', { id: g.id, title: g.title });
   }
 
+  function goalTypeLabel(g: Goal) {
+    return smartGoalIds.has(g.id) ? 'SmartGoal' : 'Custom';
+  }
+
   async function completeGoal(g: Goal) {
     if (loading) return;
     const token = state.accessToken;
@@ -73,19 +100,16 @@ export function GoalsScreen() {
 
     setLoading(true);
     try {
-      const before = await authApi.getDashboard(token);
       await authApi.updateGoal(token, g.id, { completed: true });
-      const after = await authApi.getDashboard(token);
       await refresh();
 
-      const scoreDelta = (after?.score ?? 0) - (before?.score ?? 0);
       const app = await isAppGoal(g.id);
       if (app) {
         const localEv = await applyGoalCompletedBonus();
         const msg = messageForProgressEvent(localEv);
-        toast(scoreDelta > 0 ? `${msg} +${scoreDelta} points.` : msg);
+        toast(`${msg} +1 point.`);
       } else {
-        toast(scoreDelta > 0 ? `Completed. +${scoreDelta} points.` : 'Completed.');
+        toast(messageForCustomGoalCompleted());
       }
     } catch (e: any) {
       toast(String(e?.message ?? 'Complete failed'));
@@ -142,18 +166,19 @@ export function GoalsScreen() {
         <Card>
           <View style={styles.cardTitleRow}>
             <Text style={styles.cardTitle}>List of goals</Text>
-            <Badge>{activeCount} active</Badge>
+            <Badge>
+              {activeCount} active · {completedCount} completed
+            </Badge>
           </View>
 
           <View style={{ height: 10 }} />
 
           <View style={{ gap: 10 }}>
-            {loading ? (
-              <Text style={styles.meta}>Loading…</Text>
-            ) : goals.length === 0 ? (
-              <Text style={styles.meta}>No goals yet.</Text>
-            ) : (
-              goals.map(g => (
+            {loading ? <Text style={styles.meta}>Loading…</Text> : null}
+            {!loading && goals.length === 0 ? <Text style={styles.meta}>No goals yet.</Text> : null}
+
+            {!loading && activeGoals.length > 0 ? <Text style={styles.sectionTitle}>Active goals</Text> : null}
+            {activeGoals.map(g => (
               <Pressable
                 key={g.id}
                 onPress={() => openGoal(g)}
@@ -165,6 +190,7 @@ export function GoalsScreen() {
                 </View>
 
                 <View style={styles.goalActions}>
+                  <Badge>{goalTypeLabel(g)}</Badge>
                   <Pressable
                     onPress={e => {
                       e.stopPropagation();
@@ -186,8 +212,34 @@ export function GoalsScreen() {
                   </Pressable>
                 </View>
               </Pressable>
-              ))
-            )}
+            ))}
+
+            {!loading && completedGoals.length > 0 ? <Text style={styles.sectionTitle}>Completed goals</Text> : null}
+            {completedGoals.map(g => (
+              <Pressable
+                key={g.id}
+                onPress={() => openGoal(g)}
+                style={({ pressed }) => [styles.item, pressed ? { opacity: 0.85 } : null]}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.name}>{displayGoalTitle(g.title)}</Text>
+                  <Text style={styles.meta}>Completed: {g.progressPct}% steps</Text>
+                </View>
+
+                <View style={styles.goalActions}>
+                  <Badge>{goalTypeLabel(g)}</Badge>
+                  <Pressable
+                    onPress={e => {
+                      e.stopPropagation();
+                      requestDelete(g);
+                    }}
+                    style={({ pressed }) => [styles.tinyBtn, styles.tinyDanger, pressed ? { opacity: 0.85 } : null]}
+                  >
+                    <Text style={[styles.tinyBtnText, { color: '#1a0a0f' }]}>🗑</Text>
+                  </Pressable>
+                </View>
+              </Pressable>
+            ))}
           </View>
 
         </Card>
@@ -270,6 +322,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     marginTop: 2,
+  },
+  sectionTitle: {
+    color: colors.text,
+    fontSize: 12,
+    fontWeight: '900',
+    marginTop: 6,
   },
   goalActions: {
     flexDirection: 'row',

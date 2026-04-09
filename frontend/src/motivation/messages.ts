@@ -4,6 +4,16 @@ function pick(list: string[]) {
   return list[Math.floor(Math.random() * list.length)] ?? '';
 }
 
+export function messageForCustomGoalCompleted() {
+  const base = pick([
+    'That’s a big milestone. You finished your goal.',
+    'You kept your promise to yourself. Well done.',
+    'Custom goal completed. I’m proud of your discipline.',
+    'You did it. That progress is real.',
+  ]);
+  return `SmartGoal: ${base}`;
+}
+
 export function messageForProgressEvent(ev: ProgressEvent) {
   if (ev.type === 'step_done') {
     const base = pick([

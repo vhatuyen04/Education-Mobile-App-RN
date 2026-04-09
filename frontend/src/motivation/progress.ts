@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 export type LocalProgress = {
   xp: number;
   level: number;
+  smartGoalPoints: number;
   goalStreakDays: number;
   lastGoalCompletedYmd: string | null;
 };
@@ -30,17 +31,18 @@ function computeLevel(xp: number) {
 
 export async function getLocalProgress(): Promise<LocalProgress> {
   const raw = await AsyncStorage.getItem(KEY);
-  if (!raw) return { xp: 0, level: 1, goalStreakDays: 0, lastGoalCompletedYmd: null };
+  if (!raw) return { xp: 0, level: 1, smartGoalPoints: 0, goalStreakDays: 0, lastGoalCompletedYmd: null };
   try {
     const parsed = JSON.parse(raw) as Partial<LocalProgress>;
     const xp = Number(parsed.xp ?? 0);
+    const smartGoalPoints = Number((parsed as any).smartGoalPoints ?? 0);
     const goalStreakDays = Number((parsed as any).goalStreakDays ?? 0);
     const lastGoalCompletedYmd =
       typeof (parsed as any).lastGoalCompletedYmd === 'string' ? ((parsed as any).lastGoalCompletedYmd as string) : null;
     const level = computeLevel(xp);
-    return { xp, level, goalStreakDays, lastGoalCompletedYmd };
+    return { xp, level, smartGoalPoints, goalStreakDays, lastGoalCompletedYmd };
   } catch {
-    return { xp: 0, level: 1, goalStreakDays: 0, lastGoalCompletedYmd: null };
+    return { xp: 0, level: 1, smartGoalPoints: 0, goalStreakDays: 0, lastGoalCompletedYmd: null };
   }
 }
 
@@ -50,6 +52,7 @@ export async function setLocalProgress(p: LocalProgress) {
     JSON.stringify({
       xp: p.xp,
       level: computeLevel(p.xp),
+      smartGoalPoints: p.smartGoalPoints,
       goalStreakDays: p.goalStreakDays,
       lastGoalCompletedYmd: p.lastGoalCompletedYmd,
     })
@@ -84,6 +87,7 @@ export async function applyGoalCompletedBonus(opts?: { now?: Date }): Promise<Pr
 
   const xpDelta = 50;
   const xp = prev.xp + xpDelta;
+  const smartGoalPoints = (prev.smartGoalPoints ?? 0) + 1;
 
   let goalStreakDays = prev.goalStreakDays;
   let lastGoalCompletedYmd = prev.lastGoalCompletedYmd;
@@ -105,7 +109,7 @@ export async function applyGoalCompletedBonus(opts?: { now?: Date }): Promise<Pr
     goalStreakChanged = true;
   }
 
-  const next: LocalProgress = { xp, level: computeLevel(xp), goalStreakDays, lastGoalCompletedYmd };
+  const next: LocalProgress = { xp, level: computeLevel(xp), smartGoalPoints, goalStreakDays, lastGoalCompletedYmd };
   await setLocalProgress(next);
   return { type: 'goal_completed', xpDelta, newProgress: next, goalStreakChanged };
 }

@@ -172,7 +172,7 @@ export function HomeScreen() {
     }, [refresh])
   );
 
-  const score = dash?.score ?? 0;
+  const score = localProgress?.smartGoalPoints ?? 0;
   const tasksPlanned = dash?.tasksPlanned ?? 0;
   const nextGoal = dash?.nextGoal ?? null;
   const nextEvent = dash?.nextEvent ?? null;
