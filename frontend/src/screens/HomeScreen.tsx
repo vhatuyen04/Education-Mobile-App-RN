@@ -18,6 +18,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { clearInbox, getInbox, removeInboxItem } from '../notifications/inbox';
 import * as Notifications from 'expo-notifications';
 import { listRecommendations, upsertRecommendation } from '../ai/recommendations';
+import { getLocalProgress, type LocalProgress } from '../motivation/progress';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -42,6 +43,7 @@ export function HomeScreen() {
 
   const [dash, setDash] = useState<authApi.DashboardResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [localProgress, setLocalProgress] = useState<LocalProgress | null>(null);
 
   const today = useMemo(() => {
     const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
@@ -56,6 +58,8 @@ export function HomeScreen() {
     try {
       const resp = await authApi.getDashboard(token);
       setDash(resp);
+      const lp = await getLocalProgress();
+      setLocalProgress(lp);
     } catch (e: any) {
       toast(String(e?.message ?? 'Failed to load'));
     } finally {
@@ -172,6 +176,8 @@ export function HomeScreen() {
   const tasksPlanned = dash?.tasksPlanned ?? 0;
   const nextGoal = dash?.nextGoal ?? null;
   const nextEvent = dash?.nextEvent ?? null;
+  const level = localProgress?.level ?? 1;
+  const goalStreakDays = localProgress?.goalStreakDays ?? 0;
   const todayEvents = dash?.todayEvents ?? [];
   const todayGoals = dash?.todayGoals ?? [];
   const todaySteps = dash?.todaySteps ?? [];
@@ -250,6 +256,12 @@ export function HomeScreen() {
               <Pill dot>{today}</Pill>
               <Pill>
                 Score: <Text style={styles.bold}>{score}</Text>
+              </Pill>
+              <Pill>
+                Level: <Text style={styles.bold}>{level}</Text>
+              </Pill>
+              <Pill>
+                Goal streak: <Text style={styles.bold}>{goalStreakDays}</Text>
               </Pill>
               <Pill>
                 <Text style={styles.bold}>{tasksPlanned}</Text> {tasksPlanned === 1 ? 'task' : 'tasks'} planned

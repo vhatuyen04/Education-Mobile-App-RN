@@ -13,6 +13,9 @@ import { Button } from '../components/Button';
 import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
+import { applyGoalCompletedBonus } from '../motivation/progress';
+import { messageForProgressEvent } from '../motivation/messages';
+import { isAppGoal } from '../motivation/appGoals';
 import type { RootStackParamList } from '../navigation/types';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -251,10 +254,21 @@ export function GoalDetailScreen() {
       setSteps(updatedSteps);
 
       if (opts.finish && effectiveGoalId) {
+        const before = await authApi.getDashboard(token);
         await authApi.updateGoal(token, effectiveGoalId, { completed: true });
+        const after = await authApi.getDashboard(token);
+        const scoreDelta = (after?.score ?? 0) - (before?.score ?? 0);
+        const app = await isAppGoal(effectiveGoalId);
+        if (app) {
+          const localEv = await applyGoalCompletedBonus();
+          const msg = messageForProgressEvent(localEv);
+          toast(scoreDelta > 0 ? `${msg} +${scoreDelta} points.` : msg);
+        } else {
+          toast(scoreDelta > 0 ? `Completed. +${scoreDelta} points.` : 'Completed.');
+        }
+      } else {
+        toast('Saved');
       }
-
-      toast('Saved');
       nav.goBack();
     } catch (e: any) {
       toast(String(e?.message ?? 'Save failed'));

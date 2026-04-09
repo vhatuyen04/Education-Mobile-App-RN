@@ -11,6 +11,8 @@ import { Button } from '../components/Button';
 import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
+import { applyStepToggle } from '../motivation/progress';
+import { messageForProgressEvent } from '../motivation/messages';
 
 type ItemType = 'event' | 'goal' | 'step';
 
@@ -160,6 +162,7 @@ export function TodayDetailsScreen() {
     if (item.type !== 'step' || !item.goalId) return;
 
     try {
+      const localEv = await applyStepToggle({ done: !item.doneToday });
       await authApi.toggleGoalStepCompletion(token, {
         goalId: item.goalId,
         stepId: item.id,
@@ -167,6 +170,7 @@ export function TodayDetailsScreen() {
         done: !item.doneToday,
       });
       await refresh();
+      toast(messageForProgressEvent(localEv));
     } catch (e: any) {
       toast(String(e?.message ?? 'Failed'));
     }

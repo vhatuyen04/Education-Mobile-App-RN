@@ -10,6 +10,7 @@ import { Step } from './StepEditorList';
 import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
+import { markAppGoal } from '../motivation/appGoals';
 
 type Props = {
   visible: boolean;
@@ -546,6 +547,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
       const created = await authApi.createGoal(token, { title, description: planText.trim() ? planText.trim() : null, dueAt: dueIso });
 
       const goalId = created.goal.id;
+      await markAppGoal(goalId);
 
       const scheduledSteps = steps
         .map((s, idx) => ({ s, idx, text: s.text.trim() }))

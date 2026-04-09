@@ -12,6 +12,7 @@ import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
 import { getRecommendation, removeRecommendation, upsertRecommendation } from '../ai/recommendations';
 import { removeInboxItemsByRecoId } from '../notifications/inbox';
+import { markAppGoal } from '../motivation/appGoals';
 
 type RouteParams = { id: string };
 
@@ -222,6 +223,7 @@ export function AiGoalRecommendationScreen() {
       });
 
       const goalId = created.goal.id;
+      await markAppGoal(goalId);
 
       for (let i = 0; i < steps.length; i += 1) {
         const s = steps[i];

@@ -12,6 +12,10 @@ import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
 import type { RootStackParamList } from '../navigation/types';
+import { applyGoalCompletedBonus } from '../motivation/progress';
+import { messageForProgressEvent } from '../motivation/messages';
+import { isAppGoal, unmarkAppGoal } from '../motivation/appGoals';
+import { getLocalProgress, setLocalProgress } from '../motivation/progress';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -69,9 +73,20 @@ export function GoalsScreen() {
 
     setLoading(true);
     try {
+      const before = await authApi.getDashboard(token);
       await authApi.updateGoal(token, g.id, { completed: true });
+      const after = await authApi.getDashboard(token);
       await refresh();
-      toast('Completed');
+
+      const scoreDelta = (after?.score ?? 0) - (before?.score ?? 0);
+      const app = await isAppGoal(g.id);
+      if (app) {
+        const localEv = await applyGoalCompletedBonus();
+        const msg = messageForProgressEvent(localEv);
+        toast(scoreDelta > 0 ? `${msg} +${scoreDelta} points.` : msg);
+      } else {
+        toast(scoreDelta > 0 ? `Completed. +${scoreDelta} points.` : 'Completed.');
+      }
     } catch (e: any) {
       toast(String(e?.message ?? 'Complete failed'));
     } finally {
@@ -98,7 +113,13 @@ export function GoalsScreen() {
 
     setLoading(true);
     try {
+      const app = await isAppGoal(confirm.goal.id);
       await authApi.deleteGoal(token, confirm.goal.id);
+      if (app) {
+        await unmarkAppGoal(confirm.goal.id);
+        const p = await getLocalProgress();
+        await setLocalProgress({ ...p, goalStreakDays: 0, lastGoalCompletedYmd: null });
+      }
       await refresh();
       toast('Deleted');
       closeConfirm();
