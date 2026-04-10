@@ -148,6 +148,7 @@ export function GoalDetailScreen() {
   const [steps, setSteps] = useState<UiStep[]>([]);
   const [saving, setSaving] = useState(false);
   const [completed, setCompleted] = useState(false);
+  const [isSmartGoal, setIsSmartGoal] = useState(false);
 
   const stepCount = useMemo(() => steps.filter(s => s.text.trim()).length, [steps]);
 
@@ -156,6 +157,9 @@ export function GoalDetailScreen() {
     const token = state.accessToken;
     if (!token) return;
     try {
+      const app = await isAppGoal(goalId);
+      setIsSmartGoal(app);
+
       const resp = await authApi.getGoal(token, goalId);
       setTitle(stripLegacyStepsFromGoalTitle(resp.goal.title));
       setDesc(resp.goal.description ?? '');
@@ -227,7 +231,10 @@ export function GoalDetailScreen() {
       let effectiveGoalId = goalId;
       const wasNew = !effectiveGoalId;
       if (effectiveGoalId) {
-        await authApi.updateGoal(token, effectiveGoalId, { title: t, description: desc.trim() ? desc : null });
+        await authApi.updateGoal(token, effectiveGoalId, {
+          ...(isSmartGoal ? null : { title: t }),
+          description: desc.trim() ? desc : null,
+        });
       } else {
         const created = await authApi.createGoal(token, { title: t, description: desc.trim() ? desc : null });
         effectiveGoalId = created.goal.id;
@@ -330,7 +337,7 @@ export function GoalDetailScreen() {
             <TextInput
               value={title}
               onChangeText={setTitle}
-              editable={!completed}
+              editable={!completed && !isSmartGoal}
               placeholder=""
               placeholderTextColor={colors.muted}
               style={styles.input}
