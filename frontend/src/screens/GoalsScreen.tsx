@@ -17,6 +17,8 @@ import { messageForCustomGoalCompleted, messageForProgressEvent } from '../motiv
 import { isAppGoal, markAppGoal, unmarkAppGoal } from '../motivation/appGoals';
 import { getLocalProgress, setLocalProgress } from '../motivation/progress';
 import { appendScorePoint } from '../motivation/scoreHistory';
+import { appendInbox } from '../notifications/inbox';
+import { getFailedGoalsMap, markFailedGoal, type FailedReason } from '../motivation/failedGoals';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -29,11 +31,27 @@ export function GoalsScreen() {
   const [goals, setGoals] = useState<Goal[]>([]);
   const [loading, setLoading] = useState(false);
   const [smartGoalIds, setSmartGoalIds] = useState<Set<string>>(new Set());
+  const [failedMap, setFailedMap] = useState<Record<string, FailedReason>>({});
 
-  const activeCount = useMemo(() => goals.filter(g => !g.completed).length, [goals]);
+  const failedGoals = useMemo(() => {
+    const now = Date.now();
+    return goals.filter(g => {
+      if (g.completed) return false;
+      const reason = failedMap[g.id];
+      if (reason) return true;
+      if (!g.dueAt) return false;
+      const t = new Date(g.dueAt).getTime();
+      return Number.isFinite(t) && t > 0 && t < now;
+    });
+  }, [failedMap, goals]);
+
+  const activeGoals = useMemo(() => {
+    const failedIds = new Set(failedGoals.map(g => g.id));
+    return goals.filter(g => !g.completed && !failedIds.has(g.id));
+  }, [failedGoals, goals]);
+
+  const activeCount = useMemo(() => activeGoals.length, [activeGoals.length]);
   const completedCount = useMemo(() => goals.filter(g => g.completed).length, [goals]);
-
-  const activeGoals = useMemo(() => goals.filter(g => !g.completed), [goals]);
   const completedGoals = useMemo(() => goals.filter(g => g.completed), [goals]);
   const [confirm, setConfirm] = useState<{ open: boolean; goal?: Goal }>({ open: false });
 
@@ -50,9 +68,32 @@ export function GoalsScreen() {
 
     setLoading(true);
     try {
+      const fm = await getFailedGoalsMap();
       const resp = await authApi.listGoals(token);
       const list = resp.goals ?? [];
       setGoals(list);
+
+      const now = Date.now();
+      for (const g of list) {
+        if (g.completed) continue;
+        if (!g.dueAt) continue;
+        const t = new Date(g.dueAt).getTime();
+        if (!Number.isFinite(t) || t <= 0) continue;
+        if (t >= now) continue;
+        if (fm[g.id]) continue;
+
+        fm[g.id] = 'expired';
+        await markFailedGoal(g.id, 'expired');
+        await appendInbox({
+          id: `goal_expired_${g.id}`,
+          receivedAt: Date.now(),
+          title: 'Goal expired',
+          body: `${displayGoalTitle(g.title)} has expired.`,
+          data: { type: 'goal_expired', goalId: g.id },
+        });
+      }
+
+      setFailedMap(fm);
 
       const inferredIds = await Promise.all(
         list.map(async g => {
@@ -76,6 +117,13 @@ export function GoalsScreen() {
       setLoading(false);
     }
   }, [state.accessToken]);
+
+  async function giveUpGoal(g: Goal) {
+    if (loading) return;
+    await markFailedGoal(g.id, 'gave_up');
+    setFailedMap(prev => ({ ...prev, [g.id]: 'gave_up' }));
+    toast('Moved to Failed');
+  }
 
   useFocusEffect(
     useCallback(() => {
@@ -212,12 +260,40 @@ export function GoalsScreen() {
                   <Pressable
                     onPress={e => {
                       e.stopPropagation();
+                      void giveUpGoal(g);
+                    }}
+                    style={({ pressed }) => [styles.tinyBtn, pressed ? { opacity: 0.85 } : null]}
+                  >
+                    <Text style={styles.tinyBtnText}>✕</Text>
+                  </Pressable>
+
+                  <Pressable
+                    onPress={e => {
+                      e.stopPropagation();
                       requestDelete(g);
                     }}
                     style={({ pressed }) => [styles.tinyBtn, styles.tinyDanger, pressed ? { opacity: 0.85 } : null]}
                   >
                     <Text style={[styles.tinyBtnText, { color: '#1a0a0f' }]}>🗑</Text>
                   </Pressable>
+                </View>
+              </Pressable>
+            ))}
+
+            {!loading && failedGoals.length > 0 ? <Text style={styles.sectionTitle}>Failed goals</Text> : null}
+            {failedGoals.map(g => (
+              <Pressable
+                key={g.id}
+                onPress={() => openGoal(g)}
+                style={({ pressed }) => [styles.item, pressed ? { opacity: 0.85 } : null]}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.name}>{displayGoalTitle(g.title)}</Text>
+                  <Text style={styles.meta}>Reason: {failedMap[g.id] === 'gave_up' ? 'Gave up' : 'Expired'}</Text>
+                </View>
+
+                <View style={styles.goalActions}>
+                  <Badge>{goalTypeLabel(g)}</Badge>
                 </View>
               </Pressable>
             ))}
