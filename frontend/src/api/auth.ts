@@ -181,6 +181,7 @@ export type GoalItem = {
   progressPct: number;
   dueAt: string | null;
   completed: boolean;
+  deletedAt?: string | null;
 };
 
 export type DashboardEvent = {
@@ -281,8 +282,11 @@ export async function getLeaderboardField(
   return getJsonAuth<LeaderboardFieldPageResponse>(`/auth/leaderboard/field?${qs}`, accessToken);
 }
 
-export async function listGoals(accessToken: string): Promise<{ goals: GoalItem[] }> {
-  return getJsonAuth<{ goals: GoalItem[] }>('/auth/goals', accessToken);
+export async function listGoals(accessToken: string, opts?: { includeDeleted?: boolean }): Promise<{ goals: GoalItem[] }> {
+  const sp = new URLSearchParams();
+  if (opts?.includeDeleted) sp.set('includeDeleted', 'true');
+  const qs = sp.toString();
+  return getJsonAuth<{ goals: GoalItem[] }>(`/auth/goals${qs ? `?${qs}` : ''}`, accessToken);
 }
 
 export async function getGoal(accessToken: string, id: string): Promise<{ goal: GoalItem }> {

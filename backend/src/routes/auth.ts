@@ -648,7 +648,7 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
   const endOfDay = endOfLocalDay(now);
 
   const nextGoalWithDue = await prismaAny.goal.findFirst({
-    where: { userId, completed: false, dueAt: { not: null } },
+    where: { userId, completed: false, deletedAt: null, dueAt: { not: null } },
     orderBy: [{ dueAt: 'asc' }, { createdAt: 'asc' }],
     select: { id: true, title: true, description: true, rankField: true, progressPct: true, dueAt: true, createdAt: true },
   });
@@ -656,7 +656,7 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
   const nextGoal =
     nextGoalWithDue ??
     (await prismaAny.goal.findFirst({
-      where: { userId, completed: false },
+      where: { userId, completed: false, deletedAt: null },
       orderBy: [{ createdAt: 'asc' }],
       select: { id: true, title: true, description: true, rankField: true, progressPct: true, dueAt: true, createdAt: true },
     }));
@@ -754,7 +754,7 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
 
   const candidateSteps = await prismaAny.goalStep.findMany({
     where: {
-      goal: { userId, completed: false },
+      goal: { userId, completed: false, deletedAt: null },
       OR: [{ dueAt: { gte: startOfDay, lte: endOfDay } }, { repeat: { not: null } }],
     },
     select: {
@@ -810,7 +810,7 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
   });
 
   const todayGoals = await prismaAny.goal.findMany({
-    where: { userId, completed: false, dueAt: { gte: startOfDay, lte: endOfDay } },
+    where: { userId, completed: false, deletedAt: null, dueAt: { gte: startOfDay, lte: endOfDay } },
     orderBy: [{ dueAt: 'asc' }, { createdAt: 'asc' }],
     select: { id: true, title: true, description: true, rankField: true, progressPct: true, dueAt: true },
     take: 20,
@@ -1094,10 +1094,12 @@ authRouter.get('/goals', async (req: Request, res: Response) => {
     return res.status(401).json({ error: 'Invalid access token' });
   }
 
+  const includeDeleted = String((req.query as any)?.includeDeleted ?? '').toLowerCase() === 'true';
+
   const goals = await prismaAny.goal.findMany({
-    where: { userId },
+    where: includeDeleted ? { userId } : { userId, deletedAt: null },
     orderBy: [{ completed: 'asc' }, { dueAt: 'asc' }, { createdAt: 'asc' }],
-    select: { id: true, title: true, description: true, rankField: true, progressPct: true, dueAt: true, completed: true },
+    select: { id: true, title: true, description: true, rankField: true, progressPct: true, dueAt: true, completed: true, deletedAt: true },
     take: 200,
   });
 
@@ -1120,7 +1122,7 @@ authRouter.get('/goals/:id', async (req: Request, res: Response) => {
   const id = String(req.params.id);
   const goal = await prismaAny.goal.findFirst({
     where: { id, userId },
-    select: { id: true, title: true, description: true, rankField: true, progressPct: true, dueAt: true, completed: true },
+    select: { id: true, title: true, description: true, rankField: true, progressPct: true, dueAt: true, completed: true, deletedAt: true },
   });
 
   if (!goal) {
@@ -1396,12 +1398,16 @@ authRouter.delete('/goals/:id', async (req: Request, res: Response) => {
   }
 
   const id = String(req.params.id);
-  const existing = await prismaAny.goal.findFirst({ where: { id, userId }, select: { id: true } });
+  const existing = await prismaAny.goal.findFirst({ where: { id, userId }, select: { id: true, deletedAt: true } });
   if (!existing) {
     return res.status(404).json({ error: 'Not found' });
   }
 
-  await prismaAny.goal.delete({ where: { id } });
+  if (existing.deletedAt) {
+    return res.json({ ok: true });
+  }
+
+  await prismaAny.goal.update({ where: { id }, data: { deletedAt: new Date() }, select: { id: true } });
   return res.json({ ok: true });
 });
 

@@ -12,6 +12,8 @@ import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
 import { getLocalProgress } from '../motivation/progress';
 import { appendScorePoint, type ScorePoint } from '../motivation/scoreHistory';
+import { getFailedGoalsMap, type FailedReason } from '../motivation/failedGoals';
+import { Button } from '../components/Button';
 
 type Goal = authApi.GoalItem;
 
@@ -174,6 +176,7 @@ export function ProgressScreen() {
 
   const [goals, setGoals] = useState<Goal[]>([]);
   const [loading, setLoading] = useState(false);
+  const [failedMap, setFailedMap] = useState<Record<string, FailedReason>>({});
 
   const [score, setScore] = useState(0);
   const [goalStreakDays, setGoalStreakDays] = useState(0);
@@ -186,8 +189,14 @@ export function ProgressScreen() {
 
     setLoading(true);
     try {
-      const [goalsResp, lp, dash] = await Promise.all([authApi.listGoals(token), getLocalProgress(), authApi.getDashboard(token)]);
-      setGoals(goalsResp.goals ?? []);
+      const [goalsResp, lp, dash, fm] = await Promise.all([
+        authApi.listGoals(token),
+        getLocalProgress(),
+        authApi.getDashboard(token),
+        getFailedGoalsMap(),
+      ]);
+      setGoals((goalsResp.goals ?? []).filter(g => !g.deletedAt));
+      setFailedMap(fm);
       setGoalStreakDays(lp.goalStreakDays ?? 0);
       setLevel(lp.level ?? 1);
 
@@ -210,13 +219,20 @@ export function ProgressScreen() {
   );
 
   const summary = useMemo(() => {
+    const now = Date.now();
     const total = goals.length;
     const completed = goals.filter(g => g.completed).length;
-    const active = total - completed;
-    return { total, completed, active };
-  }, [goals]);
-
-  const completedGoals = useMemo(() => goals.filter(g => g.completed), [goals]);
+    const failed = goals.filter(g => {
+      if (g.completed) return false;
+      const reason = failedMap[g.id];
+      if (reason) return true;
+      if (!g.dueAt) return false;
+      const t = new Date(g.dueAt).getTime();
+      return Number.isFinite(t) && t > 0 && t < now;
+    }).length;
+    const active = total - completed - failed;
+    return { total, completed, active, failed };
+  }, [failedMap, goals]);
 
   return (
     <Screen style={{ padding: 0 }}>
@@ -266,29 +282,13 @@ export function ProgressScreen() {
         <Card>
           <View style={styles.cardTitleRow}>
             <Text style={styles.cardTitle}>Overview</Text>
+            <Button title="Detail" small onPress={() => nav.navigate('GoalsDetails')} />
           </View>
           <View style={{ height: 10 }} />
           <Text style={styles.meta}>Total goals: {summary.total}</Text>
           <Text style={styles.meta}>Completed goals: {summary.completed}</Text>
           <Text style={styles.meta}>Active goals: {summary.active}</Text>
-        </Card>
-
-        <Card>
-          <View style={styles.cardTitleRow}>
-            <Text style={styles.cardTitle}>Completed goals</Text>
-          </View>
-          <View style={{ height: 10 }} />
-          {completedGoals.length === 0 ? (
-            <Text style={styles.meta}>No completed goals yet.</Text>
-          ) : (
-            <View style={{ gap: 8 }}>
-              {completedGoals.map((g, idx) => (
-                <Text key={g.id} style={styles.completedItem} numberOfLines={2}>
-                  {idx + 1}. {g.title}
-                </Text>
-              ))}
-            </View>
-          )}
+          <Text style={styles.meta}>Failed goals: {summary.failed}</Text>
         </Card>
       </ScrollView>
     </Screen>

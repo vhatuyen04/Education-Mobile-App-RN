@@ -18,7 +18,7 @@ import { isAppGoal, markAppGoal, unmarkAppGoal } from '../motivation/appGoals';
 import { getLocalProgress, setLocalProgress } from '../motivation/progress';
 import { appendScorePoint } from '../motivation/scoreHistory';
 import { appendInbox } from '../notifications/inbox';
-import { getFailedGoalsMap, markFailedGoal, type FailedReason } from '../motivation/failedGoals';
+import { getFailedGoalsMap, markFailedGoal, type FailedReason, unmarkFailedGoal } from '../motivation/failedGoals';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -195,6 +195,7 @@ export function GoalsScreen() {
     try {
       const app = await isAppGoal(confirm.goal.id);
       await authApi.deleteGoal(token, confirm.goal.id);
+      await unmarkFailedGoal(confirm.goal.id);
       if (app) {
         await unmarkAppGoal(confirm.goal.id);
         const p = await getLocalProgress();
@@ -294,6 +295,15 @@ export function GoalsScreen() {
 
                 <View style={styles.goalActions}>
                   <Badge>{goalTypeLabel(g)}</Badge>
+                  <Pressable
+                    onPress={e => {
+                      e.stopPropagation();
+                      requestDelete(g);
+                    }}
+                    style={({ pressed }) => [styles.tinyBtn, styles.tinyDanger, pressed ? { opacity: 0.85 } : null]}
+                  >
+                    <Text style={[styles.tinyBtnText, { color: '#1a0a0f' }]}>🗑</Text>
+                  </Pressable>
                 </View>
               </Pressable>
             ))}

@@ -3,6 +3,7 @@ export type RootStackParamList = {
   Tabs: undefined;
   GoalDetail: { id?: string; title?: string } | undefined;
   TodayDetails: undefined;
+  GoalsDetails: undefined;
   ScheduleWeek: undefined;
   NotificationList: undefined;
   NotificationSettings: undefined;
