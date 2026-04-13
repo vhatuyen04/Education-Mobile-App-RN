@@ -145,10 +145,18 @@ export function GoalDetailScreen() {
 
   const [title, setTitle] = useState(initialTitle);
   const [desc, setDesc] = useState('');
+  const [dueAt, setDueAt] = useState<string | null>(null);
   const [steps, setSteps] = useState<UiStep[]>([]);
   const [saving, setSaving] = useState(false);
   const [completed, setCompleted] = useState(false);
   const [isSmartGoal, setIsSmartGoal] = useState(false);
+
+  const deadlineLabel = useMemo(() => {
+    if (!dueAt) return 'None';
+    const d = new Date(dueAt);
+    if (!Number.isFinite(d.getTime())) return 'None';
+    return d.toLocaleDateString();
+  }, [dueAt]);
 
   const stepCount = useMemo(() => steps.filter(s => s.text.trim()).length, [steps]);
 
@@ -163,6 +171,7 @@ export function GoalDetailScreen() {
       const resp = await authApi.getGoal(token, goalId);
       setTitle(stripLegacyStepsFromGoalTitle(resp.goal.title));
       setDesc(resp.goal.description ?? '');
+      setDueAt(resp.goal.dueAt ?? null);
       setCompleted(!!resp.goal.completed);
       const stepResp = await authApi.listGoalSteps(token, goalId);
       const uiSteps: UiStep[] = stepResp.steps.map(s => ({
@@ -345,6 +354,13 @@ export function GoalDetailScreen() {
           </View>
 
           <View style={styles.field}>
+            <Text style={styles.label}>Deadline</Text>
+            <View style={styles.deadlinePill}>
+              <Text style={styles.deadlineText}>{deadlineLabel}</Text>
+            </View>
+          </View>
+
+          <View style={styles.field}>
             <Text style={styles.label}>Description</Text>
             <TextInput
               value={desc}
@@ -463,6 +479,26 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '800',
     marginBottom: 6,
+  },
+  meta: {
+    color: colors.muted,
+    fontSize: 12,
+    fontWeight: '800',
+    marginTop: 2,
+  },
+  deadlinePill: {
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: colors.surface2,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  deadlineText: {
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: '900',
   },
   input: {
     borderWidth: 1,
