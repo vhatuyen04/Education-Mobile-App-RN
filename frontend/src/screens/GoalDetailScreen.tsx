@@ -16,6 +16,7 @@ import * as authApi from '../api/auth';
 import { applyGoalCompletedBonus } from '../motivation/progress';
 import { messageForCustomGoalCompleted, messageForProgressEvent } from '../motivation/messages';
 import { isAppGoal, unmarkAppGoal } from '../motivation/appGoals';
+import { getFailedReason, type FailedReason } from '../motivation/failedGoals';
 import { appendScorePoint } from '../motivation/scoreHistory';
 import type { RootStackParamList } from '../navigation/types';
 
@@ -150,6 +151,7 @@ export function GoalDetailScreen() {
   const [saving, setSaving] = useState(false);
   const [completed, setCompleted] = useState(false);
   const [isSmartGoal, setIsSmartGoal] = useState(false);
+  const [failedReason, setFailedReason] = useState<FailedReason | null>(null);
 
   const deadlineLabel = useMemo(() => {
     if (!dueAt) return 'None';
@@ -157,6 +159,24 @@ export function GoalDetailScreen() {
     if (!Number.isFinite(d.getTime())) return 'None';
     return d.toLocaleDateString();
   }, [dueAt]);
+
+  const statusLabel = useMemo(() => {
+    if (completed) return { label: 'Completed', reason: null as string | null };
+    const isExpired = (() => {
+      if (!dueAt) return false;
+      const t = new Date(dueAt).getTime();
+      return Number.isFinite(t) && t > 0 && t < Date.now();
+    })();
+
+    const effectiveReason: FailedReason | null = failedReason ?? (isExpired ? 'expired' : null);
+    if (effectiveReason) {
+      return {
+        label: 'Failed',
+        reason: effectiveReason === 'gave_up' ? 'Gave up' : 'Expired',
+      };
+    }
+    return { label: 'Active', reason: null as string | null };
+  }, [completed, dueAt, failedReason]);
 
   const stepCount = useMemo(() => steps.filter(s => s.text.trim()).length, [steps]);
 
@@ -168,9 +188,17 @@ export function GoalDetailScreen() {
       const app = await isAppGoal(goalId);
       setIsSmartGoal(app);
 
+      const fr = await getFailedReason(goalId);
+      setFailedReason(fr);
+
       const resp = await authApi.getGoal(token, goalId);
       setTitle(stripLegacyStepsFromGoalTitle(resp.goal.title));
-      setDesc(resp.goal.description ?? '');
+      const rawDesc = resp.goal.description ?? '';
+      if (app && (!rawDesc || rawDesc.toLowerCase().includes('ai recommended goal'))) {
+        setDesc('SmartGoal recommended goal');
+      } else {
+        setDesc(rawDesc);
+      }
       setDueAt(resp.goal.dueAt ?? null);
       setCompleted(!!resp.goal.completed);
       const stepResp = await authApi.listGoalSteps(token, goalId);
@@ -242,7 +270,7 @@ export function GoalDetailScreen() {
       if (effectiveGoalId) {
         await authApi.updateGoal(token, effectiveGoalId, {
           ...(isSmartGoal ? null : { title: t }),
-          description: desc.trim() ? desc : null,
+          description: isSmartGoal ? 'SmartGoal recommended goal' : desc.trim() ? desc : null,
         });
       } else {
         const created = await authApi.createGoal(token, { title: t, description: desc.trim() ? desc : null });
@@ -361,11 +389,21 @@ export function GoalDetailScreen() {
           </View>
 
           <View style={styles.field}>
+            <Text style={styles.label}>Status</Text>
+            <View style={styles.statusRow}>
+              <View style={styles.statusPill}>
+                <Text style={styles.statusText}>{statusLabel.label}</Text>
+              </View>
+              {statusLabel.reason ? <Text style={styles.meta}>Reason: {statusLabel.reason}</Text> : null}
+            </View>
+          </View>
+
+          <View style={styles.field}>
             <Text style={styles.label}>Description</Text>
             <TextInput
               value={desc}
               onChangeText={setDesc}
-              editable={!completed}
+              editable={!completed && !isSmartGoal}
               placeholder="Describe your goal..."
               placeholderTextColor={colors.muted}
               multiline
@@ -496,6 +534,26 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   deadlineText: {
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flexWrap: 'wrap',
+  },
+  statusPill: {
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: colors.surface2,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  statusText: {
     color: colors.text,
     fontSize: 13,
     fontWeight: '900',

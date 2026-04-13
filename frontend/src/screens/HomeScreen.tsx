@@ -174,13 +174,28 @@ export function HomeScreen() {
 
   const score = dash?.score ?? 0;
   const tasksPlanned = dash?.tasksPlanned ?? 0;
-  const nextGoal = dash?.nextGoal ?? null;
+  function isExpiredDueAt(dueAt: string | null | undefined) {
+    if (!dueAt) return false;
+    const t = new Date(dueAt).getTime();
+    return Number.isFinite(t) && t > 0 && t < Date.now();
+  }
+
+  const nextGoal = useMemo(() => {
+    const g = dash?.nextGoal ?? null;
+    if (!g) return null;
+    if (isExpiredDueAt(g.dueAt)) return null;
+    return g;
+  }, [dash?.nextGoal]);
   const nextEvent = dash?.nextEvent ?? null;
   const level = localProgress?.level ?? 1;
   const goalStreakDays = localProgress?.goalStreakDays ?? 0;
   const todayEvents = dash?.todayEvents ?? [];
-  const todayGoals = dash?.todayGoals ?? [];
-  const todaySteps = dash?.todaySteps ?? [];
+  const todayGoals = useMemo(() => (dash?.todayGoals ?? []).filter(g => !isExpiredDueAt(g.dueAt)), [dash?.todayGoals]);
+  const todaySteps = useMemo(() => {
+    const steps = dash?.todaySteps ?? [];
+    const allowedGoalIds = new Set(todayGoals.map(g => String(g.id)));
+    return steps.filter(s => allowedGoalIds.has(String(s.goalId)));
+  }, [dash?.todaySteps, todayGoals]);
 
   const stepsByGoal = useMemo(() => {
     const map = new Map<string, { goalTitle: string; steps: typeof todaySteps }>();
