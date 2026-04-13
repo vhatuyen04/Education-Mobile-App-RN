@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -31,6 +31,19 @@ function stripLegacyStepsFromGoalTitle(raw: string): string {
 
 function makeId() {
   return `s_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function toYmdLocal(d: Date) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function startOfLocalDayMs(ts: number) {
+  const d = new Date(ts);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
 }
 
 type UiStep = {
@@ -153,6 +166,9 @@ export function GoalDetailScreen() {
   const [isSmartGoal, setIsSmartGoal] = useState(false);
   const [failedReason, setFailedReason] = useState<FailedReason | null>(null);
 
+  const [deadlineModalOpen, setDeadlineModalOpen] = useState(false);
+  const [deadlineDraft, setDeadlineDraft] = useState('');
+
   const deadlineLabel = useMemo(() => {
     if (!dueAt) return 'None';
     const d = new Date(dueAt);
@@ -200,6 +216,7 @@ export function GoalDetailScreen() {
         setDesc(rawDesc);
       }
       setDueAt(resp.goal.dueAt ?? null);
+      setDeadlineDraft(resp.goal.dueAt ? toYmdLocal(new Date(resp.goal.dueAt)) : '');
       setCompleted(!!resp.goal.completed);
       const stepResp = await authApi.listGoalSteps(token, goalId);
       const uiSteps: UiStep[] = stepResp.steps.map(s => ({
@@ -240,6 +257,44 @@ export function GoalDetailScreen() {
     setSteps(prev => prev.map(s => (s.id === id ? { ...s, scheduleText } : s)));
   }
 
+  function openDeadlineEditor() {
+    if (completed) return;
+    if (isSmartGoal) return;
+    setDeadlineDraft(dueAt ? toYmdLocal(new Date(dueAt)) : '');
+    setDeadlineModalOpen(true);
+  }
+
+  function closeDeadlineEditor() {
+    setDeadlineModalOpen(false);
+  }
+
+  function applyDeadlineDraft() {
+    const raw = String(deadlineDraft ?? '').trim();
+    if (!raw) {
+      setDueAt(null);
+      closeDeadlineEditor();
+      return;
+    }
+    const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) {
+      toast('Invalid deadline. Use YYYY-MM-DD');
+      return;
+    }
+    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 23, 59, 59, 999);
+    const t = d.getTime();
+    if (!Number.isFinite(t)) {
+      toast('Invalid deadline');
+      return;
+    }
+    const today0 = startOfLocalDayMs(Date.now());
+    if (startOfLocalDayMs(t) < today0) {
+      toast('Deadline cannot be in the past');
+      return;
+    }
+    setDueAt(d.toISOString());
+    closeDeadlineEditor();
+  }
+
   async function saveImpl(opts: { finish: boolean }) {
     if (saving) return;
     if (completed) {
@@ -257,6 +312,14 @@ export function GoalDetailScreen() {
       return;
     }
 
+    if (!isSmartGoal && dueAt) {
+      const tDue = new Date(dueAt).getTime();
+      if (!Number.isFinite(tDue) || startOfLocalDayMs(tDue) < startOfLocalDayMs(Date.now())) {
+        toast('Deadline cannot be in the past');
+        return;
+      }
+    }
+
     const token = state.accessToken;
     if (!token) {
       toast('Not signed in');
@@ -271,9 +334,14 @@ export function GoalDetailScreen() {
         await authApi.updateGoal(token, effectiveGoalId, {
           ...(isSmartGoal ? null : { title: t }),
           description: isSmartGoal ? 'SmartGoal recommended goal' : desc.trim() ? desc : null,
+          ...(isSmartGoal ? null : { dueAt: dueAt ? dueAt : null }),
         });
       } else {
-        const created = await authApi.createGoal(token, { title: t, description: desc.trim() ? desc : null });
+        const created = await authApi.createGoal(token, {
+          title: t,
+          description: desc.trim() ? desc : null,
+          ...(isSmartGoal ? null : { dueAt: dueAt ? dueAt : undefined }),
+        });
         effectiveGoalId = created.goal.id;
 
         // Explicitly treat goals created from this screen as user custom goals.
@@ -383,9 +451,13 @@ export function GoalDetailScreen() {
 
           <View style={styles.field}>
             <Text style={styles.label}>Deadline</Text>
-            <View style={styles.deadlinePill}>
+            <Pressable
+              onPress={openDeadlineEditor}
+              style={({ pressed }) => [styles.deadlinePill, pressed && !completed && !isSmartGoal ? { opacity: 0.85 } : null]}
+            >
               <Text style={styles.deadlineText}>{deadlineLabel}</Text>
-            </View>
+            </Pressable>
+            {!completed && !isSmartGoal ? <Text style={styles.meta}>Tap to edit (YYYY-MM-DD)</Text> : null}
           </View>
 
           <View style={styles.field}>
@@ -468,6 +540,40 @@ export function GoalDetailScreen() {
           ) : null}
         </Card>
       </ScrollView>
+
+      <Modal visible={deadlineModalOpen} transparent animationType="fade" onRequestClose={closeDeadlineEditor}>
+        <View style={styles.backdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={closeDeadlineEditor} />
+          <View style={styles.sheet}>
+            <View style={styles.sheetHead}>
+              <Text style={styles.sheetTitle}>Edit deadline</Text>
+              <Pressable onPress={closeDeadlineEditor} hitSlop={10}>
+                <Text style={styles.close}>✕</Text>
+              </Pressable>
+            </View>
+            <Text style={styles.meta}>Enter a date (YYYY-MM-DD). Past dates are not allowed.</Text>
+            <View style={{ height: 10 }} />
+            <TextInput
+              value={deadlineDraft}
+              onChangeText={setDeadlineDraft}
+              placeholder="YYYY-MM-DD"
+              placeholderTextColor={colors.muted}
+              style={styles.input}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <View style={styles.divider} />
+            <View style={styles.rowEnd}>
+              <Button title="Clear" onPress={() => {
+                setDeadlineDraft('');
+                setDueAt(null);
+                closeDeadlineEditor();
+              }} />
+              <Button title="Save" variant="primary" onPress={applyDeadlineDraft} />
+            </View>
+          </View>
+        </View>
+      </Modal>
     </Screen>
   );
 }
@@ -621,5 +727,40 @@ const styles = StyleSheet.create({
   stepTrash: {
     paddingHorizontal: 6,
     paddingVertical: 6,
+  },
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'center',
+    padding: 16,
+  },
+  sheet: {
+    backgroundColor: colors.surface,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: colors.line,
+    padding: 14,
+  },
+  sheetHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingBottom: 8,
+  },
+  sheetTitle: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  close: {
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  rowEnd: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 10,
+    alignItems: 'center',
   },
 });
