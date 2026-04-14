@@ -53,7 +53,14 @@ export function GoalsScreen() {
   const activeCount = useMemo(() => activeGoals.length, [activeGoals.length]);
   const completedCount = useMemo(() => goals.filter(g => g.completed).length, [goals]);
   const completedGoals = useMemo(() => goals.filter(g => g.completed), [goals]);
-  const [confirm, setConfirm] = useState<{ open: boolean; goal?: Goal }>({ open: false });
+  const [confirm, setConfirm] = useState<{
+    open: boolean;
+    goal?: Goal;
+    action?: 'delete' | 'complete' | 'quit';
+    xpLoss?: number;
+  }>({ open: false });
+
+  const SMARTGOAL_QUIT_XP_LOSS = 50;
 
   function displayGoalTitle(raw: string) {
     const first = String(raw ?? '').split(/\r?\n/)[0] ?? '';
@@ -118,11 +125,22 @@ export function GoalsScreen() {
     }
   }, [state.accessToken]);
 
-  async function giveUpGoal(g: Goal) {
-    if (loading) return;
-    await markFailedGoal(g.id, 'gave_up');
-    setFailedMap(prev => ({ ...prev, [g.id]: 'gave_up' }));
-    toast('Moved to Failed');
+  async function applySmartGoalXpLoss(goalId: string, xpLoss: number) {
+    if (xpLoss <= 0) return;
+    const app = await isAppGoal(goalId);
+    if (!app) return;
+    const p = await getLocalProgress();
+    const nextXp = Math.max(0, Number(p.xp ?? 0) - xpLoss);
+    await setLocalProgress({ ...p, xp: nextXp });
+  }
+
+  function requestComplete(g: Goal) {
+    setConfirm({ open: true, goal: g, action: 'complete' });
+  }
+
+  async function requestQuit(g: Goal) {
+    const app = await isAppGoal(g.id);
+    setConfirm({ open: true, goal: g, action: 'quit', xpLoss: app ? SMARTGOAL_QUIT_XP_LOSS : 0 });
   }
 
   useFocusEffect(
@@ -175,15 +193,18 @@ export function GoalsScreen() {
   }
 
   function requestDelete(g: Goal) {
-    setConfirm({ open: true, goal: g });
+    void (async () => {
+      const app = await isAppGoal(g.id);
+      setConfirm({ open: true, goal: g, action: 'delete', xpLoss: app ? SMARTGOAL_QUIT_XP_LOSS : 0 });
+    })();
   }
 
   function closeConfirm() {
     setConfirm({ open: false });
   }
 
-  async function deleteConfirmed() {
-    if (!confirm.goal) return;
+  async function confirmAction() {
+    if (!confirm.goal || !confirm.action) return;
     if (loading) return;
     const token = state.accessToken;
     if (!token) {
@@ -193,8 +214,24 @@ export function GoalsScreen() {
 
     setLoading(true);
     try {
+      if (confirm.action === 'complete') {
+        await completeGoal(confirm.goal);
+        closeConfirm();
+        return;
+      }
+
+      if (confirm.action === 'quit') {
+        await markFailedGoal(confirm.goal.id, 'gave_up');
+        await applySmartGoalXpLoss(confirm.goal.id, Number(confirm.xpLoss ?? 0));
+        setFailedMap(prev => ({ ...prev, [confirm.goal!.id]: 'gave_up' }));
+        toast('Moved to Failed');
+        closeConfirm();
+        return;
+      }
+
       const app = await isAppGoal(confirm.goal.id);
       await authApi.deleteGoal(token, confirm.goal.id);
+      await applySmartGoalXpLoss(confirm.goal.id, Number(confirm.xpLoss ?? 0));
       await unmarkFailedGoal(confirm.goal.id);
       if (app) {
         await unmarkAppGoal(confirm.goal.id);
@@ -205,7 +242,7 @@ export function GoalsScreen() {
       toast('Deleted');
       closeConfirm();
     } catch (e: any) {
-      toast(String(e?.message ?? 'Delete failed'));
+      toast(String(e?.message ?? 'Action failed'));
     } finally {
       setLoading(false);
     }
@@ -251,7 +288,7 @@ export function GoalsScreen() {
                   <Pressable
                     onPress={e => {
                       e.stopPropagation();
-                      completeGoal(g);
+                      requestComplete(g);
                     }}
                     style={({ pressed }) => [styles.tinyBtn, pressed ? { opacity: 0.85 } : null]}
                   >
@@ -261,21 +298,11 @@ export function GoalsScreen() {
                   <Pressable
                     onPress={e => {
                       e.stopPropagation();
-                      void giveUpGoal(g);
+                      void requestQuit(g);
                     }}
                     style={({ pressed }) => [styles.tinyBtn, pressed ? { opacity: 0.85 } : null]}
                   >
                     <Text style={styles.tinyBtnText}>✕</Text>
-                  </Pressable>
-
-                  <Pressable
-                    onPress={e => {
-                      e.stopPropagation();
-                      requestDelete(g);
-                    }}
-                    style={({ pressed }) => [styles.tinyBtn, styles.tinyDanger, pressed ? { opacity: 0.85 } : null]}
-                  >
-                    <Text style={[styles.tinyBtnText, { color: '#1a0a0f' }]}>🗑</Text>
                   </Pressable>
                 </View>
               </Pressable>
@@ -351,16 +378,34 @@ export function GoalsScreen() {
           <Pressable style={StyleSheet.absoluteFill} onPress={closeConfirm} />
           <View style={styles.sheet}>
             <View style={styles.sheetHead}>
-              <Text style={styles.sheetTitle}>Confirm delete</Text>
+              <Text style={styles.sheetTitle}>
+                {confirm.action === 'complete' ? 'Confirm complete' : confirm.action === 'quit' ? 'Confirm quit' : 'Confirm delete'}
+              </Text>
               <Pressable onPress={closeConfirm} hitSlop={10}>
                 <Text style={styles.close}>✕</Text>
               </Pressable>
             </View>
-            <Text style={styles.confirmText}>Are you sure you want to delete this goal? (You may lose points in that category.)</Text>
+            {confirm.action === 'complete' ? (
+              <Text style={styles.confirmText}>Are you sure you want to complete this goal?</Text>
+            ) : confirm.action === 'quit' ? (
+              <Text style={styles.confirmText}>
+                Are you sure you want to quit this goal?
+                {confirm.xpLoss ? ` You will lose ${confirm.xpLoss} XP.` : ''}
+              </Text>
+            ) : (
+              <Text style={styles.confirmText}>
+                Are you sure you want to delete this goal?
+                {confirm.xpLoss ? ` You will lose ${confirm.xpLoss} XP.` : ''}
+              </Text>
+            )}
             <View style={styles.divider} />
             <View style={styles.rowEnd}>
               <Button title="No" onPress={closeConfirm} />
-              <Button title="Yes" variant="danger" onPress={deleteConfirmed} />
+              <Button
+                title="Yes"
+                variant={confirm.action === 'complete' ? 'primary' : 'danger'}
+                onPress={confirmAction}
+              />
             </View>
           </View>
         </View>

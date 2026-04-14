@@ -169,6 +169,8 @@ export function GoalDetailScreen() {
   const [deadlineModalOpen, setDeadlineModalOpen] = useState(false);
   const [deadlineDraft, setDeadlineDraft] = useState('');
 
+  const [completeConfirmOpen, setCompleteConfirmOpen] = useState(false);
+
   const deadlineLabel = useMemo(() => {
     if (!dueAt) return 'None';
     const d = new Date(dueAt);
@@ -414,6 +416,12 @@ export function GoalDetailScreen() {
   }
 
   async function finish() {
+    if (!goalId) return;
+    setCompleteConfirmOpen(true);
+  }
+
+  async function confirmComplete() {
+    setCompleteConfirmOpen(false);
     await saveImpl({ finish: true });
   }
 
@@ -540,6 +548,26 @@ export function GoalDetailScreen() {
           ) : null}
         </Card>
       </ScrollView>
+
+      <Modal visible={completeConfirmOpen} transparent animationType="fade" onRequestClose={() => setCompleteConfirmOpen(false)}>
+        <View style={styles.backdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setCompleteConfirmOpen(false)} />
+          <View style={styles.sheet}>
+            <View style={styles.sheetHead}>
+              <Text style={styles.sheetTitle}>Confirm complete</Text>
+              <Pressable onPress={() => setCompleteConfirmOpen(false)} hitSlop={10}>
+                <Text style={styles.close}>✕</Text>
+              </Pressable>
+            </View>
+            <Text style={styles.meta}>Are you sure you want to complete this goal?</Text>
+            <View style={styles.divider} />
+            <View style={styles.rowEnd}>
+              <Button title="No" onPress={() => setCompleteConfirmOpen(false)} />
+              <Button title="Yes" variant="primary" onPress={confirmComplete} />
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <Modal visible={deadlineModalOpen} transparent animationType="fade" onRequestClose={closeDeadlineEditor}>
         <View style={styles.backdrop}>
