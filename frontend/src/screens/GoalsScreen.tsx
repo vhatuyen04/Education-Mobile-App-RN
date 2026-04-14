@@ -36,6 +36,7 @@ export function GoalsScreen() {
   const failedGoals = useMemo(() => {
     const now = Date.now();
     return goals.filter(g => {
+      if (g.deletedAt) return false;
       if (g.completed) return false;
       const reason = failedMap[g.id];
       if (reason) return true;
@@ -47,12 +48,12 @@ export function GoalsScreen() {
 
   const activeGoals = useMemo(() => {
     const failedIds = new Set(failedGoals.map(g => g.id));
-    return goals.filter(g => !g.completed && !failedIds.has(g.id));
+    return goals.filter(g => !g.deletedAt && !g.completed && !failedIds.has(g.id));
   }, [failedGoals, goals]);
 
   const activeCount = useMemo(() => activeGoals.length, [activeGoals.length]);
   const completedCount = useMemo(() => goals.filter(g => g.completed).length, [goals]);
-  const completedGoals = useMemo(() => goals.filter(g => g.completed), [goals]);
+  const completedGoals = useMemo(() => goals.filter(g => !g.deletedAt && g.completed), [goals]);
   const [confirm, setConfirm] = useState<{
     open: boolean;
     goal?: Goal;
@@ -76,7 +77,7 @@ export function GoalsScreen() {
     setLoading(true);
     try {
       const fm = await getFailedGoalsMap();
-      const resp = await authApi.listGoals(token);
+      const resp = await authApi.listGoals(token, { includeDeleted: true });
       const list = resp.goals ?? [];
       setGoals(list);
 
@@ -265,7 +266,7 @@ export function GoalsScreen() {
 
           <View style={{ gap: 10 }}>
             {loading ? <Text style={styles.meta}>Loading…</Text> : null}
-            {!loading && goals.length === 0 ? <Text style={styles.meta}>No goals yet.</Text> : null}
+            {!loading && goals.filter(g => !g.deletedAt).length === 0 ? <Text style={styles.meta}>No goals yet.</Text> : null}
 
             {!loading && activeGoals.length > 0 ? <Text style={styles.sectionTitle}>Active goals</Text> : null}
             {activeGoals.map(g => (
