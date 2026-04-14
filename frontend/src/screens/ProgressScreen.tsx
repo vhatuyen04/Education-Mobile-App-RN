@@ -190,12 +190,12 @@ export function ProgressScreen() {
     setLoading(true);
     try {
       const [goalsResp, lp, dash, fm] = await Promise.all([
-        authApi.listGoals(token),
+        authApi.listGoals(token, { includeDeleted: true }),
         getLocalProgress(),
         authApi.getDashboard(token),
         getFailedGoalsMap(),
       ]);
-      setGoals((goalsResp.goals ?? []).filter(g => !g.deletedAt));
+      setGoals(goalsResp.goals ?? []);
       setFailedMap(fm);
       setGoalStreakDays(lp.goalStreakDays ?? 0);
       setLevel(lp.level ?? 1);
@@ -220,9 +220,10 @@ export function ProgressScreen() {
 
   const summary = useMemo(() => {
     const now = Date.now();
-    const total = goals.length;
-    const completed = goals.filter(g => g.completed).length;
-    const failed = goals.filter(g => {
+    const existing = goals.filter(g => !g.deletedAt);
+    const total = existing.length;
+    const completed = existing.filter(g => g.completed).length;
+    const failed = existing.filter(g => {
       if (g.completed) return false;
       const reason = failedMap[g.id];
       if (reason) return true;
@@ -230,7 +231,7 @@ export function ProgressScreen() {
       const t = new Date(g.dueAt).getTime();
       return Number.isFinite(t) && t > 0 && t < now;
     }).length;
-    const active = total - completed - failed;
+    const active = existing.length - completed - failed;
     return { total, completed, active, failed };
   }, [failedMap, goals]);
 

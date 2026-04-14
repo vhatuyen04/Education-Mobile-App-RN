@@ -56,9 +56,8 @@ export function GoalsDetailsScreen() {
   );
 
   const computed = useMemo(() => {
-    const total = goals.length;
-    const deleted = goals.filter(g => !!g.deletedAt).length;
     const existing = goals.filter(g => !g.deletedAt);
+    const total = existing.length;
     const completed = existing.filter(g => g.completed).length;
 
     const failed = existing.filter(g => {
@@ -70,7 +69,7 @@ export function GoalsDetailsScreen() {
 
     const active = existing.length - completed - failed;
 
-    return { total, deleted, existing: existing.length, completed, failed, active };
+    return { total, completed, failed, active };
   }, [failedMap, goals]);
 
   const rows = useMemo(() => {
@@ -107,11 +106,10 @@ export function GoalsDetailsScreen() {
         <Card>
           <View style={styles.cardTitleRow}>
             <Text style={styles.cardTitle}>Summary</Text>
-            <Badge>{loading ? 'Loading…' : `${computed.existing} goals`}</Badge>
+            <Badge>{loading ? 'Loading…' : `${computed.total} goals`}</Badge>
           </View>
           <View style={{ height: 10 }} />
-          <Text style={styles.meta}>Total (including deleted): {computed.total}</Text>
-          <Text style={styles.meta}>Deleted: {computed.deleted}</Text>
+          <Text style={styles.meta}>Total goals: {computed.total}</Text>
           <Text style={styles.meta}>Active: {computed.active}</Text>
           <Text style={styles.meta}>Completed: {computed.completed}</Text>
           <Text style={styles.meta}>Failed: {computed.failed}</Text>
