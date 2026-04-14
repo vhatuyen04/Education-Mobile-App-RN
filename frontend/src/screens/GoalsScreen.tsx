@@ -193,10 +193,7 @@ export function GoalsScreen() {
   }
 
   function requestDelete(g: Goal) {
-    void (async () => {
-      const app = await isAppGoal(g.id);
-      setConfirm({ open: true, goal: g, action: 'delete', xpLoss: app ? SMARTGOAL_QUIT_XP_LOSS : 0 });
-    })();
+    setConfirm({ open: true, goal: g, action: 'delete', xpLoss: 0 });
   }
 
   function closeConfirm() {
@@ -231,7 +228,6 @@ export function GoalsScreen() {
 
       const app = await isAppGoal(confirm.goal.id);
       await authApi.deleteGoal(token, confirm.goal.id);
-      await applySmartGoalXpLoss(confirm.goal.id, Number(confirm.xpLoss ?? 0));
       await unmarkFailedGoal(confirm.goal.id);
       if (app) {
         await unmarkAppGoal(confirm.goal.id);
@@ -394,8 +390,7 @@ export function GoalsScreen() {
               </Text>
             ) : (
               <Text style={styles.confirmText}>
-                Are you sure you want to delete this goal?
-                {confirm.xpLoss ? ` You will lose ${confirm.xpLoss} XP.` : ''}
+                Do you want to remove this goal from the screen?
               </Text>
             )}
             <View style={styles.divider} />

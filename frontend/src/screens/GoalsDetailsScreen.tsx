@@ -56,18 +56,17 @@ export function GoalsDetailsScreen() {
   );
 
   const computed = useMemo(() => {
-    const existing = goals.filter(g => !g.deletedAt);
-    const total = existing.length;
-    const completed = existing.filter(g => g.completed).length;
+    const total = goals.length;
+    const completed = goals.filter(g => g.completed).length;
 
-    const failed = existing.filter(g => {
+    const failed = goals.filter(g => {
       if (g.completed) return false;
       const r = failedMap[g.id];
       if (r) return true;
       return isExpiredDueAt(g.dueAt);
     }).length;
 
-    const active = existing.length - completed - failed;
+    const active = total - completed - failed;
 
     return { total, completed, failed, active };
   }, [failedMap, goals]);

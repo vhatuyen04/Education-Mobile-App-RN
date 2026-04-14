@@ -220,10 +220,9 @@ export function ProgressScreen() {
 
   const summary = useMemo(() => {
     const now = Date.now();
-    const existing = goals.filter(g => !g.deletedAt);
-    const total = existing.length;
-    const completed = existing.filter(g => g.completed).length;
-    const failed = existing.filter(g => {
+    const total = goals.length;
+    const completed = goals.filter(g => g.completed).length;
+    const failed = goals.filter(g => {
       if (g.completed) return false;
       const reason = failedMap[g.id];
       if (reason) return true;
@@ -231,7 +230,7 @@ export function ProgressScreen() {
       const t = new Date(g.dueAt).getTime();
       return Number.isFinite(t) && t > 0 && t < now;
     }).length;
-    const active = existing.length - completed - failed;
+    const active = total - completed - failed;
     return { total, completed, active, failed };
   }, [failedMap, goals]);
 
