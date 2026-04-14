@@ -559,7 +559,7 @@ export function GoalDetailScreen() {
                 <Text style={styles.close}>✕</Text>
               </Pressable>
             </View>
-            <Text style={styles.meta}>Are you sure you want to complete this goal?</Text>
+            <Text style={styles.meta}>Are you sure you completed this goal?</Text>
             <View style={styles.divider} />
             <View style={styles.rowEnd}>
               <Button title="No" onPress={() => setCompleteConfirmOpen(false)} />

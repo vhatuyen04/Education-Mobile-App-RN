@@ -747,7 +747,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
             contentContainerStyle={{ paddingBottom: 16 }}
             keyboardShouldPersistTaps="handled"
           >
-            <Text style={styles.mutedSmall}>Describe your plan. AI will suggest 1 goal and a checklist.</Text>
+            <Text style={styles.mutedSmall}>Describe your plan. SmartGoal will suggest 1 goal and a checklist.</Text>
 
             <View style={styles.field}>
               <Text style={styles.label}>Your plan</Text>

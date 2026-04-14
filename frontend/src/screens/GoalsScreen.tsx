@@ -386,7 +386,7 @@ export function GoalsScreen() {
               </Pressable>
             </View>
             {confirm.action === 'complete' ? (
-              <Text style={styles.confirmText}>Are you sure you want to complete this goal?</Text>
+              <Text style={styles.confirmText}>Are you sure you completed this goal?</Text>
             ) : confirm.action === 'quit' ? (
               <Text style={styles.confirmText}>
                 Are you sure you want to quit this goal?
