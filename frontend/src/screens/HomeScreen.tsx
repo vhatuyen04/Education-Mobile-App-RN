@@ -19,6 +19,7 @@ import { clearInbox, getInbox, removeInboxItem } from '../notifications/inbox';
 import * as Notifications from 'expo-notifications';
 import { listRecommendations, upsertRecommendation } from '../ai/recommendations';
 import { getLocalProgress, type LocalProgress } from '../motivation/progress';
+import { getFailedGoalsMap, type FailedReason } from '../motivation/failedGoals';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -44,6 +45,7 @@ export function HomeScreen() {
   const [dash, setDash] = useState<authApi.DashboardResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [localProgress, setLocalProgress] = useState<LocalProgress | null>(null);
+  const [failedMap, setFailedMap] = useState<Record<string, FailedReason>>({});
 
   const today = useMemo(() => {
     const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
@@ -56,8 +58,9 @@ export function HomeScreen() {
 
     setLoading(true);
     try {
-      const resp = await authApi.getDashboard(token);
+      const [resp, fm] = await Promise.all([authApi.getDashboard(token), getFailedGoalsMap()]);
       setDash(resp);
+      setFailedMap(fm);
       const lp = await getLocalProgress();
       setLocalProgress(lp);
     } catch (e: any) {
@@ -190,7 +193,13 @@ export function HomeScreen() {
   const level = localProgress?.level ?? 1;
   const goalStreakDays = localProgress?.goalStreakDays ?? 0;
   const todayEvents = dash?.todayEvents ?? [];
-  const todayGoals = useMemo(() => (dash?.todayGoals ?? []).filter(g => !isExpiredDueAt(g.dueAt)), [dash?.todayGoals]);
+  const todayGoals = useMemo(() => {
+    return (dash?.todayGoals ?? []).filter(g => {
+      if (isExpiredDueAt(g.dueAt)) return false;
+      const r = failedMap[String(g.id)];
+      return !r;
+    });
+  }, [dash?.todayGoals, failedMap]);
   const todaySteps = useMemo(() => {
     const steps = dash?.todaySteps ?? [];
     const allowedGoalIds = new Set(todayGoals.map(g => String(g.id)));

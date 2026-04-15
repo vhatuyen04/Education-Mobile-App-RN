@@ -754,7 +754,12 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
 
   const candidateSteps = await prismaAny.goalStep.findMany({
     where: {
-      goal: { userId, completed: false, deletedAt: null },
+      goal: {
+        userId,
+        completed: false,
+        deletedAt: null,
+        OR: [{ dueAt: null }, { dueAt: { gte: now } }],
+      },
       OR: [{ dueAt: { gte: startOfDay, lte: endOfDay } }, { repeat: { not: null } }],
     },
     select: {
