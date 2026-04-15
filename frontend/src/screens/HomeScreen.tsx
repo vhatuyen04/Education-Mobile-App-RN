@@ -61,6 +61,21 @@ export function HomeScreen() {
       const [resp, fm] = await Promise.all([authApi.getDashboard(token), getFailedGoalsMap()]);
       setDash(resp);
       setFailedMap(fm);
+
+      try {
+        const rawSteps = resp?.todaySteps ?? [];
+        const filteredOut = rawSteps.filter((s: any) => fm[String(s.goalId)] === 'gave_up').length;
+        console.log('[HomeScreen] dashboard counts', {
+          tasksPlanned: resp?.tasksPlanned,
+          todayEvents: (resp?.todayEvents ?? []).length,
+          todayGoals: (resp?.todayGoals ?? []).length,
+          todaySteps: rawSteps.length,
+          filteredOutSteps_gave_up: filteredOut,
+        });
+      } catch {
+        // ignore
+      }
+
       const lp = await getLocalProgress();
       setLocalProgress(lp);
     } catch (e: any) {
@@ -180,7 +195,19 @@ export function HomeScreen() {
   function isExpiredDueAt(dueAt: string | null | undefined) {
     if (!dueAt) return false;
     const t = new Date(dueAt).getTime();
-    return Number.isFinite(t) && t > 0 && t < Date.now();
+    if (!Number.isFinite(t) || t <= 0) return false;
+    const today0 = new Date();
+    today0.setHours(0, 0, 0, 0);
+    const due0 = new Date(t);
+    due0.setHours(0, 0, 0, 0);
+    return due0.getTime() < today0.getTime();
+  }
+
+  function isFailedGoal(goalId: string, dueAt: string | null | undefined) {
+    const r = failedMap[String(goalId)];
+    if (r === 'gave_up') return true;
+    if (isExpiredDueAt(dueAt)) return true;
+    return false;
   }
 
   const nextGoal = useMemo(() => {
@@ -196,15 +223,18 @@ export function HomeScreen() {
   const todayGoals = useMemo(() => {
     return (dash?.todayGoals ?? []).filter(g => {
       if (isExpiredDueAt(g.dueAt)) return false;
-      const r = failedMap[String(g.id)];
-      return !r;
+      return !isFailedGoal(String(g.id), g.dueAt);
     });
   }, [dash?.todayGoals, failedMap]);
   const todaySteps = useMemo(() => {
     const steps = dash?.todaySteps ?? [];
-    const allowedGoalIds = new Set(todayGoals.map(g => String(g.id)));
-    return steps.filter(s => allowedGoalIds.has(String(s.goalId)));
-  }, [dash?.todaySteps, todayGoals]);
+    return steps.filter(s => {
+      const goalId = String(s.goalId);
+      const r = failedMap[goalId];
+      if (r === 'gave_up') return false;
+      return true;
+    });
+  }, [dash?.todaySteps, failedMap]);
 
   const stepsByGoal = useMemo(() => {
     const map = new Map<string, { goalTitle: string; steps: typeof todaySteps }>();

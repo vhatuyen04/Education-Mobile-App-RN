@@ -13,6 +13,7 @@ import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
 import { applyStepToggle } from '../motivation/progress';
 import { messageForProgressEvent } from '../motivation/messages';
+import { getFailedGoalsMap, type FailedReason } from '../motivation/failedGoals';
 
 type ItemType = 'event' | 'goal' | 'step';
 
@@ -33,6 +34,7 @@ export function TodayDetailsScreen() {
   const { state } = useAuth();
   const [dash, setDash] = useState<authApi.DashboardResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [failedMap, setFailedMap] = useState<Record<string, FailedReason>>({});
 
   const [confirm, setConfirm] = useState<{ open: boolean; item?: Item }>({ open: false });
 
@@ -42,14 +44,33 @@ export function TodayDetailsScreen() {
 
     setLoading(true);
     try {
-      const resp = await authApi.getDashboard(token);
+      const [resp, fm] = await Promise.all([authApi.getDashboard(token), getFailedGoalsMap()]);
       setDash(resp);
+      setFailedMap(fm);
     } catch (e: any) {
       toast(String(e?.message ?? 'Failed to load'));
     } finally {
       setLoading(false);
     }
   }, [state.accessToken]);
+
+  function isExpiredDueAt(dueAt: string | null | undefined) {
+    if (!dueAt) return false;
+    const t = new Date(dueAt).getTime();
+    if (!Number.isFinite(t) || t <= 0) return false;
+    const today0 = new Date();
+    today0.setHours(0, 0, 0, 0);
+    const due0 = new Date(t);
+    due0.setHours(0, 0, 0, 0);
+    return due0.getTime() < today0.getTime();
+  }
+
+  function isFailedGoal(goalId: string, dueAt: string | null | undefined) {
+    const r = failedMap[String(goalId)];
+    if (r === 'gave_up') return true;
+    if (isExpiredDueAt(dueAt)) return true;
+    return false;
+  }
 
   useFocusEffect(
     useCallback(() => {
@@ -94,25 +115,37 @@ export function TodayDetailsScreen() {
       seriesId: (e as any).seriesId ?? null,
     }));
 
-    const goals = (dash?.todayGoals ?? []).map(g => ({
+    const allowedGoals = (dash?.todayGoals ?? []).filter(g => {
+      if (isExpiredDueAt(g.dueAt)) return false;
+      return !isFailedGoal(String(g.id), g.dueAt);
+    });
+
+    const goals = allowedGoals.map(g => ({
       id: g.id,
       type: 'goal' as const,
       name: g.title,
       meta: g.dueAt ? formatDueBadge(g.dueAt) : 'No due date',
     }));
 
-    const steps = (dash?.todaySteps ?? []).map(s => ({
-      id: s.id,
-      goalId: s.goalId,
-      goalTitle: s.goalTitle,
-      type: 'step' as const,
-      name: s.text,
-      meta: s.dueAt ? formatDueBadge(s.dueAt) : s.repeat ? `Repeat: ${s.repeat}` : 'Step',
-      doneToday: s.doneToday,
-    }));
+    const steps = (dash?.todaySteps ?? [])
+      .filter(s => {
+        const goalId = String(s.goalId);
+        const r = failedMap[goalId];
+        if (r === 'gave_up') return false;
+        return true;
+      })
+      .map(s => ({
+        id: s.id,
+        goalId: s.goalId,
+        goalTitle: s.goalTitle,
+        type: 'step' as const,
+        name: s.text,
+        meta: s.dueAt ? formatDueBadge(s.dueAt) : s.repeat ? `Repeat: ${s.repeat}` : 'Step',
+        doneToday: s.doneToday,
+      }));
 
     return [...events, ...goals, ...steps];
-  }, [dash?.todayEvents, dash?.todayGoals, dash?.todaySteps]);
+  }, [dash?.todayEvents, dash?.todayGoals, dash?.todaySteps, failedMap]);
 
   const confirmText = useMemo(() => {
     if (!confirm.item) return 'Are you sure you want to delete this item?';

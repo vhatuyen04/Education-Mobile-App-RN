@@ -758,7 +758,7 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
         userId,
         completed: false,
         deletedAt: null,
-        OR: [{ dueAt: null }, { dueAt: { gte: now } }],
+        OR: [{ dueAt: null }, { dueAt: { gte: startOfDay } }],
       },
       OR: [{ dueAt: { gte: startOfDay, lte: endOfDay } }, { repeat: { not: null } }],
     },
