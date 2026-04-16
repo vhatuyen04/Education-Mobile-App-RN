@@ -117,7 +117,9 @@ export function TodayDetailsScreen() {
 
     const allowedGoals = (dash?.todayGoals ?? []).filter(g => {
       if (isExpiredDueAt(g.dueAt)) return false;
-      return !isFailedGoal(String(g.id), g.dueAt);
+      const r = failedMap[String(g.id)];
+      if (r === 'gave_up') return false;
+      return true;
     });
 
     const goals = allowedGoals.map(g => ({

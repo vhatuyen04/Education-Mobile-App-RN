@@ -7,9 +7,10 @@ import { AuthStack } from './AuthStack';
 import { GoalDetailScreen } from '../screens/GoalDetailScreen';
 import { TodayDetailsScreen } from '../screens/TodayDetailsScreen';
 import { ScheduleWeekScreen } from '../screens/ScheduleWeekScreen';
+import { AiGoalRecommendationScreen } from '../screens/AiGoalRecommendationScreen';
 import { NotificationListScreen } from '../screens/NotificationListScreen';
 import { NotificationSettingsScreen } from '../screens/NotificationSettingsScreen';
-import { AiGoalRecommendationScreen } from '../screens/AiGoalRecommendationScreen';
+import { SmartGoalProofScreen } from '../screens/SmartGoalProofScreen';
 import { ProgressScreen } from '../screens/ProgressScreen';
 import { GoalsDetailsScreen } from '../screens/GoalsDetailsScreen';
 import { colors } from '../theme/colors';
@@ -39,10 +40,11 @@ export function RootStack() {
           <Stack.Screen name="TodayDetails" component={TodayDetailsScreen} options={{ title: 'Details', headerShown: false }} />
           <Stack.Screen name="ScheduleWeek" component={ScheduleWeekScreen} options={{ title: 'Modify schedule', headerShown: false }} />
           <Stack.Screen name="NotificationList" component={NotificationListScreen} options={{ title: 'Notifications', headerShown: false }} />
-          <Stack.Screen name="NotificationSettings" component={NotificationSettingsScreen} options={{ title: 'Notifications', headerShown: false }} />
+          <Stack.Screen name="NotificationSettings" component={NotificationSettingsScreen} options={{ title: 'Notification settings' }} />
+          <Stack.Screen name="GoalsDetails" component={GoalsDetailsScreen} options={{ title: 'Goals details' }} />
+          <Stack.Screen name="SmartGoalProof" component={SmartGoalProofScreen} options={{ title: 'Complete SmartGoal' }} />
           <Stack.Screen name="AiGoalRecommendation" component={AiGoalRecommendationScreen} options={{ title: 'AI recommendation', headerShown: false }} />
           <Stack.Screen name="Progress" component={ProgressScreen} options={{ title: 'Progress', headerShown: false }} />
-          <Stack.Screen name="GoalsDetails" component={GoalsDetailsScreen} options={{ title: 'Goals', headerShown: false }} />
         </>
       ) : (
         <Stack.Screen name="Auth" component={AuthStack} options={{ headerShown: false }} />

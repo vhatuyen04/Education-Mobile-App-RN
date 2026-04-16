@@ -218,17 +218,17 @@ export function ProgressScreen() {
     }, [refresh])
   );
 
-  const summary = useMemo(() => {
-    const now = Date.now();
-    const total = goals.length;
+  const counts = useMemo(() => {
+    const total = goals.filter(g => !g.deletedAt).length;
     const completed = goals.filter(g => g.completed).length;
     const failed = goals.filter(g => {
       if (g.completed) return false;
+      if (g.failedAt) return true;
       const reason = failedMap[g.id];
       if (reason) return true;
       if (!g.dueAt) return false;
       const t = new Date(g.dueAt).getTime();
-      return Number.isFinite(t) && t > 0 && t < now;
+      return Number.isFinite(t) && t > 0 && t < Date.now();
     }).length;
     const active = total - completed - failed;
     return { total, completed, active, failed };
@@ -285,10 +285,10 @@ export function ProgressScreen() {
             <Button title="Detail" small onPress={() => nav.navigate('GoalsDetails')} />
           </View>
           <View style={{ height: 10 }} />
-          <Text style={styles.meta}>Total goals: {summary.total}</Text>
-          <Text style={styles.meta}>Completed goals: {summary.completed}</Text>
-          <Text style={styles.meta}>Active goals: {summary.active}</Text>
-          <Text style={styles.meta}>Failed goals: {summary.failed}</Text>
+          <Text style={styles.meta}>Total goals: {counts.total}</Text>
+          <Text style={styles.meta}>Completed goals: {counts.completed}</Text>
+          <Text style={styles.meta}>Active goals: {counts.active}</Text>
+          <Text style={styles.meta}>Failed goals: {counts.failed}</Text>
         </Card>
       </ScrollView>
     </Screen>

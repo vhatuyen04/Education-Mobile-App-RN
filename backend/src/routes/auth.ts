@@ -1,6 +1,10 @@
 import bcrypt from 'bcrypt';
 import { randomUUID } from 'crypto';
 import { Request, Response, Router } from 'express';
+import cors from 'cors';
+import express from 'express';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import jwt, { type Secret, type SignOptions } from 'jsonwebtoken';
 import { z } from 'zod';
 
@@ -26,7 +30,36 @@ import {
 
 export const authRouter = Router();
 
-const prismaAny = prisma as any;
+const prismaAny: any = prisma;
+
+function getS3ClientOrNull() {
+  const config = getConfig();
+  if (!config.s3Region || !config.s3Bucket || !config.awsAccessKeyId || !config.awsSecretAccessKey) return null;
+  const s3 = new S3Client({
+    region: config.s3Region,
+    credentials: {
+      accessKeyId: config.awsAccessKeyId,
+      secretAccessKey: config.awsSecretAccessKey,
+    },
+  });
+  return { s3, bucket: config.s3Bucket };
+}
+
+async function completeGoalForUser(params: { userId: string; goalId: string }) {
+  const { userId, goalId } = params;
+  const existing = await prismaAny.goal.findFirst({ where: { id: goalId, userId }, select: { id: true, completed: true, rankField: true } });
+  if (!existing) return { ok: false as const, error: 'Not found' };
+  if (existing.completed) return { ok: true as const };
+
+  await prismaAny.goal.update({ where: { id: goalId }, data: { completed: true }, select: { id: true } });
+  if (existing.rankField) {
+    const scoreField = scoreFieldForRankField(existing.rankField);
+    await prismaAny.user.update({ where: { id: userId }, data: { [scoreField]: { increment: 1 } }, select: { id: true } });
+    await refreshLeaderboardTop(existing.rankField);
+  }
+
+  return { ok: true as const };
+}
 
 function startOfLocalDay(d: Date) {
   const x = new Date(d);
@@ -648,7 +681,7 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
   const endOfDay = endOfLocalDay(now);
 
   const nextGoalWithDue = await prismaAny.goal.findFirst({
-    where: { userId, completed: false, deletedAt: null, dueAt: { not: null } },
+    where: { userId, completed: false, deletedAt: null, failedAt: null, dueAt: { gte: startOfDay } },
     orderBy: [{ dueAt: 'asc' }, { createdAt: 'asc' }],
     select: { id: true, title: true, description: true, rankField: true, progressPct: true, dueAt: true, createdAt: true },
   });
@@ -656,7 +689,7 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
   const nextGoal =
     nextGoalWithDue ??
     (await prismaAny.goal.findFirst({
-      where: { userId, completed: false, deletedAt: null },
+      where: { userId, completed: false, deletedAt: null, failedAt: null, OR: [{ dueAt: null }, { dueAt: { gte: startOfDay } }] },
       orderBy: [{ createdAt: 'asc' }],
       select: { id: true, title: true, description: true, rankField: true, progressPct: true, dueAt: true, createdAt: true },
     }));
@@ -758,6 +791,7 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
         userId,
         completed: false,
         deletedAt: null,
+        failedAt: null,
         OR: [{ dueAt: null }, { dueAt: { gte: startOfDay } }],
       },
       OR: [{ dueAt: { gte: startOfDay, lte: endOfDay } }, { repeat: { not: null } }],
@@ -815,7 +849,7 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
   });
 
   const todayGoals = await prismaAny.goal.findMany({
-    where: { userId, completed: false, deletedAt: null, dueAt: { gte: startOfDay, lte: endOfDay } },
+    where: { userId, completed: false, deletedAt: null, failedAt: null, dueAt: { gte: startOfDay, lte: endOfDay } },
     orderBy: [{ dueAt: 'asc' }, { createdAt: 'asc' }],
     select: { id: true, title: true, description: true, rankField: true, progressPct: true, dueAt: true },
     take: 20,
@@ -855,6 +889,149 @@ authRouter.get('/goals/:id/steps', async (req: Request, res: Response) => {
   });
 
   return res.json({ steps });
+});
+
+authRouter.post('/goals/:id/proof-attempts/presign', async (req: Request, res: Response) => {
+  const token = getAccessTokenFromReq(req);
+  if (!token) return res.status(401).json({ error: 'Missing access token' });
+
+  let userId: string;
+  try {
+    userId = verifyAccessToken(token).sub;
+  } catch {
+    return res.status(401).json({ error: 'Invalid access token' });
+  }
+
+  const s3c = getS3ClientOrNull();
+  if (!s3c) return res.status(500).json({ error: 'S3 is not configured' });
+
+  const goalId = String(req.params.id);
+  const goal = await prismaAny.goal.findFirst({ where: { id: goalId, userId, deletedAt: null }, select: { id: true, completed: true } });
+  if (!goal) return res.status(404).json({ error: 'Not found' });
+  if (goal.completed) return res.status(400).json({ error: 'Goal already completed' });
+
+  const requirementText = typeof (req.body as any)?.requirementText === 'string' ? String((req.body as any).requirementText) : null;
+  const contentType = typeof (req.body as any)?.contentType === 'string' ? String((req.body as any).contentType) : 'video/mp4';
+  const fileExt = typeof (req.body as any)?.fileExt === 'string' ? String((req.body as any).fileExt) : 'mp4';
+
+  const attempt = await prismaAny.smartGoalProofAttempt.create({
+    data: {
+      userId,
+      goalId,
+      status: 'PENDING_UPLOAD',
+      requirementText,
+    },
+    select: { id: true, status: true },
+  });
+
+  const proofKey = `smartgoals/${userId}/${goalId}/${attempt.id}.${fileExt}`;
+  const cmd = new PutObjectCommand({ Bucket: s3c.bucket, Key: proofKey, ContentType: contentType });
+  const uploadUrl = await getSignedUrl(s3c.s3, cmd, { expiresIn: 60 * 10 });
+  const proofUrl = `https://${s3c.bucket}.s3.${getConfig().s3Region}.amazonaws.com/${proofKey}`;
+
+  await prismaAny.smartGoalProofAttempt.update({
+    where: { id: attempt.id },
+    data: { proofKey, proofUrl },
+    select: { id: true },
+  });
+
+  return res.json({ attemptId: attempt.id, status: attempt.status, uploadUrl, proofKey, proofUrl });
+});
+
+authRouter.post('/goals/:id/proof-attempts/:attemptId/submit', async (req: Request, res: Response) => {
+  const token = getAccessTokenFromReq(req);
+  if (!token) return res.status(401).json({ error: 'Missing access token' });
+
+  let userId: string;
+  try {
+    userId = verifyAccessToken(token).sub;
+  } catch {
+    return res.status(401).json({ error: 'Invalid access token' });
+  }
+
+  const goalId = String(req.params.id);
+  const attemptId = String(req.params.attemptId);
+
+  const attempt = await prismaAny.smartGoalProofAttempt.findFirst({
+    where: { id: attemptId, userId, goalId },
+    select: { id: true, status: true, proofKey: true, proofUrl: true },
+  });
+  if (!attempt) return res.status(404).json({ error: 'Not found' });
+
+  const updated = await prismaAny.smartGoalProofAttempt.update({
+    where: { id: attemptId },
+    data: { status: 'PENDING_REVIEW' },
+    select: { id: true, status: true, aiFeedback: true },
+  });
+
+  return res.json({ attempt: updated });
+});
+
+authRouter.get('/goals/:id/proof-attempts/:attemptId', async (req: Request, res: Response) => {
+  const token = getAccessTokenFromReq(req);
+  if (!token) return res.status(401).json({ error: 'Missing access token' });
+
+  let userId: string;
+  try {
+    userId = verifyAccessToken(token).sub;
+  } catch {
+    return res.status(401).json({ error: 'Invalid access token' });
+  }
+
+  const goalId = String(req.params.id);
+  const attemptId = String(req.params.attemptId);
+
+  const attempt = await prismaAny.smartGoalProofAttempt.findFirst({
+    where: { id: attemptId, userId, goalId },
+    select: { id: true, status: true, requirementText: true, proofUrl: true, aiFeedback: true, createdAt: true, updatedAt: true },
+  });
+  if (!attempt) return res.status(404).json({ error: 'Not found' });
+  return res.json({ attempt });
+});
+
+authRouter.post('/goals/:id/proof-attempts/:attemptId/mock-review', async (req: Request, res: Response) => {
+  const token = getAccessTokenFromReq(req);
+  if (!token) return res.status(401).json({ error: 'Missing access token' });
+
+  let userId: string;
+  try {
+    userId = verifyAccessToken(token).sub;
+  } catch {
+    return res.status(401).json({ error: 'Invalid access token' });
+  }
+
+  const goalId = String(req.params.id);
+  const attemptId = String(req.params.attemptId);
+
+  const decision = String((req.body as any)?.decision ?? '').toUpperCase();
+  const feedback = typeof (req.body as any)?.feedback === 'string' ? String((req.body as any).feedback) : null;
+  if (decision !== 'APPROVE' && decision !== 'REJECT') {
+    return res.status(400).json({ error: 'Invalid payload' });
+  }
+
+  const attempt = await prismaAny.smartGoalProofAttempt.findFirst({ where: { id: attemptId, userId, goalId }, select: { id: true, status: true } });
+  if (!attempt) return res.status(404).json({ error: 'Not found' });
+  if (attempt.status !== 'PENDING_REVIEW') {
+    return res.status(400).json({ error: 'Attempt is not pending review' });
+  }
+
+  const nextStatus = decision === 'APPROVE' ? 'APPROVED' : 'REJECTED';
+  await prismaAny.smartGoalProofAttempt.update({
+    where: { id: attemptId },
+    data: { status: nextStatus, aiFeedback: feedback },
+    select: { id: true },
+  });
+
+  if (decision === 'APPROVE') {
+    const done = await completeGoalForUser({ userId, goalId });
+    if (!done.ok) return res.status(404).json({ error: done.error });
+  }
+
+  const updated = await prismaAny.smartGoalProofAttempt.findFirst({
+    where: { id: attemptId, userId, goalId },
+    select: { id: true, status: true, aiFeedback: true },
+  });
+  return res.json({ attempt: updated });
 });
 
 authRouter.post('/goals/:id/steps', async (req: Request, res: Response) => {
@@ -1099,12 +1276,27 @@ authRouter.get('/goals', async (req: Request, res: Response) => {
     return res.status(401).json({ error: 'Invalid access token' });
   }
 
-  const includeDeleted = String((req.query as any)?.includeDeleted ?? '').toLowerCase() === 'true';
+  const includeDeleted = String((req.query as any).includeDeleted ?? '') === '1';
+  const includeFailed = String((req.query as any).includeFailed ?? '') === '1';
+  const where: any = { userId };
+  if (!includeDeleted) where.deletedAt = null;
+  if (!includeFailed) where.failedAt = null;
 
   const goals = await prismaAny.goal.findMany({
-    where: includeDeleted ? { userId } : { userId, deletedAt: null },
-    orderBy: [{ completed: 'asc' }, { dueAt: 'asc' }, { createdAt: 'asc' }],
-    select: { id: true, title: true, description: true, rankField: true, progressPct: true, dueAt: true, completed: true, deletedAt: true },
+    where,
+    orderBy: [{ createdAt: 'desc' }],
+    select: {
+      id: true,
+      title: true,
+      description: true,
+      rankField: true,
+      progressPct: true,
+      dueAt: true,
+      completed: true,
+      deletedAt: true,
+      failedAt: true,
+      failedReason: true,
+    },
     take: 200,
   });
 
@@ -1127,7 +1319,19 @@ authRouter.get('/goals/:id', async (req: Request, res: Response) => {
   const id = String(req.params.id);
   const goal = await prismaAny.goal.findFirst({
     where: { id, userId },
-    select: { id: true, title: true, description: true, rankField: true, progressPct: true, dueAt: true, completed: true, deletedAt: true },
+    select: {
+      id: true,
+      title: true,
+      description: true,
+      rankField: true,
+      progressPct: true,
+      dueAt: true,
+      completed: true,
+      deletedAt: true,
+      failedAt: true,
+      failedReason: true,
+      createdAt: true,
+    },
   });
 
   if (!goal) {
@@ -1169,6 +1373,11 @@ authRouter.put('/goals/:id', async (req: Request, res: Response) => {
   if (parsed.data.dueAt !== undefined) data.dueAt = parsed.data.dueAt ? new Date(parsed.data.dueAt) : null;
   if (parsed.data.completed !== undefined) data.completed = parsed.data.completed;
 
+  if (parsed.data.completed === true) {
+    data.failedAt = null;
+    data.failedReason = null;
+  }
+
   if (data.rankField === undefined && !existing.rankField) {
     const inferred = inferRankFieldFromDescription(existing.description);
     if (inferred) data.rankField = inferred;
@@ -1182,7 +1391,18 @@ authRouter.put('/goals/:id', async (req: Request, res: Response) => {
   const goal = await prismaAny.goal.update({
     where: { id },
     data,
-    select: { id: true, title: true, description: true, rankField: true, progressPct: true, dueAt: true, completed: true },
+    select: {
+      id: true,
+      title: true,
+      description: true,
+      rankField: true,
+      progressPct: true,
+      dueAt: true,
+      completed: true,
+      deletedAt: true,
+      failedAt: true,
+      failedReason: true,
+    },
   });
 
   if (willComplete && existing.rankField) {
@@ -1196,6 +1416,37 @@ authRouter.put('/goals/:id', async (req: Request, res: Response) => {
     });
     await refreshLeaderboardTop(existing.rankField);
   }
+
+  return res.json({ goal });
+});
+
+authRouter.post('/goals/:id/fail', async (req: Request, res: Response) => {
+  const token = getAccessTokenFromReq(req);
+  if (!token) return res.status(401).json({ error: 'Missing access token' });
+
+  let userId: string;
+  try {
+    userId = verifyAccessToken(token).sub;
+  } catch {
+    return res.status(401).json({ error: 'Invalid access token' });
+  }
+
+  const id = String(req.params.id);
+  const reason = String((req.body as any)?.reason ?? '').toUpperCase();
+  if (reason !== 'EXPIRED' && reason !== 'GAVE_UP') {
+    return res.status(400).json({ error: 'Invalid payload' });
+  }
+
+  const existing = await prismaAny.goal.findFirst({ where: { id, userId }, select: { id: true, completed: true, deletedAt: true } });
+  if (!existing) return res.status(404).json({ error: 'Not found' });
+  if (existing.deletedAt) return res.status(400).json({ error: 'Goal deleted' });
+  if (existing.completed) return res.status(400).json({ error: 'Goal completed' });
+
+  const goal = await prismaAny.goal.update({
+    where: { id },
+    data: { failedAt: new Date(), failedReason: reason },
+    select: { id: true, failedAt: true, failedReason: true },
+  });
 
   return res.json({ goal });
 });

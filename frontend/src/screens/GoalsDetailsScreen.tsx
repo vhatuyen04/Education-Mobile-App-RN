@@ -39,7 +39,7 @@ export function GoalsDetailsScreen() {
     if (!token) return;
     setLoading(true);
     try {
-      const [resp, fm] = await Promise.all([authApi.listGoals(token, { includeDeleted: true }), getFailedGoalsMap()]);
+      const [resp, fm] = await Promise.all([authApi.listGoals(token, { includeDeleted: true, includeFailed: true }), getFailedGoalsMap()]);
       setGoals(resp.goals ?? []);
       setFailedMap(fm);
     } catch (e: any) {
@@ -55,17 +55,10 @@ export function GoalsDetailsScreen() {
     }, [refresh])
   );
 
-  const computed = useMemo(() => {
-    const total = goals.length;
+  const summary = useMemo(() => {
+    const total = goals.filter(g => !g.deletedAt).length;
     const completed = goals.filter(g => g.completed).length;
-
-    const failed = goals.filter(g => {
-      if (g.completed) return false;
-      const r = failedMap[g.id];
-      if (r) return true;
-      return isExpiredDueAt(g.dueAt);
-    }).length;
-
+    const failed = goals.filter(g => g.failedAt).length;
     const active = total - completed - failed;
 
     return { total, completed, failed, active };
@@ -87,6 +80,7 @@ export function GoalsDetailsScreen() {
 
   function statusForGoal(g: Goal) {
     if (g.completed) return { label: 'Completed', reason: null as string | null };
+    if (g.failedAt) return { label: 'Failed', reason: g.failedReason === 'GAVE_UP' ? 'Gave up' : 'Expired' };
     const r = failedMap[g.id] ?? (isExpiredDueAt(g.dueAt) ? 'expired' : null);
     if (r) return { label: 'Failed', reason: r === 'gave_up' ? 'Gave up' : 'Expired' };
     return { label: 'Active', reason: null as string | null };
@@ -105,13 +99,13 @@ export function GoalsDetailsScreen() {
         <Card>
           <View style={styles.cardTitleRow}>
             <Text style={styles.cardTitle}>Summary</Text>
-            <Badge>{loading ? 'Loading…' : `${computed.total} goals`}</Badge>
+            <Badge>{loading ? 'Loading…' : `${summary.total} goals`}</Badge>
           </View>
           <View style={{ height: 10 }} />
-          <Text style={styles.meta}>Total goals: {computed.total}</Text>
-          <Text style={styles.meta}>Active: {computed.active}</Text>
-          <Text style={styles.meta}>Completed: {computed.completed}</Text>
-          <Text style={styles.meta}>Failed: {computed.failed}</Text>
+          <Text style={styles.meta}>Total goals: {summary.total}</Text>
+          <Text style={styles.meta}>Active: {summary.active}</Text>
+          <Text style={styles.meta}>Completed: {summary.completed}</Text>
+          <Text style={styles.meta}>Failed: {summary.failed}</Text>
         </Card>
 
         <Card>

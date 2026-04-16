@@ -223,7 +223,9 @@ export function HomeScreen() {
   const todayGoals = useMemo(() => {
     return (dash?.todayGoals ?? []).filter(g => {
       if (isExpiredDueAt(g.dueAt)) return false;
-      return !isFailedGoal(String(g.id), g.dueAt);
+      const r = failedMap[String(g.id)];
+      if (r === 'gave_up') return false;
+      return true;
     });
   }, [dash?.todayGoals, failedMap]);
   const todaySteps = useMemo(() => {

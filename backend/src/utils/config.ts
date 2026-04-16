@@ -10,6 +10,10 @@ type Config = {
   refreshTokenTtl: string;
   openaiApiKey?: string;
   openaiModel?: string;
+  s3Region?: string;
+  s3Bucket?: string;
+  awsAccessKeyId?: string;
+  awsSecretAccessKey?: string;
 };
 
 function requireEnv(name: string): string {
@@ -31,5 +35,9 @@ export function getConfig(): Config {
     refreshTokenTtl: process.env.REFRESH_TOKEN_TTL ?? '30d',
     openaiApiKey: process.env.OPENAI_API_KEY,
     openaiModel: process.env.OPENAI_MODEL,
+    s3Region: process.env.S3_REGION,
+    s3Bucket: process.env.S3_BUCKET,
+    awsAccessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    awsSecretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
   };
 }

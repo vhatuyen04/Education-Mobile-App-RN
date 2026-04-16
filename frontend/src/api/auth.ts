@@ -182,6 +182,8 @@ export type GoalItem = {
   dueAt: string | null;
   completed: boolean;
   deletedAt?: string | null;
+  failedAt?: string | null;
+  failedReason?: 'EXPIRED' | 'GAVE_UP' | null;
 };
 
 export type DashboardEvent = {
@@ -224,6 +226,51 @@ export type DashboardResponse = {
   todayGoals: Exclude<DashboardGoal, null>[];
   todaySteps: TodayStepItem[];
 };
+
+export type SmartGoalProofStatus = 'PENDING_UPLOAD' | 'PENDING_REVIEW' | 'APPROVED' | 'REJECTED';
+
+export type SmartGoalProofAttempt = {
+  id: string;
+  status: SmartGoalProofStatus;
+  requirementText: string | null;
+  proofUrl: string | null;
+  aiFeedback: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export async function presignSmartGoalProof(
+  accessToken: string,
+  goalId: string,
+  body: { requirementText?: string | null; contentType?: string; fileExt?: string }
+): Promise<{ attemptId: string; status: SmartGoalProofStatus; uploadUrl: string; proofKey: string; proofUrl: string }> {
+  return postJsonAuth(`/auth/goals/${goalId}/proof-attempts/presign`, body, accessToken);
+}
+
+export async function submitSmartGoalProof(
+  accessToken: string,
+  goalId: string,
+  attemptId: string
+): Promise<{ attempt: Pick<SmartGoalProofAttempt, 'id' | 'status' | 'aiFeedback'> }> {
+  return postJsonAuth(`/auth/goals/${goalId}/proof-attempts/${attemptId}/submit`, {}, accessToken);
+}
+
+export async function getSmartGoalProofAttempt(
+  accessToken: string,
+  goalId: string,
+  attemptId: string
+): Promise<{ attempt: SmartGoalProofAttempt }> {
+  return getJsonAuth(`/auth/goals/${goalId}/proof-attempts/${attemptId}`, accessToken);
+}
+
+export async function mockReviewSmartGoalProof(
+  accessToken: string,
+  goalId: string,
+  attemptId: string,
+  body: { decision: 'APPROVE' | 'REJECT'; feedback?: string }
+): Promise<{ attempt: Pick<SmartGoalProofAttempt, 'id' | 'status' | 'aiFeedback'> }> {
+  return postJsonAuth(`/auth/goals/${goalId}/proof-attempts/${attemptId}/mock-review`, body, accessToken);
+}
 
 export type LeaderboardField = 'Sport' | 'Academy' | 'Entertainment';
 
@@ -282,11 +329,16 @@ export async function getLeaderboardField(
   return getJsonAuth<LeaderboardFieldPageResponse>(`/auth/leaderboard/field?${qs}`, accessToken);
 }
 
-export async function listGoals(accessToken: string, opts?: { includeDeleted?: boolean }): Promise<{ goals: GoalItem[] }> {
+export async function listGoals(accessToken: string, opts?: { includeDeleted?: boolean; includeFailed?: boolean }): Promise<{ goals: GoalItem[] }> {
   const sp = new URLSearchParams();
-  if (opts?.includeDeleted) sp.set('includeDeleted', 'true');
+  if (opts?.includeDeleted) sp.set('includeDeleted', '1');
+  if (opts?.includeFailed) sp.set('includeFailed', '1');
   const qs = sp.toString();
   return getJsonAuth<{ goals: GoalItem[] }>(`/auth/goals${qs ? `?${qs}` : ''}`, accessToken);
+}
+
+export async function failGoal(accessToken: string, goalId: string, body: { reason: 'EXPIRED' | 'GAVE_UP' }): Promise<any> {
+  return postJsonAuth(`/auth/goals/${encodeURIComponent(goalId)}/fail`, body, accessToken);
 }
 
 export async function getGoal(accessToken: string, id: string): Promise<{ goal: GoalItem }> {

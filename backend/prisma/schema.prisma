@@ -13,6 +13,18 @@ enum RankField {
   Entertainment
 }
 
+enum SmartGoalProofStatus {
+  PENDING_UPLOAD
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+}
+
+enum GoalFailedReason {
+  EXPIRED
+  GAVE_UP
+}
+
 model User {
   id               String   @id @default(uuid())
   email            String   @unique
@@ -23,10 +35,12 @@ model User {
   entertainmentScore Int     @default(0)
   passwordHash     String
   refreshTokenHash String?
-  goals            Goal[]
-  events           Event[]
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
+
+  goals            Goal[]
+  events           Event[]
+  smartGoalProofAttempts SmartGoalProofAttempt[]
 }
 
 model LeaderboardTop {
@@ -47,15 +61,38 @@ model Goal {
   dueAt       DateTime?
   completed   Boolean  @default(false)
   deletedAt   DateTime?
+  failedAt    DateTime?
+  failedReason GoalFailedReason?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   steps GoalStep[]
+  proofAttempts SmartGoalProofAttempt[]
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([userId, completed, dueAt])
+}
+
+model SmartGoalProofAttempt {
+  id              String             @id @default(uuid())
+  userId          String
+  goalId          String
+  status          SmartGoalProofStatus @default(PENDING_UPLOAD)
+  requirementText String?
+  proofKey        String?
+  proofUrl        String?
+  aiFeedback      String?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  goal Goal @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([goalId])
+  @@index([status])
 }
 
 model GoalStep {

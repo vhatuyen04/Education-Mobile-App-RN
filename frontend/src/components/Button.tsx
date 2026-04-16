@@ -12,18 +12,19 @@ type Props = {
   full?: boolean;
   small?: boolean;
   style?: ViewStyle;
+  disabled?: boolean;
 };
 
-export function Button({ title, onPress, variant = 'ghost', full, small, style }: Props) {
+export function Button({ title, onPress, variant = 'ghost', full, small, style, disabled }: Props) {
   return (
     <Pressable
-      onPress={onPress}
+      onPress={disabled ? () => {} : onPress}
       style={({ pressed }) => [
         styles.base,
         full ? styles.full : null,
         small ? styles.small : null,
         variantStyles[variant],
-        pressed ? { opacity: 0.85 } : null,
+        disabled ? { opacity: 0.45 } : pressed ? { opacity: 0.85 } : null,
         style,
       ]}
     >

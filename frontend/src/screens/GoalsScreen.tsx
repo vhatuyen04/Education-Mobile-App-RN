@@ -34,15 +34,12 @@ export function GoalsScreen() {
   const [failedMap, setFailedMap] = useState<Record<string, FailedReason>>({});
 
   const failedGoals = useMemo(() => {
-    const now = Date.now();
     return goals.filter(g => {
       if (g.deletedAt) return false;
       if (g.completed) return false;
+      if (g.failedAt) return true;
       const reason = failedMap[g.id];
-      if (reason) return true;
-      if (!g.dueAt) return false;
-      const t = new Date(g.dueAt).getTime();
-      return Number.isFinite(t) && t > 0 && t < now;
+      return !!reason;
     });
   }, [failedMap, goals]);
 
@@ -77,28 +74,37 @@ export function GoalsScreen() {
     setLoading(true);
     try {
       const fm = await getFailedGoalsMap();
-      const resp = await authApi.listGoals(token, { includeDeleted: true });
+      const resp = await authApi.listGoals(token, { includeDeleted: true, includeFailed: true });
       const list = resp.goals ?? [];
       setGoals(list);
 
       const now = Date.now();
       for (const g of list) {
         if (g.completed) continue;
+        if (g.deletedAt) continue;
+        if (g.failedAt) continue;
         if (!g.dueAt) continue;
         const t = new Date(g.dueAt).getTime();
         if (!Number.isFinite(t) || t <= 0) continue;
         if (t >= now) continue;
-        if (fm[g.id]) continue;
 
-        fm[g.id] = 'expired';
-        await markFailedGoal(g.id, 'expired');
-        await appendInbox({
-          id: `goal_expired_${g.id}`,
-          receivedAt: Date.now(),
-          title: 'Goal expired',
-          body: `${displayGoalTitle(g.title)} has expired.`,
-          data: { type: 'goal_expired', goalId: g.id },
-        });
+        try {
+          await authApi.failGoal(token, g.id, { reason: 'EXPIRED' });
+        } catch {
+          // ignore
+        }
+
+        if (!fm[g.id]) {
+          fm[g.id] = 'expired';
+          await markFailedGoal(g.id, 'expired');
+          await appendInbox({
+            id: `goal_expired_${g.id}`,
+            receivedAt: Date.now(),
+            title: 'Goal expired',
+            body: `${displayGoalTitle(g.title)} has expired.`,
+            data: { type: 'goal_expired', goalId: g.id },
+          });
+        }
       }
 
       setFailedMap(fm);
@@ -168,24 +174,22 @@ export function GoalsScreen() {
 
     setLoading(true);
     try {
-      await authApi.updateGoal(token, g.id, { completed: true });
-      await refresh();
-
-      try {
-        const dash = await authApi.getDashboard(token);
-        await appendScorePoint(dash.score ?? 0);
-      } catch {
-        // ignore
-      }
-
       const app = await isAppGoal(g.id);
       if (app) {
-        const localEv = await applyGoalCompletedBonus();
-        const msg = messageForProgressEvent(localEv);
-        toast(`${msg} +1 point.`);
-      } else {
-        toast(messageForCustomGoalCompleted());
+        setConfirm({ open: false });
+        nav.navigate('SmartGoalProof', {
+          goalId: g.id,
+          goalTitle: g.title,
+          requirementText: g.description ?? null,
+        });
+        return;
       }
+      await authApi.updateGoal(token, g.id, { completed: true });
+
+      const msg = messageForCustomGoalCompleted();
+      toast(msg);
+
+      await refresh();
     } catch (e: any) {
       toast(String(e?.message ?? 'Complete failed'));
     } finally {
@@ -219,11 +223,13 @@ export function GoalsScreen() {
       }
 
       if (confirm.action === 'quit') {
+        await authApi.failGoal(token, confirm.goal.id, { reason: 'GAVE_UP' });
         await markFailedGoal(confirm.goal.id, 'gave_up');
         await applySmartGoalXpLoss(confirm.goal.id, Number(confirm.xpLoss ?? 0));
         setFailedMap(prev => ({ ...prev, [confirm.goal!.id]: 'gave_up' }));
         toast('Moved to Failed');
         closeConfirm();
+        await refresh();
         return;
       }
 

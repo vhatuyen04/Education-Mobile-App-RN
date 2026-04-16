@@ -9,6 +9,7 @@ export type RootStackParamList = {
   NotificationSettings: undefined;
   AiGoalRecommendation: { id: string };
   Progress: undefined;
+  SmartGoalProof: { goalId: string; goalTitle: string; requirementText?: string | null };
 };
 
 export type TabsParamList = {

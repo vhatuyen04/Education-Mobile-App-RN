@@ -383,6 +383,17 @@ export function GoalDetailScreen() {
       setSteps(updatedSteps);
 
       if (opts.finish && effectiveGoalId && !wasNew) {
+        const app = await isAppGoal(effectiveGoalId);
+        if (app) {
+          setCompleteConfirmOpen(false);
+          nav.navigate('SmartGoalProof', {
+            goalId: effectiveGoalId,
+            goalTitle: title ?? 'SmartGoal',
+            requirementText: desc ?? null,
+          });
+          return;
+        }
+
         await authApi.updateGoal(token, effectiveGoalId, { completed: true });
 
         try {
@@ -392,14 +403,9 @@ export function GoalDetailScreen() {
           // ignore
         }
 
-        const app = await isAppGoal(effectiveGoalId);
-        if (app) {
-          const localEv = await applyGoalCompletedBonus();
-          const msg = messageForProgressEvent(localEv);
-          toast(`${msg} +1 point.`);
-        } else {
-          toast(messageForCustomGoalCompleted());
-        }
+        const localEv = await applyGoalCompletedBonus();
+        const msg = messageForProgressEvent(localEv);
+        toast(`${msg} +1 point.`);
       } else {
         toast('Saved');
       }
