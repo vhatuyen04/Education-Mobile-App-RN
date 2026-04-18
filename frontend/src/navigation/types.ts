@@ -10,6 +10,7 @@ export type RootStackParamList = {
   AiGoalRecommendation: { id: string };
   Progress: undefined;
   SmartGoalProof: { goalId: string; goalTitle: string; requirementText?: string | null };
+  AdminProofReview: undefined;
 };
 
 export type TabsParamList = {

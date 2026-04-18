@@ -25,22 +25,39 @@ enum GoalFailedReason {
   GAVE_UP
 }
 
+enum UserRole {
+  USER
+  ADMIN
+}
+
 model User {
-  id               String   @id @default(uuid())
-  email            String   @unique
-  name             String?
-  score            Int      @default(0)
-  sportScore        Int      @default(0)
-  academyScore      Int      @default(0)
-  entertainmentScore Int     @default(0)
-  passwordHash     String
-  refreshTokenHash String?
+  id                 String   @id @default(cuid())
+  email              String   @unique
+  passwordHash       String
+  name               String?
+  refreshTokenHash   String?
+  sportScore         Int?     @default(0)
+  academyScore       Int?     @default(0)
+  entertainmentScore Int?     @default(0)
+  role               UserRole @default(USER)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
   goals            Goal[]
   events           Event[]
   smartGoalProofAttempts SmartGoalProofAttempt[]
+  scoreHistoryPoints     ScoreHistoryPoint[]
+}
+
+model ScoreHistoryPoint {
+  id     String   @id @default(cuid())
+  userId String
+  at     DateTime
+  score  Int
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, at])
 }
 
 model LeaderboardTop {

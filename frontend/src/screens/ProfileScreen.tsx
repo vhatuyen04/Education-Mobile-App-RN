@@ -67,6 +67,8 @@ export function ProfileScreen() {
     []
   );
 
+  const isAdmin = state.user?.role === 'ADMIN';
+
   function openChangePassword() {
     setOldPwDraft('');
     setNewPwDraft('');
@@ -215,6 +217,16 @@ export function ProfileScreen() {
                 <Button title={r.actionLabel} small onPress={r.key === 'account' ? openChangePassword : r.onPress} />
               </View>
             ))}
+
+            {isAdmin ? (
+              <View style={styles.item}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.name}>Admin panel</Text>
+                  <Text style={styles.meta}>Review proof videos</Text>
+                </View>
+                <Button title="Open" small onPress={() => nav.navigate('AdminProofReview')} />
+              </View>
+            ) : null}
 
             <View style={styles.item}>
               <View style={{ flex: 1 }}>

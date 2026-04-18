@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Linking, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Pressable } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 
@@ -11,9 +11,9 @@ import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
 import { getLocalProgress } from '../motivation/progress';
-import { appendScorePoint, type ScorePoint } from '../motivation/scoreHistory';
 import { getFailedGoalsMap, type FailedReason } from '../motivation/failedGoals';
 import { Button } from '../components/Button';
+import { Badge } from '../components/Badge';
 
 type Goal = authApi.GoalItem;
 
@@ -32,7 +32,7 @@ function fmtDate(ts: number) {
   return d.toLocaleDateString([], { month: '2-digit', day: '2-digit' });
 }
 
-function TrendChart({ data }: { data: ScorePoint[] }) {
+function TrendChart({ data }: { data: authApi.ScoreHistoryPoint[] }) {
   const normalized = useMemo(() => {
     const cleaned = (Array.isArray(data) ? data : [])
       .map(d => ({ ts: Number((d as any).ts ?? 0), score: Number((d as any).score ?? 0) }))
@@ -181,7 +181,10 @@ export function ProgressScreen() {
   const [score, setScore] = useState(0);
   const [goalStreakDays, setGoalStreakDays] = useState(0);
   const [level, setLevel] = useState(1);
-  const [scoreHistory, setScoreHistory] = useState<ScorePoint[]>([]);
+  const [scoreHistory, setScoreHistory] = useState<authApi.ScoreHistoryPoint[]>([]);
+
+  const [proofs, setProofs] = useState<Array<(authApi.SmartGoalProofAttempt & { goalId: string })>>([]);
+  const [expandedGoals, setExpandedGoals] = useState<Record<string, boolean>>({});
 
   const refresh = useCallback(async () => {
     const token = state.accessToken;
@@ -189,28 +192,92 @@ export function ProgressScreen() {
 
     setLoading(true);
     try {
-      const [goalsResp, lp, dash, fm] = await Promise.all([
+      const [goalsResp, lp, dash, fm, proofResp] = await Promise.all([
         authApi.listGoals(token, { includeDeleted: true }),
         getLocalProgress(),
         authApi.getDashboard(token),
         getFailedGoalsMap(),
+        authApi.listMySmartGoalProofAttempts(token),
       ]);
       setGoals(goalsResp.goals ?? []);
       setFailedMap(fm);
+      setProofs((proofResp as any)?.attempts ?? []);
       setGoalStreakDays(lp.goalStreakDays ?? 0);
       setLevel(lp.level ?? 1);
 
       const nextScore = dash?.score ?? 0;
       setScore(nextScore);
 
-      const hist = await appendScorePoint(nextScore);
-      setScoreHistory(hist);
+      try {
+        await authApi.appendMyScoreHistoryPoint(token, { score: nextScore, ts: Date.now() });
+      } catch {
+        // ignore
+      }
+
+      const histResp = await authApi.getMyScoreHistory(token);
+      setScoreHistory(histResp.points ?? []);
     } catch (e: any) {
       toast(String(e?.message ?? 'Failed to load'));
     } finally {
       setLoading(false);
     }
   }, [state.accessToken]);
+
+  const openProof = useCallback(
+    async (attempt: { id: string; goalId: string }) => {
+      const token = state.accessToken;
+      if (!token) return;
+      try {
+        const resp = await authApi.presignMySmartGoalProofView(token, attempt.goalId, attempt.id);
+        const ok = await Linking.canOpenURL(resp.url);
+        if (!ok) {
+          toast('Cannot open URL');
+          return;
+        }
+        await Linking.openURL(resp.url);
+      } catch (e: any) {
+        toast(String(e?.message ?? 'Failed to open'));
+      }
+    },
+    [state.accessToken]
+  );
+
+  const goalTitleById = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const g of goals) {
+      if (g?.id) m[g.id] = String(g.title ?? '').trim() || 'Untitled goal';
+    }
+    return m;
+  }, [goals]);
+
+  const proofsByGoal = useMemo(() => {
+    const attemptTs = (p: any) => {
+      const t1 = p?.createdAt ? new Date(p.createdAt).getTime() : 0;
+      const t2 = p?.updatedAt ? new Date(p.updatedAt).getTime() : 0;
+      const t = Math.max(t1, t2);
+      return Number.isFinite(t) ? t : 0;
+    };
+
+    const by: Record<string, Array<(authApi.SmartGoalProofAttempt & { goalId: string }) & { _ts: number }>> = {};
+    for (const p of proofs ?? []) {
+      const gid = String((p as any)?.goalId ?? '');
+      if (!gid) continue;
+      const item = { ...(p as any), _ts: attemptTs(p) };
+      by[gid] = by[gid] ?? [];
+      by[gid].push(item);
+    }
+
+    const groups = Object.entries(by)
+      .map(([goalId, items]) => {
+        const sorted = [...items].sort((a, b) => b._ts - a._ts);
+        const approved = sorted.filter(s => s.status === 'APPROVED');
+        const primary = approved.length > 0 ? approved[0] : sorted[0];
+        return { goalId, primary, attempts: sorted };
+      })
+      .sort((a, b) => (b.primary?._ts ?? 0) - (a.primary?._ts ?? 0));
+
+    return groups;
+  }, [proofs]);
 
   useFocusEffect(
     useCallback(() => {
@@ -289,6 +356,73 @@ export function ProgressScreen() {
           <Text style={styles.meta}>Completed goals: {counts.completed}</Text>
           <Text style={styles.meta}>Active goals: {counts.active}</Text>
           <Text style={styles.meta}>Failed goals: {counts.failed}</Text>
+        </Card>
+
+        <Card>
+          <View style={styles.cardTitleRow}>
+            <Text style={styles.cardTitle}>Proof uploaded</Text>
+            <Text style={styles.meta}>{proofsByGoal.length}</Text>
+          </View>
+          <View style={{ height: 10 }} />
+
+          {proofsByGoal.length === 0 ? <Text style={styles.meta}>No proofs uploaded yet.</Text> : null}
+
+          {proofsByGoal.map(g => {
+            const goalName = goalTitleById[g.goalId] ?? 'Goal';
+            const expanded = !!expandedGoals[g.goalId];
+            const visible = expanded ? g.attempts : [g.primary];
+            const canToggle = g.attempts.length > 1;
+
+            return (
+              <View key={g.goalId} style={{ marginTop: 12 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                  <Text style={styles.completedItem} numberOfLines={1}>
+                    {goalName}
+                  </Text>
+
+                  {canToggle ? (
+                    <Button
+                      title={expanded ? 'Hide' : `Show more (${g.attempts.length - 1})`}
+                      small
+                      onPress={() => setExpandedGoals(prev => ({ ...prev, [g.goalId]: !expanded }))}
+                    />
+                  ) : null}
+                </View>
+
+                {visible.map(p => {
+                  const statusLabel =
+                    p.status === 'PENDING_REVIEW'
+                      ? 'Reviewing'
+                      : p.status === 'APPROVED'
+                        ? 'Accepted'
+                        : p.status === 'REJECTED'
+                          ? 'Rejected'
+                          : 'Pending upload';
+
+                  return (
+                    <View key={p.id} style={{ marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: colors.line }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                        <Text style={styles.meta} numberOfLines={1}>
+                          Proof: {String(p.id).slice(0, 8)}
+                        </Text>
+                        <Badge>{statusLabel}</Badge>
+                      </View>
+
+                      {p.aiFeedback ? <Text style={styles.meta}>Comment: {p.aiFeedback}</Text> : <Text style={styles.meta}>Comment: —</Text>}
+
+                      {p.proofUrl ? (
+                        <View style={{ marginTop: 8, alignItems: 'flex-start' }}>
+                          <Button title="View" small onPress={() => void openProof({ id: p.id, goalId: g.goalId })} />
+                        </View>
+                      ) : (
+                        <Text style={styles.meta}>No video uploaded.</Text>
+                      )}
+                    </View>
+                  );
+                })}
+              </View>
+            );
+          })}
         </Card>
       </ScrollView>
     </Screen>

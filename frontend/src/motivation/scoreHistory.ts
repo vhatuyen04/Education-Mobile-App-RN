@@ -32,6 +32,9 @@ export async function appendScorePoint(score: number, opts?: { ts?: number; maxP
   // Avoid duplicates if score didn't change.
   if (last && last.score === score) return prev;
 
+  // If score goes down, likely a server-side reset. Keep the existing trend stable.
+  if (last && score < last.score) return prev;
+
   const next = [...prev, { ts, score }];
   const trimmed = next.length > maxPoints ? next.slice(next.length - maxPoints) : next;
   await setScoreHistory(trimmed);

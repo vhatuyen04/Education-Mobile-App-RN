@@ -13,6 +13,7 @@ import { NotificationSettingsScreen } from '../screens/NotificationSettingsScree
 import { SmartGoalProofScreen } from '../screens/SmartGoalProofScreen';
 import { ProgressScreen } from '../screens/ProgressScreen';
 import { GoalsDetailsScreen } from '../screens/GoalsDetailsScreen';
+import { AdminProofReviewScreen } from '../screens/AdminProofReviewScreen';
 import { colors } from '../theme/colors';
 import { useAuth } from '../auth/AuthContext';
 
@@ -45,6 +46,7 @@ export function RootStack() {
           <Stack.Screen name="SmartGoalProof" component={SmartGoalProofScreen} options={{ title: 'Complete SmartGoal' }} />
           <Stack.Screen name="AiGoalRecommendation" component={AiGoalRecommendationScreen} options={{ title: 'AI recommendation', headerShown: false }} />
           <Stack.Screen name="Progress" component={ProgressScreen} options={{ title: 'Progress', headerShown: false }} />
+          <Stack.Screen name="AdminProofReview" component={AdminProofReviewScreen} options={{ title: 'Admin', headerShown: false }} />
         </>
       ) : (
         <Stack.Screen name="Auth" component={AuthStack} options={{ headerShown: false }} />

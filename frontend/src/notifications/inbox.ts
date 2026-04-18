@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
 
 type InboxItem = {
   id: string;
@@ -10,6 +11,19 @@ type InboxItem = {
 
 const KEY_INBOX = 'notif_inbox_v1';
 const MAX_ITEMS = 200;
+
+async function getInboxKey(): Promise<string> {
+  try {
+    const raw = await SecureStore.getItemAsync('auth_user');
+    if (!raw) return `${KEY_INBOX}_anon`;
+    const user = JSON.parse(raw);
+    const id = String(user?.id ?? '');
+    if (!id) return `${KEY_INBOX}_anon`;
+    return `${KEY_INBOX}_${id}`;
+  } catch {
+    return `${KEY_INBOX}_anon`;
+  }
+}
 
 function safeParse(raw: string | null): InboxItem[] {
   if (!raw) return [];
@@ -31,7 +45,8 @@ function safeParse(raw: string | null): InboxItem[] {
 }
 
 export async function getInbox(): Promise<InboxItem[]> {
-  const raw = await AsyncStorage.getItem(KEY_INBOX);
+  const key = await getInboxKey();
+  const raw = await AsyncStorage.getItem(key);
   const items = safeParse(raw);
   items.sort((a, b) => b.receivedAt - a.receivedAt);
   return items;
@@ -47,26 +62,30 @@ export async function appendInbox(item: Omit<InboxItem, 'id'> & { id?: string })
     data: item.data ?? null,
   };
 
+  const key = await getInboxKey();
   const prev = await getInbox();
   const merged = [next, ...prev].slice(0, MAX_ITEMS);
-  await AsyncStorage.setItem(KEY_INBOX, JSON.stringify(merged));
+  await AsyncStorage.setItem(key, JSON.stringify(merged));
 }
 
 export async function clearInbox(): Promise<void> {
-  await AsyncStorage.removeItem(KEY_INBOX);
+  const key = await getInboxKey();
+  await AsyncStorage.removeItem(key);
 }
 
 export async function removeInboxItem(id: string): Promise<void> {
+  const key = await getInboxKey();
   const prev = await getInbox();
   const next = prev.filter(x => x.id !== id);
-  await AsyncStorage.setItem(KEY_INBOX, JSON.stringify(next));
+  await AsyncStorage.setItem(key, JSON.stringify(next));
 }
 
 export async function removeInboxItemsByRecoId(recoId: string): Promise<void> {
+  const key = await getInboxKey();
   const prev = await getInbox();
   const rid = String(recoId);
   const next = prev.filter(x => String((x as any)?.data?.recoId ?? '') !== rid);
-  await AsyncStorage.setItem(KEY_INBOX, JSON.stringify(next));
+  await AsyncStorage.setItem(key, JSON.stringify(next));
 }
 
 export type { InboxItem };

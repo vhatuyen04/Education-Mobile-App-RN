@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto';
 import { Request, Response, Router } from 'express';
 import cors from 'cors';
 import express from 'express';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, GetObjectCommand, S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import jwt, { type Secret, type SignOptions } from 'jsonwebtoken';
 import { z } from 'zod';
@@ -325,10 +325,10 @@ function hasInvalidEmail(error: z.ZodError) {
   return error.issues.some(issue => issue.path[0] === 'email');
 }
 
-function signAccessToken(userId: string) {
+function signAccessToken(userId: string, role: 'USER' | 'ADMIN') {
   const config = getConfig();
   const options: SignOptions = { expiresIn: config.accessTokenTtl as SignOptions['expiresIn'] };
-  return jwt.sign({ sub: userId, type: 'access' }, config.jwtAccessSecret as Secret, options);
+  return jwt.sign({ sub: userId, type: 'access', role }, config.jwtAccessSecret as Secret, options);
 }
 
 function signRefreshToken(userId: string) {
@@ -344,7 +344,7 @@ function getAccessTokenFromReq(req: Request): string | null {
   return m ? m[1] : null;
 }
 
-function verifyAccessToken(token: string): { sub: string } {
+function verifyAccessToken(token: string): { sub: string; role: 'USER' | 'ADMIN' } {
   const config = getConfig();
   const payload: any = jwt.verify(token, config.jwtAccessSecret);
 
@@ -352,7 +352,25 @@ function verifyAccessToken(token: string): { sub: string } {
     throw new Error('Invalid token');
   }
 
-  return { sub: String(payload.sub) };
+  const role = payload?.role === 'ADMIN' ? 'ADMIN' : 'USER';
+  return { sub: String(payload.sub), role };
+}
+
+async function requireAdminFromReq(req: Request): Promise<{ userId: string } | null> {
+  const token = getAccessTokenFromReq(req);
+  if (!token) return null;
+
+  let auth: { sub: string; role: 'USER' | 'ADMIN' };
+  try {
+    auth = verifyAccessToken(token);
+  } catch {
+    return null;
+  }
+
+  if (auth.role === 'ADMIN') return { userId: auth.sub };
+  const dbUser = await prismaAny.user.findUnique({ where: { id: auth.sub }, select: { id: true, role: true } });
+  if (dbUser?.role === 'ADMIN') return { userId: auth.sub };
+  return null;
 }
 
 authRouter.post('/register', async (req: Request, res: Response) => {
@@ -372,16 +390,16 @@ authRouter.post('/register', async (req: Request, res: Response) => {
   }
 
   const passwordHash = await bcrypt.hash(password, 10);
-  const user = await prisma.user.create({
+  const user = await prismaAny.user.create({
     data: { email, passwordHash, name: name ?? null },
-    select: { id: true, email: true, name: true },
+    select: { id: true, email: true, name: true, role: true },
   });
 
-  const accessToken = signAccessToken(user.id);
+  const accessToken = signAccessToken(user.id, (user.role as any) === 'ADMIN' ? 'ADMIN' : 'USER');
   const refreshToken = signRefreshToken(user.id);
   const refreshTokenHash = await bcrypt.hash(refreshToken, 10);
 
-  await prisma.user.update({
+  await prismaAny.user.update({
     where: { id: user.id },
     data: { refreshTokenHash },
   });
@@ -400,7 +418,7 @@ authRouter.post('/login', async (req: Request, res: Response) => {
 
   const { email, password } = parsed.data;
 
-  const user = await prisma.user.findUnique({ where: { email } });
+  const user = await prismaAny.user.findUnique({ where: { email } });
   if (!user) {
     return res.status(401).json({ error: 'Invalid username or password.' });
   }
@@ -410,20 +428,211 @@ authRouter.post('/login', async (req: Request, res: Response) => {
     return res.status(401).json({ error: 'Invalid username or password.' });
   }
 
-  const accessToken = signAccessToken(user.id);
+  const role = (user as any)?.role === 'ADMIN' ? 'ADMIN' : 'USER';
+  const accessToken = signAccessToken(user.id, role);
   const refreshToken = signRefreshToken(user.id);
   const refreshTokenHash = await bcrypt.hash(refreshToken, 10);
 
-  await prisma.user.update({
+  await prismaAny.user.update({
     where: { id: user.id },
     data: { refreshTokenHash },
   });
 
   return res.json({
-    user: { id: user.id, email: user.email, name: user.name },
+    user: { id: user.id, email: user.email, name: user.name, role: (user as any)?.role ?? 'USER' },
     accessToken,
     refreshToken,
   });
+});
+
+authRouter.get('/admin/proof-attempts', async (req: Request, res: Response) => {
+  const admin = await requireAdminFromReq(req);
+  if (!admin) return res.status(403).json({ error: 'Forbidden' });
+
+  const status = String((req.query as any)?.status ?? 'PENDING_REVIEW').toUpperCase();
+  const allowed = new Set(['PENDING_UPLOAD', 'PENDING_REVIEW', 'APPROVED', 'REJECTED']);
+  if (!allowed.has(status)) return res.status(400).json({ error: 'Invalid query' });
+
+  const attempts = await prismaAny.smartGoalProofAttempt.findMany({
+    where: { status },
+    orderBy: [{ createdAt: 'desc' }],
+    select: {
+      id: true,
+      userId: true,
+      goalId: true,
+      status: true,
+      requirementText: true,
+      proofKey: true,
+      proofUrl: true,
+      aiFeedback: true,
+      createdAt: true,
+      updatedAt: true,
+    },
+    take: 100,
+  });
+
+  return res.json({ attempts });
+});
+
+authRouter.get('/me/score-history', async (req: Request, res: Response) => {
+  const token = getAccessTokenFromReq(req);
+  if (!token) return res.status(401).json({ error: 'Missing access token' });
+
+  let userId: string;
+  try {
+    userId = verifyAccessToken(token).sub;
+  } catch {
+    return res.status(401).json({ error: 'Invalid access token' });
+  }
+
+  const points = await prismaAny.scoreHistoryPoint.findMany({
+    where: { userId },
+    orderBy: [{ at: 'desc' }],
+    take: 60,
+    select: { at: true, score: true },
+  });
+
+  return res.json({ points: points.map((p: any) => ({ ts: new Date(p.at).getTime(), score: Number(p.score ?? 0) })) });
+});
+
+authRouter.post('/me/score-history/append', async (req: Request, res: Response) => {
+  const token = getAccessTokenFromReq(req);
+  if (!token) return res.status(401).json({ error: 'Missing access token' });
+
+  let userId: string;
+  try {
+    userId = verifyAccessToken(token).sub;
+  } catch {
+    return res.status(401).json({ error: 'Invalid access token' });
+  }
+
+  const scoreRaw = (req.body as any)?.score;
+  const score = Number(scoreRaw);
+  if (!Number.isFinite(score)) return res.status(400).json({ error: 'Invalid payload' });
+
+  const tsRaw = (req.body as any)?.ts;
+  const ts = tsRaw === undefined || tsRaw === null ? Date.now() : Number(tsRaw);
+  if (!Number.isFinite(ts) || ts <= 0) return res.status(400).json({ error: 'Invalid payload' });
+
+  const at = new Date(ts);
+
+  const last = await prismaAny.scoreHistoryPoint.findFirst({
+    where: { userId },
+    orderBy: [{ at: 'desc' }],
+    select: { score: true },
+  });
+
+  if (last && Number(last.score ?? 0) === score) {
+    return res.json({ ok: true });
+  }
+
+  if (last && score < Number(last.score ?? 0)) {
+    return res.json({ ok: true });
+  }
+
+  await prismaAny.scoreHistoryPoint.create({
+    data: { userId, at, score: Math.round(score) },
+    select: { id: true },
+  });
+
+  const all = await prismaAny.scoreHistoryPoint.findMany({
+    where: { userId },
+    orderBy: [{ at: 'desc' }],
+    take: 120,
+    select: { id: true },
+  });
+  const extra = all.slice(60);
+  if (extra.length > 0) {
+    await prismaAny.scoreHistoryPoint.deleteMany({ where: { id: { in: extra.map((e: any) => e.id) } } });
+  }
+
+  return res.json({ ok: true });
+});
+
+authRouter.get('/me/proof-attempts', async (req: Request, res: Response) => {
+  const token = getAccessTokenFromReq(req);
+  if (!token) return res.status(401).json({ error: 'Missing access token' });
+
+  let userId: string;
+  try {
+    userId = verifyAccessToken(token).sub;
+  } catch {
+    return res.status(401).json({ error: 'Invalid access token' });
+  }
+
+  const attempts = await prismaAny.smartGoalProofAttempt.findMany({
+    where: { userId },
+    orderBy: [{ createdAt: 'desc' }],
+    select: {
+      id: true,
+      goalId: true,
+      status: true,
+      requirementText: true,
+      proofUrl: true,
+      aiFeedback: true,
+      createdAt: true,
+      updatedAt: true,
+    },
+    take: 50,
+  });
+
+  return res.json({ attempts });
+});
+
+authRouter.post('/admin/proof-attempts/:attemptId/presign-view', async (req: Request, res: Response) => {
+  const admin = await requireAdminFromReq(req);
+  if (!admin) return res.status(403).json({ error: 'Forbidden' });
+
+  const s3c = getS3ClientOrNull();
+  if (!s3c) return res.status(500).json({ error: 'S3 is not configured' });
+
+  const attemptId = String(req.params.attemptId);
+  const attempt = await prismaAny.smartGoalProofAttempt.findFirst({
+    where: { id: attemptId },
+    select: { id: true, proofKey: true, status: true },
+  });
+  if (!attempt) return res.status(404).json({ error: 'Not found' });
+  if (!attempt.proofKey) return res.status(400).json({ error: 'No proof uploaded' });
+
+  const cmd = new GetObjectCommand({
+    Bucket: s3c.bucket,
+    Key: attempt.proofKey,
+    ResponseContentDisposition: 'inline',
+  });
+  const viewUrl = await getSignedUrl(s3c.s3, cmd, { expiresIn: 60 * 5 });
+  return res.json({ url: viewUrl, expiresInSec: 300 });
+});
+
+authRouter.post('/admin/proof-attempts/:attemptId/decision', async (req: Request, res: Response) => {
+  const admin = await requireAdminFromReq(req);
+  if (!admin) return res.status(403).json({ error: 'Forbidden' });
+
+  const attemptId = String(req.params.attemptId);
+  const decision = String((req.body as any)?.decision ?? '').toUpperCase();
+  const feedback = typeof (req.body as any)?.feedback === 'string' ? String((req.body as any).feedback) : null;
+  if (decision !== 'APPROVE' && decision !== 'REJECT') {
+    return res.status(400).json({ error: 'Invalid payload' });
+  }
+
+  const attempt = await prismaAny.smartGoalProofAttempt.findFirst({ where: { id: attemptId }, select: { id: true, status: true, userId: true, goalId: true } });
+  if (!attempt) return res.status(404).json({ error: 'Not found' });
+  if (attempt.status !== 'PENDING_REVIEW') {
+    return res.status(400).json({ error: 'Attempt is not pending review' });
+  }
+
+  const nextStatus = decision === 'APPROVE' ? 'APPROVED' : 'REJECTED';
+  await prismaAny.smartGoalProofAttempt.update({ where: { id: attemptId }, data: { status: nextStatus, aiFeedback: feedback }, select: { id: true } });
+
+  if (decision === 'APPROVE') {
+    const done = await completeGoalForUser({ userId: attempt.userId, goalId: attempt.goalId });
+    if (!done.ok) return res.status(404).json({ error: done.error });
+  }
+
+  const updated = await prismaAny.smartGoalProofAttempt.findFirst({
+    where: { id: attemptId },
+    select: { id: true, userId: true, goalId: true, status: true, aiFeedback: true, createdAt: true, updatedAt: true },
+  });
+  return res.json({ attempt: updated });
 });
 
 authRouter.post('/logout', async (req: Request, res: Response) => {
@@ -967,6 +1176,66 @@ authRouter.post('/goals/:id/proof-attempts/:attemptId/submit', async (req: Reque
   return res.json({ attempt: updated });
 });
 
+authRouter.delete('/goals/:id/proof-attempts/:attemptId', async (req: Request, res: Response) => {
+  const token = getAccessTokenFromReq(req);
+  if (!token) return res.status(401).json({ error: 'Missing access token' });
+
+  let userId: string;
+  try {
+    userId = verifyAccessToken(token).sub;
+  } catch {
+    return res.status(401).json({ error: 'Invalid access token' });
+  }
+
+  const goalId = String(req.params.id);
+  const attemptId = String(req.params.attemptId);
+
+  const attempt = await prismaAny.smartGoalProofAttempt.findFirst({
+    where: { id: attemptId, userId, goalId },
+    select: { id: true, status: true, proofKey: true },
+  });
+  if (!attempt) return res.status(404).json({ error: 'Not found' });
+  if (attempt.status !== 'PENDING_UPLOAD') {
+    return res.status(400).json({ error: 'Only PENDING_UPLOAD attempts can be deleted' });
+  }
+
+  const s3c = getS3ClientOrNull();
+  if (s3c && attempt.proofKey) {
+    try {
+      await s3c.s3.send(new DeleteObjectCommand({ Bucket: s3c.bucket, Key: attempt.proofKey }));
+    } catch {
+      // ignore
+    }
+  }
+
+  await prismaAny.smartGoalProofAttempt.delete({ where: { id: attemptId }, select: { id: true } });
+  return res.json({ ok: true });
+});
+
+authRouter.get('/goals/:id/proof-attempts/latest', async (req: Request, res: Response) => {
+  const token = getAccessTokenFromReq(req);
+  if (!token) return res.status(401).json({ error: 'Missing access token' });
+
+  let userId: string;
+  try {
+    userId = verifyAccessToken(token).sub;
+  } catch {
+    return res.status(401).json({ error: 'Invalid access token' });
+  }
+
+  const goalId = String(req.params.id);
+  const goal = await prismaAny.goal.findFirst({ where: { id: goalId, userId }, select: { id: true } });
+  if (!goal) return res.status(404).json({ error: 'Not found' });
+
+  const attempt = await prismaAny.smartGoalProofAttempt.findFirst({
+    where: { userId, goalId },
+    orderBy: [{ createdAt: 'desc' }],
+    select: { id: true, status: true, requirementText: true, proofUrl: true, aiFeedback: true, createdAt: true, updatedAt: true },
+  });
+
+  return res.json({ attempt: attempt ?? null });
+});
+
 authRouter.get('/goals/:id/proof-attempts/:attemptId', async (req: Request, res: Response) => {
   const token = getAccessTokenFromReq(req);
   if (!token) return res.status(401).json({ error: 'Missing access token' });
@@ -987,6 +1256,39 @@ authRouter.get('/goals/:id/proof-attempts/:attemptId', async (req: Request, res:
   });
   if (!attempt) return res.status(404).json({ error: 'Not found' });
   return res.json({ attempt });
+});
+
+authRouter.post('/goals/:id/proof-attempts/:attemptId/presign-view', async (req: Request, res: Response) => {
+  const token = getAccessTokenFromReq(req);
+  if (!token) return res.status(401).json({ error: 'Missing access token' });
+
+  let userId: string;
+  try {
+    userId = verifyAccessToken(token).sub;
+  } catch {
+    return res.status(401).json({ error: 'Invalid access token' });
+  }
+
+  const s3c = getS3ClientOrNull();
+  if (!s3c) return res.status(500).json({ error: 'S3 is not configured' });
+
+  const goalId = String(req.params.id);
+  const attemptId = String(req.params.attemptId);
+
+  const attempt = await prismaAny.smartGoalProofAttempt.findFirst({
+    where: { id: attemptId, userId, goalId },
+    select: { id: true, proofKey: true },
+  });
+  if (!attempt) return res.status(404).json({ error: 'Not found' });
+  if (!attempt.proofKey) return res.status(400).json({ error: 'No proof uploaded' });
+
+  const cmd = new GetObjectCommand({
+    Bucket: s3c.bucket,
+    Key: attempt.proofKey,
+    ResponseContentDisposition: 'inline',
+  });
+  const viewUrl = await getSignedUrl(s3c.s3, cmd, { expiresIn: 60 * 5 });
+  return res.json({ url: viewUrl, expiresInSec: 300 });
 });
 
 authRouter.post('/goals/:id/proof-attempts/:attemptId/mock-review', async (req: Request, res: Response) => {

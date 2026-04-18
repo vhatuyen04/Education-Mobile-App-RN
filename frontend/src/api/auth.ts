@@ -4,6 +4,7 @@ export type AuthUser = {
   id: string;
   email: string;
   name: string | null;
+  role?: 'USER' | 'ADMIN';
 };
 
 export type AuthTokens = {
@@ -239,6 +240,19 @@ export type SmartGoalProofAttempt = {
   updatedAt?: string;
 };
 
+export type AdminSmartGoalProofAttempt = {
+  id: string;
+  userId: string;
+  goalId: string;
+  status: SmartGoalProofStatus;
+  requirementText: string | null;
+  proofKey: string | null;
+  proofUrl: string | null;
+  aiFeedback: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
 export async function presignSmartGoalProof(
   accessToken: string,
   goalId: string,
@@ -255,12 +269,48 @@ export async function submitSmartGoalProof(
   return postJsonAuth(`/auth/goals/${goalId}/proof-attempts/${attemptId}/submit`, {}, accessToken);
 }
 
+export async function deleteSmartGoalProofAttempt(accessToken: string, goalId: string, attemptId: string): Promise<{ ok: true }> {
+  return deleteJsonAuth(`/auth/goals/${goalId}/proof-attempts/${encodeURIComponent(attemptId)}`, accessToken);
+}
+
 export async function getSmartGoalProofAttempt(
   accessToken: string,
   goalId: string,
   attemptId: string
 ): Promise<{ attempt: SmartGoalProofAttempt }> {
   return getJsonAuth(`/auth/goals/${goalId}/proof-attempts/${attemptId}`, accessToken);
+}
+
+export async function presignMySmartGoalProofView(
+  accessToken: string,
+  goalId: string,
+  attemptId: string
+): Promise<{ url: string; expiresInSec: number }> {
+  return postJsonAuth(`/auth/goals/${goalId}/proof-attempts/${encodeURIComponent(attemptId)}/presign-view`, {}, accessToken);
+}
+
+export async function getLatestSmartGoalProofAttempt(
+  accessToken: string,
+  goalId: string
+): Promise<{ attempt: SmartGoalProofAttempt | null }> {
+  return getJsonAuth(`/auth/goals/${goalId}/proof-attempts/latest`, accessToken);
+}
+
+export async function listMySmartGoalProofAttempts(accessToken: string): Promise<{ attempts: Array<SmartGoalProofAttempt & { goalId: string }> }> {
+  return getJsonAuth('/auth/me/proof-attempts', accessToken);
+}
+
+export type ScoreHistoryPoint = { ts: number; score: number };
+
+export async function getMyScoreHistory(accessToken: string): Promise<{ points: ScoreHistoryPoint[] }> {
+  return getJsonAuth('/auth/me/score-history', accessToken);
+}
+
+export async function appendMyScoreHistoryPoint(
+  accessToken: string,
+  body: { score: number; ts?: number }
+): Promise<{ ok: true } | { ok: boolean }> {
+  return postJsonAuth('/auth/me/score-history/append', body, accessToken);
 }
 
 export async function mockReviewSmartGoalProof(
@@ -270,6 +320,31 @@ export async function mockReviewSmartGoalProof(
   body: { decision: 'APPROVE' | 'REJECT'; feedback?: string }
 ): Promise<{ attempt: Pick<SmartGoalProofAttempt, 'id' | 'status' | 'aiFeedback'> }> {
   return postJsonAuth(`/auth/goals/${goalId}/proof-attempts/${attemptId}/mock-review`, body, accessToken);
+}
+
+export async function adminListProofAttempts(
+  accessToken: string,
+  opts?: { status?: SmartGoalProofStatus }
+): Promise<{ attempts: AdminSmartGoalProofAttempt[] }> {
+  const sp = new URLSearchParams();
+  if (opts?.status) sp.set('status', opts.status);
+  const qs = sp.toString();
+  return getJsonAuth(`/auth/admin/proof-attempts${qs ? `?${qs}` : ''}`, accessToken);
+}
+
+export async function adminPresignProofAttemptView(
+  accessToken: string,
+  attemptId: string
+): Promise<{ url: string; expiresInSec: number }> {
+  return postJsonAuth(`/auth/admin/proof-attempts/${encodeURIComponent(attemptId)}/presign-view`, {}, accessToken);
+}
+
+export async function adminDecideProofAttempt(
+  accessToken: string,
+  attemptId: string,
+  body: { decision: 'APPROVE' | 'REJECT'; feedback?: string | null }
+): Promise<{ attempt: AdminSmartGoalProofAttempt } | { attempt: any }> {
+  return postJsonAuth(`/auth/admin/proof-attempts/${encodeURIComponent(attemptId)}/decision`, body, accessToken);
 }
 
 export type LeaderboardField = 'Sport' | 'Academy' | 'Entertainment';

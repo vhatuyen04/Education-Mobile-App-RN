@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -35,10 +35,42 @@ export function SmartGoalProofScreen() {
   const awardedRef = useRef(false);
 
   const canSubmit = useMemo(() => {
+    if (attemptId && status === 'PENDING_UPLOAD') return true;
     if (!videoUri) return false;
     if (!attemptId) return true;
     return status === 'PENDING_UPLOAD' || status === null;
   }, [attemptId, status, videoUri]);
+
+  useEffect(() => {
+    const token = state.accessToken;
+    if (!token) return;
+    if (!goalId) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const resp = await authApi.getLatestSmartGoalProofAttempt(token, goalId);
+        if (cancelled) return;
+        const a = resp.attempt;
+        if (!a) return;
+        if (a.status === 'APPROVED') return;
+
+        setAttemptId(a.id);
+        setStatus(a.status);
+        setFeedback(a.aiFeedback ?? null);
+        setProofUrl(a.proofUrl ?? null);
+        if (a.status === 'PENDING_REVIEW') {
+          setPolling(true);
+        }
+      } catch {
+        // ignore
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [goalId, state.accessToken]);
 
   const pickVideo = useCallback(async () => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -59,22 +91,49 @@ export function SmartGoalProofScreen() {
       toast('No video selected.');
       return;
     }
+
+    try {
+      const token = state.accessToken;
+      if (token && attemptId && status === 'PENDING_UPLOAD') {
+        await authApi.deleteSmartGoalProofAttempt(token, goalId, attemptId);
+      }
+    } catch {
+      // ignore
+    }
+
     setVideoUri(uri);
     setAttemptId(null);
     setStatus(null);
     setFeedback(null);
     setProofUrl(null);
-  }, []);
+  }, [attemptId, goalId, state.accessToken, status]);
 
   const submit = useCallback(async () => {
     const token = state.accessToken;
     if (!token) return;
-    if (!videoUri) return;
+    if (!videoUri && !(attemptId && status === 'PENDING_UPLOAD')) return;
 
     setUploading(true);
     try {
-      console.log('[SmartGoalProof] submit:start', { goalId, videoUri });
-      const extMatch = /\.([a-zA-Z0-9]+)(\?|#|$)/.exec(videoUri);
+      console.log('[SmartGoalProof] submit:start', { goalId, videoUri, attemptId, status });
+
+      if (attemptId && status === 'PENDING_UPLOAD' && !videoUri) {
+        console.log('[SmartGoalProof] submitAttemptOnly:start', { attemptId });
+        const submitted = await authApi.submitSmartGoalProof(token, goalId, attemptId);
+        console.log('[SmartGoalProof] submitAttemptOnly:done', submitted);
+        setStatus(submitted.attempt.status);
+        setFeedback(submitted.attempt.aiFeedback ?? null);
+        setPolling(true);
+        toast('Submitted. Waiting for verification…');
+        return;
+      }
+
+      const localVideoUri = videoUri;
+      if (!localVideoUri) {
+        throw new Error('No video selected');
+      }
+
+      const extMatch = /\.([a-zA-Z0-9]+)(\?|#|$)/.exec(localVideoUri);
       const fileExt = (extMatch?.[1] ?? 'mp4').toLowerCase();
       const contentType = fileExt === 'mov' ? 'video/quicktime' : 'video/mp4';
 
@@ -102,7 +161,7 @@ export function SmartGoalProofScreen() {
       }
 
       console.log('[SmartGoalProof] upload:start', { uploadUrl: presign.uploadUrl, contentType, fileExt });
-      const up = await FileSystem.uploadAsync(presign.uploadUrl, videoUri, {
+      const up = await FileSystem.uploadAsync(presign.uploadUrl, localVideoUri, {
         httpMethod: 'PUT',
         headers: {
           'Content-Type': contentType,
@@ -130,7 +189,7 @@ export function SmartGoalProofScreen() {
     } finally {
       setUploading(false);
     }
-  }, [goalId, requirementText, state.accessToken, videoUri]);
+  }, [attemptId, goalId, requirementText, state.accessToken, status, videoUri]);
 
   useEffect(() => {
     if (!polling) return;
@@ -194,6 +253,24 @@ export function SmartGoalProofScreen() {
     [attemptId, goalId, state.accessToken]
   );
 
+  const viewUploaded = useCallback(async () => {
+    const token = state.accessToken;
+    if (!token) return;
+    if (!attemptId) return;
+
+    try {
+      const resp = await authApi.presignMySmartGoalProofView(token, goalId, attemptId);
+      const ok = await Linking.canOpenURL(resp.url);
+      if (!ok) {
+        toast('Cannot open URL');
+        return;
+      }
+      await Linking.openURL(resp.url);
+    } catch (e: any) {
+      toast(String(e?.message ?? 'Failed to open'));
+    }
+  }, [attemptId, goalId, state.accessToken]);
+
   return (
     <Screen>
       <ScrollView contentContainerStyle={styles.wrap}>
@@ -207,15 +284,9 @@ export function SmartGoalProofScreen() {
         <View style={{ height: 12 }} />
 
         <Card>
+
           <Text style={styles.sectionTitle}>Upload proof (video)</Text>
           <Text style={styles.body}>Upload a short video that matches the requirement above.</Text>
-
-          <View style={{ height: 10 }} />
-
-          <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-            <Button title={videoUri ? 'Change video' : 'Pick video'} onPress={pickVideo} />
-            <Button title="Submit" onPress={submit} disabled={!canSubmit || uploading} />
-          </View>
 
           <View style={{ height: 10 }} />
 
@@ -227,15 +298,26 @@ export function SmartGoalProofScreen() {
             </View>
           ) : null}
 
-          {proofUrl ? (
-            <Pressable onPress={() => {}}>
-              <Text style={styles.meta} numberOfLines={2}>
-                Proof URL: {proofUrl}
-              </Text>
-            </Pressable>
+          {attemptId && proofUrl ? (
+            <>
+              <View style={{ height: 10 }} />
+              <Button title="View uploaded video" small onPress={() => void viewUploaded()} />
+            </>
           ) : null}
 
           <View style={{ height: 10 }} />
+
+          <Button title={videoUri ? 'Change video' : 'Pick video'} onPress={pickVideo} />
+
+          <View style={{ height: 10 }} />
+
+          <Button
+            title={uploading ? 'Uploading…' : status === 'PENDING_REVIEW' ? 'Waiting for verification…' : 'Submit proof'}
+            onPress={() => void submit()}
+            variant="primary"
+          />
+
+          <View style={{ height: 12 }} />
 
           <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center' }}>
             <Text style={styles.meta}>Status:</Text>
