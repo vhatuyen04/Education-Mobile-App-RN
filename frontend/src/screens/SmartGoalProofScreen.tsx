@@ -22,7 +22,9 @@ export function SmartGoalProofScreen() {
 
   const goalId = String(route?.params?.goalId ?? '');
   const goalTitle = String(route?.params?.goalTitle ?? '');
-  const requirementText = (route?.params?.requirementText ?? null) as string | null;
+  const requirementTextFromRoute = (route?.params?.requirementText ?? null) as string | null;
+
+  const [goalRequirement, setGoalRequirement] = useState<string | null>(null);
 
   const [videoUri, setVideoUri] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -49,6 +51,15 @@ export function SmartGoalProofScreen() {
     let cancelled = false;
     (async () => {
       try {
+        try {
+          const g = await authApi.getGoal(token, goalId);
+          if (!cancelled) {
+            setGoalRequirement((g.goal as any).requirement ?? null);
+          }
+        } catch {
+          // ignore
+        }
+
         const resp = await authApi.getLatestSmartGoalProofAttempt(token, goalId);
         if (cancelled) return;
         const a = resp.attempt;
@@ -71,6 +82,13 @@ export function SmartGoalProofScreen() {
       cancelled = true;
     };
   }, [goalId, state.accessToken]);
+
+  const requirementText = useMemo(() => {
+    const fromGoal = String(goalRequirement ?? '').trim();
+    if (fromGoal) return fromGoal;
+    const fromRoute = String(requirementTextFromRoute ?? '').trim();
+    return fromRoute || null;
+  }, [goalRequirement, requirementTextFromRoute]);
 
   const pickVideo = useCallback(async () => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();

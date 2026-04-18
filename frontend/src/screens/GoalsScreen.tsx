@@ -180,7 +180,7 @@ export function GoalsScreen() {
         nav.navigate('SmartGoalProof', {
           goalId: g.id,
           goalTitle: g.title,
-          requirementText: g.description ?? null,
+          requirementText: (g as any).requirement ?? null,
         });
         return;
       }

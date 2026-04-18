@@ -160,6 +160,7 @@ export function GoalDetailScreen() {
   const [title, setTitle] = useState(initialTitle);
   const [desc, setDesc] = useState('');
   const [dueAt, setDueAt] = useState<string | null>(null);
+  const [requirement, setRequirement] = useState<string>('');
   const [steps, setSteps] = useState<UiStep[]>([]);
   const [saving, setSaving] = useState(false);
   const [completed, setCompleted] = useState(false);
@@ -218,6 +219,7 @@ export function GoalDetailScreen() {
         setDesc(rawDesc);
       }
       setDueAt(resp.goal.dueAt ?? null);
+      setRequirement(String((resp.goal as any).requirement ?? ''));
       setDeadlineDraft(resp.goal.dueAt ? toYmdLocal(new Date(resp.goal.dueAt)) : '');
       setCompleted(!!resp.goal.completed);
       const stepResp = await authApi.listGoalSteps(token, goalId);
@@ -336,12 +338,14 @@ export function GoalDetailScreen() {
         await authApi.updateGoal(token, effectiveGoalId, {
           ...(isSmartGoal ? null : { title: t }),
           description: isSmartGoal ? 'SmartGoal recommended goal' : desc.trim() ? desc : null,
+          ...(isSmartGoal ? null : { requirement: requirement.trim() ? requirement.trim() : null }),
           ...(isSmartGoal ? null : { dueAt: dueAt ? dueAt : null }),
         });
       } else {
         const created = await authApi.createGoal(token, {
           title: t,
           description: desc.trim() ? desc : null,
+          requirement: requirement.trim() ? requirement.trim() : null,
           ...(isSmartGoal ? null : { dueAt: dueAt ? dueAt : undefined }),
         });
         effectiveGoalId = created.goal.id;
@@ -389,7 +393,7 @@ export function GoalDetailScreen() {
           nav.navigate('SmartGoalProof', {
             goalId: effectiveGoalId,
             goalTitle: title ?? 'SmartGoal',
-            requirementText: desc ?? null,
+            requirementText: requirement ?? null,
           });
           return;
         }
@@ -453,14 +457,18 @@ export function GoalDetailScreen() {
         <Card>
           <View style={[styles.field, { marginTop: 0 }]}>
             <Text style={styles.label}>Goal name</Text>
-            <TextInput
-              value={title}
-              onChangeText={setTitle}
-              editable={!completed && !isSmartGoal}
-              placeholder=""
-              placeholderTextColor={colors.muted}
-              style={styles.input}
-            />
+            {isSmartGoal ? (
+              <Text style={styles.input}>{title}</Text>
+            ) : (
+              <TextInput
+                value={title}
+                onChangeText={setTitle}
+                editable={!completed}
+                placeholder=""
+                placeholderTextColor={colors.muted}
+                style={styles.input}
+              />
+            )}
           </View>
 
           <View style={styles.field}>
@@ -495,6 +503,24 @@ export function GoalDetailScreen() {
               multiline
               style={[styles.input, { minHeight: 90, textAlignVertical: 'top' }]}
             />
+          </View>
+
+          <View style={styles.field}>
+            <Text style={styles.label}>Requirement</Text>
+            <Text style={styles.meta}>{isSmartGoal ? 'SmartGoal requirement' : 'Custom goal requirement (optional)'}</Text>
+            {isSmartGoal ? (
+              <Text style={styles.meta}>{requirement || '—'}</Text>
+            ) : (
+              <TextInput
+                value={requirement}
+                onChangeText={setRequirement}
+                placeholder={'Example: Show your notes for 3 lessons and explain one key idea'}
+                placeholderTextColor={colors.muted}
+                editable
+                style={styles.input}
+                multiline
+              />
+            )}
           </View>
 
           <View style={styles.divider} />

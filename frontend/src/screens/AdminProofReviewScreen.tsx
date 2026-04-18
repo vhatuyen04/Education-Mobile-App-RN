@@ -124,10 +124,10 @@ export function AdminProofReviewScreen() {
 
             <View style={{ height: 6 }} />
             <Text style={styles.meta} numberOfLines={1}>
-              User: {a.userId}
+              User: {a.userEmail || a.userId}
             </Text>
             <Text style={styles.meta} numberOfLines={1}>
-              Goal: {a.goalId}
+              Goal: {a.goalTitle || a.goalId}
             </Text>
 
             <View style={{ height: 8 }} />

@@ -141,6 +141,7 @@ export type AiGoalSuggestion = {
   title: string;
   field: LeaderboardField;
   deadline: string;
+  requirement: string;
   steps: AiGoalStep[];
 };
 
@@ -178,6 +179,8 @@ export type GoalItem = {
   id: string;
   title: string;
   description?: string | null;
+  requirement?: string | null;
+  requirementSource?: 'USER' | 'AI' | null;
   rankField?: LeaderboardField | null;
   progressPct: number;
   dueAt: string | null;
@@ -243,7 +246,9 @@ export type SmartGoalProofAttempt = {
 export type AdminSmartGoalProofAttempt = {
   id: string;
   userId: string;
+  userEmail?: string | null;
   goalId: string;
+  goalTitle?: string | null;
   status: SmartGoalProofStatus;
   requirementText: string | null;
   proofKey: string | null;
@@ -422,7 +427,14 @@ export async function getGoal(accessToken: string, id: string): Promise<{ goal: 
 
 export async function createGoal(
   accessToken: string,
-  body: { title: string; description?: string | null; rankField?: LeaderboardField; progressPct?: number; dueAt?: string }
+  body: {
+    title: string;
+    description?: string | null;
+    requirement?: string | null;
+    rankField?: LeaderboardField;
+    progressPct?: number;
+    dueAt?: string;
+  }
 ): Promise<{ goal: GoalItem }> {
   return postJsonAuth<{ goal: GoalItem }>('/auth/goals', body, accessToken);
 }
@@ -495,7 +507,15 @@ export async function deleteGoalStep(
 export async function updateGoal(
   accessToken: string,
   id: string,
-  body: { title?: string; description?: string | null; rankField?: LeaderboardField | null; progressPct?: number; dueAt?: string | null; completed?: boolean }
+  body: {
+    title?: string;
+    description?: string | null;
+    requirement?: string | null;
+    rankField?: LeaderboardField | null;
+    progressPct?: number;
+    dueAt?: string | null;
+    completed?: boolean;
+  }
 ): Promise<{ goal: GoalItem }> {
   return putJsonAuth<{ goal: GoalItem }>(`/auth/goals/${id}`, body, accessToken);
 }

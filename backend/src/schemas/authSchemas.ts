@@ -34,6 +34,7 @@ export const ChangePasswordSchema = z
 export const CreateGoalSchema = z.object({
   title: z.string().min(1),
   description: z.string().optional().nullable(),
+  requirement: z.string().optional().nullable(),
   rankField: z.enum(['Sport', 'Academy', 'Entertainment']).optional(),
   progressPct: z.number().int().min(0).max(100).optional(),
   dueAt: z.string().datetime().optional(),
@@ -42,6 +43,7 @@ export const CreateGoalSchema = z.object({
 export const UpdateGoalSchema = z.object({
   title: z.string().min(1).optional(),
   description: z.string().optional().nullable(),
+  requirement: z.string().optional().nullable(),
   rankField: z.enum(['Sport', 'Academy', 'Entertainment']).optional().nullable(),
   progressPct: z.number().int().min(0).max(100).optional(),
   dueAt: z.string().datetime().optional().nullable(),

@@ -453,6 +453,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
   const [goalTitle, setGoalTitle] = useState('');
   const [goalField, setGoalField] = useState<'Sport' | 'Academy' | 'Entertainment'>('Academy');
   const [goalDeadline, setGoalDeadline] = useState('');
+  const [goalRequirement, setGoalRequirement] = useState('');
   const [steps, setSteps] = useState<Array<Step & { schedule?: authApi.AiGoalStepSchedule }>>([]);
 
   const displaySteps = useMemo(() => sanitizePlannerSteps(steps), [steps]);
@@ -473,6 +474,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
     setGoalTitle('');
     setGoalField('Academy');
     setGoalDeadline(deadline);
+    setGoalRequirement('');
     setSteps([]);
     setAiHelp(null);
     setDirty(false);
@@ -636,6 +638,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
       setGoalTitle(resp.suggestion.title || defaultGoalTitle(planText));
       setGoalField(resp.suggestion.field);
       setGoalDeadline(resp.suggestion.deadline || resolvedDeadline);
+      setGoalRequirement(resp.suggestion.requirement || '');
       const effectiveDeadline = resp.suggestion.deadline || resolvedDeadline;
       const mapped = resp.suggestion.steps.map(s => ({
         id: makeId(),
@@ -688,6 +691,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
       const created = await authApi.createGoal(token, {
         title,
         description: planText.trim() ? planText.trim() : null,
+        requirement: goalRequirement.trim() ? goalRequirement.trim() : null,
         rankField: goalField,
         dueAt: dueIso,
       });
@@ -747,7 +751,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
             contentContainerStyle={{ paddingBottom: 16 }}
             keyboardShouldPersistTaps="handled"
           >
-            <Text style={styles.mutedSmall}>Describe your plan. SmartGoal will suggest 1 goal and a checklist.</Text>
+            <Text style={styles.mutedSmall}>Describe your plan. SmartGoal will suggest 1 goal and a checklist. Requirement is determined completely by the SmartGoal app.</Text>
 
             <View style={styles.field}>
               <Text style={styles.label}>Your plan</Text>
@@ -839,13 +843,18 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
                 <Card>
                   <View style={styles.cardTitleRow}>
                     <Text style={styles.cardTitle}>Suggested goal</Text>
-                    <Badge>Editable</Badge>
                   </View>
 
                   <View style={[styles.field, { marginTop: 10 }]}
                   >
                     <Text style={styles.label}>Goal title</Text>
-                    <TextInput value={goalTitle} onChangeText={setGoalTitle} style={styles.input} placeholder="" placeholderTextColor={colors.muted} />
+                    <Text style={styles.stepItemText}>{goalTitle}</Text>
+                  </View>
+
+                  <View style={[styles.field, { marginTop: 10 }]}
+                  >
+                    <Text style={styles.label}>Requirement</Text>
+                    <Text style={styles.mutedSmall}>{goalRequirement || '—'}</Text>
                   </View>
 
                   <View style={{ flexDirection: 'row', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>

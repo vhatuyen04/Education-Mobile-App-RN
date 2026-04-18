@@ -220,6 +220,7 @@ export function AiGoalRecommendationScreen() {
         title,
         description: 'SmartGoal recommended goal',
         rankField: rec.suggestion.field,
+        requirement: String((rec.suggestion as any).requirement ?? '').trim() || null,
         dueAt: dueIso,
       });
 

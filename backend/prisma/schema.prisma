@@ -25,6 +25,11 @@ enum GoalFailedReason {
   GAVE_UP
 }
 
+enum GoalRequirementSource {
+  USER
+  AI
+}
+
 enum UserRole {
   USER
   ADMIN
@@ -73,6 +78,8 @@ model Goal {
   userId      String
   title       String
   description String?
+  requirement String?
+  requirementSource GoalRequirementSource @default(USER)
   rankField   RankField?
   progressPct Int      @default(0)
   dueAt       DateTime?
