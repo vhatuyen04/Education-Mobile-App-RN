@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Linking, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 
 import { Screen } from '../components/Screen';
@@ -19,8 +19,13 @@ export function AdminProofReviewScreen() {
   const token = state.accessToken;
 
   const [loading, setLoading] = useState(false);
-  const [attempts, setAttempts] = useState<Attempt[]>([]);
+  const [reviewingAttempts, setReviewingAttempts] = useState<Attempt[]>([]);
+  const [verifiedAttempts, setVerifiedAttempts] = useState<Attempt[]>([]);
   const [feedbackDraft, setFeedbackDraft] = useState<Record<string, string>>({});
+  const [autoAiEnabled, setAutoAiEnabled] = useState(false);
+  const [autoAiSettingBusy, setAutoAiSettingBusy] = useState(false);
+  const [aiBusyIds, setAiBusyIds] = useState<Record<string, boolean>>({});
+  const [hiddenVerifiedIds, setHiddenVerifiedIds] = useState<Record<string, boolean>>({});
 
   const isAdmin = state.user?.role === 'ADMIN';
 
@@ -28,14 +33,22 @@ export function AdminProofReviewScreen() {
     if (!token) return;
     setLoading(true);
     try {
-      const resp = await authApi.adminListProofAttempts(token, { status: 'PENDING_REVIEW' });
-      setAttempts(resp.attempts ?? []);
+      const settingResp = await authApi.adminGetAutoAiReviewSetting(token);
+      if (!autoAiSettingBusy) setAutoAiEnabled(Boolean(settingResp?.enabled));
+
+      const [pendingResp, approvedResp, rejectedResp] = await Promise.all([
+        authApi.adminListProofAttempts(token, { status: 'PENDING_REVIEW' }),
+        authApi.adminListProofAttempts(token, { status: 'APPROVED' }),
+        authApi.adminListProofAttempts(token, { status: 'REJECTED' }),
+      ]);
+      setReviewingAttempts(pendingResp.attempts ?? []);
+      setVerifiedAttempts([...(approvedResp.attempts ?? []), ...(rejectedResp.attempts ?? [])]);
     } catch (e: any) {
       toast(String(e?.message ?? 'Failed to load'));
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  }, [token, autoAiSettingBusy]);
 
   useFocusEffect(
     useCallback(() => {
@@ -81,6 +94,71 @@ export function AdminProofReviewScreen() {
     }
   }
 
+  async function aiReview(a: Attempt, opts?: { skipRefresh?: boolean }) {
+    if (!token) return;
+    if (aiBusyIds[a.id]) return;
+    setAiBusyIds(prev => ({ ...prev, [a.id]: true }));
+    try {
+      await authApi.adminAiReviewProofAttempt(token, a.id);
+      toast('AI reviewed');
+      if (!opts?.skipRefresh) await refresh();
+    } catch (e: any) {
+      toast(String(e?.message ?? 'AI review failed'));
+    } finally {
+      setAiBusyIds(prev => {
+        const next = { ...prev };
+        delete next[a.id];
+        return next;
+      });
+    }
+  }
+
+  async function toggleAutoAi(next: boolean) {
+    if (!token) return;
+    if (autoAiSettingBusy) return;
+    setAutoAiSettingBusy(true);
+    setAutoAiEnabled(next);
+    try {
+      const resp = await authApi.adminSetAutoAiReviewSetting(token, { enabled: next });
+      setAutoAiEnabled(Boolean(resp?.enabled));
+      await refresh();
+    } catch (e: any) {
+      toast(String(e?.message ?? 'Failed'));
+      setAutoAiEnabled(!next);
+    } finally {
+      setAutoAiSettingBusy(false);
+    }
+  }
+
+  const visibleVerifiedAttempts = useMemo(
+    () => verifiedAttempts.filter(a => !hiddenVerifiedIds[a.id]),
+    [verifiedAttempts, hiddenVerifiedIds]
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!autoAiEnabled) return;
+      if (!token) return;
+      if (loading) return;
+      if (reviewingAttempts.length === 0) return;
+
+      let canceled = false;
+      (async () => {
+        const batch = [...reviewingAttempts];
+        for (const a of batch) {
+          if (canceled) return;
+          await aiReview(a, { skipRefresh: true });
+        }
+        if (canceled) return;
+        await refresh();
+      })();
+
+      return () => {
+        canceled = true;
+      };
+    }, [autoAiEnabled, token, loading, reviewingAttempts, refresh])
+  );
+
   if (!isAdmin) {
     return (
       <Screen>
@@ -105,15 +183,21 @@ export function AdminProofReviewScreen() {
 
         <Card>
           <View style={styles.cardTitleRow}>
-            <Text style={styles.cardTitle}>Pending review</Text>
-            <Badge>{loading ? 'Loading…' : String(attempts.length)}</Badge>
+            <Text style={styles.cardTitle}>Reviewing</Text>
+            <Badge>{loading ? 'Loading…' : String(reviewingAttempts.length)}</Badge>
           </View>
           <View style={{ height: 10 }} />
 
-          <Button title="Refresh" small onPress={() => void refresh()} />
+          <View style={styles.rowBetween}>
+            <Button title="Refresh" small onPress={() => void refresh()} />
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+              <Text style={styles.meta}>Auto sending to AI</Text>
+              <Switch value={autoAiEnabled} onValueChange={v => void toggleAutoAi(v)} />
+            </View>
+          </View>
         </Card>
 
-        {attempts.map(a => (
+        {reviewingAttempts.map(a => (
           <Card key={a.id}>
             <View style={styles.rowBetween}>
               <Text style={styles.itemTitle} numberOfLines={1}>
@@ -150,15 +234,61 @@ export function AdminProofReviewScreen() {
 
             <View style={{ height: 10 }} />
             <View style={{ flexDirection: 'row', gap: 10, flexWrap: 'wrap' }}>
+              <Button title={aiBusyIds[a.id] ? 'AI reviewing…' : 'AI Review'} onPress={() => void aiReview(a)} />
               <Button title="Approve" variant="primary" onPress={() => void decide(a, 'APPROVE')} />
               <Button title="Reject" onPress={() => void decide(a, 'REJECT')} />
             </View>
           </Card>
         ))}
 
-        {attempts.length === 0 && !loading ? (
+        {reviewingAttempts.length === 0 && !loading ? (
           <Card>
             <Text style={styles.meta}>No pending attempts.</Text>
+          </Card>
+        ) : null}
+
+        <View style={{ height: 14 }} />
+
+        <Card>
+          <View style={styles.cardTitleRow}>
+            <Text style={styles.cardTitle}>Verified</Text>
+            <Badge>{loading ? 'Loading…' : String(visibleVerifiedAttempts.length)}</Badge>
+          </View>
+          <View style={{ height: 10 }} />
+          <Text style={styles.meta}>Approved and rejected proofs are shown here. You can hide them to keep the list clean.</Text>
+        </Card>
+
+        {visibleVerifiedAttempts.map(a => (
+          <Card key={a.id}>
+            <View style={styles.rowBetween}>
+              <Text style={styles.itemTitle} numberOfLines={1}>
+                Attempt {a.id.slice(0, 8)}
+              </Text>
+              <Badge>{a.status}</Badge>
+            </View>
+
+            <View style={{ height: 6 }} />
+            <Text style={styles.meta} numberOfLines={1}>
+              User: {a.userEmail || a.userId}
+            </Text>
+            <Text style={styles.meta} numberOfLines={1}>
+              Goal: {a.goalTitle || a.goalId}
+            </Text>
+
+            <View style={{ height: 8 }} />
+            <Text style={styles.body}>{a.aiFeedback || 'No feedback.'}</Text>
+
+            <View style={{ height: 10 }} />
+            <View style={{ flexDirection: 'row', gap: 10, flexWrap: 'wrap' }}>
+              <Button title="View video" small onPress={() => void viewAttempt(a)} />
+              <Button title="Hide" onPress={() => setHiddenVerifiedIds(prev => ({ ...prev, [a.id]: true }))} />
+            </View>
+          </Card>
+        ))}
+
+        {visibleVerifiedAttempts.length === 0 && !loading ? (
+          <Card>
+            <Text style={styles.meta}>No verified attempts.</Text>
           </Card>
         ) : null}
       </ScrollView>

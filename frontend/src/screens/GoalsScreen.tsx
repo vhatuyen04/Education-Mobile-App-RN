@@ -1,6 +1,7 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
 import { Screen } from '../components/Screen';
@@ -141,7 +142,16 @@ export function GoalsScreen() {
     await setLocalProgress({ ...p, xp: nextXp });
   }
 
-  function requestComplete(g: Goal) {
+  async function requestComplete(g: Goal) {
+    try {
+      const key = `goal_complete_confirmed_v1_${String(g.id ?? '').trim() || 'new'}`;
+      const raw = await AsyncStorage.getItem(key);
+      if (raw === '1') {
+        await completeGoal(g);
+        return;
+      }
+    } catch {
+    }
     setConfirm({ open: true, goal: g, action: 'complete' });
   }
 
@@ -217,6 +227,11 @@ export function GoalsScreen() {
     setLoading(true);
     try {
       if (confirm.action === 'complete') {
+        try {
+          const key = `goal_complete_confirmed_v1_${String(confirm.goal.id ?? '').trim() || 'new'}`;
+          await AsyncStorage.setItem(key, '1');
+        } catch {
+        }
         await completeGoal(confirm.goal);
         closeConfirm();
         return;

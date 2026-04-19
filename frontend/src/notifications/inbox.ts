@@ -11,11 +11,20 @@ type InboxItem = {
 
 const KEY_INBOX = 'notif_inbox_v1';
 const MAX_ITEMS = 200;
+const KEY_LAST_USER_ID = 'auth_last_user_id_v1';
 
 async function getInboxKey(): Promise<string> {
   try {
     const raw = await SecureStore.getItemAsync('auth_user');
-    if (!raw) return `${KEY_INBOX}_anon`;
+    if (!raw) {
+      try {
+        const last = await AsyncStorage.getItem(KEY_LAST_USER_ID);
+        const id = String(last ?? '').trim();
+        if (id) return `${KEY_INBOX}_${id}`;
+      } catch {
+      }
+      return `${KEY_INBOX}_anon`;
+    }
     const user = JSON.parse(raw);
     const id = String(user?.id ?? '');
     if (!id) return `${KEY_INBOX}_anon`;
@@ -48,8 +57,14 @@ export async function getInbox(): Promise<InboxItem[]> {
   const key = await getInboxKey();
   const raw = await AsyncStorage.getItem(key);
   const items = safeParse(raw);
-  items.sort((a, b) => b.receivedAt - a.receivedAt);
-  return items;
+  const byId = new Map<string, InboxItem>();
+  for (const it of items) {
+    const prev = byId.get(it.id);
+    if (!prev || it.receivedAt > prev.receivedAt) byId.set(it.id, it);
+  }
+  const unique = Array.from(byId.values());
+  unique.sort((a, b) => b.receivedAt - a.receivedAt);
+  return unique;
 }
 
 export async function appendInbox(item: Omit<InboxItem, 'id'> & { id?: string }): Promise<void> {
@@ -64,6 +79,7 @@ export async function appendInbox(item: Omit<InboxItem, 'id'> & { id?: string })
 
   const key = await getInboxKey();
   const prev = await getInbox();
+  if (prev.some(x => x.id === id)) return;
   const merged = [next, ...prev].slice(0, MAX_ITEMS);
   await AsyncStorage.setItem(key, JSON.stringify(merged));
 }

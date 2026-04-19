@@ -1,8 +1,9 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { Screen } from '../components/Screen';
 import { Card } from '../components/Card';
@@ -171,6 +172,11 @@ export function GoalDetailScreen() {
   const [deadlineDraft, setDeadlineDraft] = useState('');
 
   const [completeConfirmOpen, setCompleteConfirmOpen] = useState(false);
+
+  const completeConfirmKey = useMemo(() => {
+    const id = String(goalId ?? '').trim();
+    return `goal_complete_confirmed_v1_${id || 'new'}`;
+  }, [goalId]);
 
   const deadlineLabel = useMemo(() => {
     if (!dueAt) return 'None';
@@ -389,7 +395,6 @@ export function GoalDetailScreen() {
       if (opts.finish && effectiveGoalId && !wasNew) {
         const app = await isAppGoal(effectiveGoalId);
         if (app) {
-          setCompleteConfirmOpen(false);
           nav.navigate('SmartGoalProof', {
             goalId: effectiveGoalId,
             goalTitle: title ?? 'SmartGoal',
@@ -427,11 +432,24 @@ export function GoalDetailScreen() {
 
   async function finish() {
     if (!goalId) return;
+    try {
+      const raw = await AsyncStorage.getItem(completeConfirmKey);
+      if (raw === '1') {
+        await saveImpl({ finish: true });
+        return;
+      }
+    } catch {
+    }
+
     setCompleteConfirmOpen(true);
   }
 
   async function confirmComplete() {
     setCompleteConfirmOpen(false);
+    try {
+      await AsyncStorage.setItem(completeConfirmKey, '1');
+    } catch {
+    }
     await saveImpl({ finish: true });
   }
 

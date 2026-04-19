@@ -1,6 +1,7 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { Screen } from '../components/Screen';
 import { Card } from '../components/Card';
@@ -15,11 +16,12 @@ import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
 import type { RootStackParamList } from '../navigation/types';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { clearInbox, getInbox, removeInboxItem } from '../notifications/inbox';
+import { appendInbox, clearInbox, getInbox, removeInboxItem } from '../notifications/inbox';
 import * as Notifications from 'expo-notifications';
 import { listRecommendations, upsertRecommendation } from '../ai/recommendations';
 import { getLocalProgress, type LocalProgress } from '../motivation/progress';
 import { getFailedGoalsMap, type FailedReason } from '../motivation/failedGoals';
+import { autoScheduleRemindersFromDashboard } from '../notifications/scheduler';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -35,12 +37,57 @@ export function HomeScreen() {
   const loadInbox = useCallback(async () => {
     setNotifLoading(true);
     try {
+      const token = state.accessToken;
+      if (token) {
+        try {
+          const userId = String(state.user?.id ?? '');
+          const key = `notif_last_sync_v1_${userId || 'anon'}`;
+          const raw = await AsyncStorage.getItem(key);
+          const sinceMs = raw ? Number(raw) : null;
+          const resp = await authApi.listMyNotifications(token, {
+            sinceMs: sinceMs && Number.isFinite(sinceMs) && sinceMs > 0 ? sinceMs : undefined,
+          });
+          const list = resp.notifications ?? [];
+          for (const n of list) {
+            const receivedAt = n.createdAt ? new Date(n.createdAt).getTime() : Date.now();
+            await appendInbox({
+              id: `srv_${n.id}`,
+              receivedAt,
+              title: String(n.title ?? 'Notification'),
+              body: String(n.body ?? ''),
+              data: n.data ?? null,
+            });
+          }
+          await AsyncStorage.setItem(key, String(Date.now()));
+        } catch (e: any) {
+          toast(String(e?.message ?? 'Failed to sync notifications'));
+        }
+      }
+
+      try {
+        const presented = await Notifications.getPresentedNotificationsAsync();
+        for (const p of presented) {
+          const id = String((p as any)?.request?.identifier ?? (p as any)?.identifier ?? '');
+          const title = String((p as any)?.request?.content?.title ?? (p as any)?.content?.title ?? 'Notification');
+          const body = String((p as any)?.request?.content?.body ?? (p as any)?.content?.body ?? '');
+          if (!id) continue;
+          await appendInbox({
+            id: `expo_${id}`,
+            receivedAt: Date.now(),
+            title,
+            body,
+            data: ((p as any)?.request?.content?.data ?? (p as any)?.content?.data ?? null) as any,
+          });
+        }
+      } catch {
+      }
+
       const items = await getInbox();
       setNotifItems(items);
     } finally {
       setNotifLoading(false);
     }
-  }, []);
+  }, [state.accessToken, state.user?.id]);
 
   const [dash, setDash] = useState<authApi.DashboardResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -61,6 +108,8 @@ export function HomeScreen() {
       const [resp, fm] = await Promise.all([authApi.getDashboard(token), getFailedGoalsMap()]);
       setDash(resp);
       setFailedMap(fm);
+
+      void autoScheduleRemindersFromDashboard(resp);
 
       try {
         const rawSteps = resp?.todaySteps ?? [];

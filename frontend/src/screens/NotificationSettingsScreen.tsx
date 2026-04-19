@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
-import * as Notifications from 'expo-notifications';
+import { Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useNavigation } from '@react-navigation/native';
+import * as Notifications from 'expo-notifications';
 
 import { Screen } from '../components/Screen';
 import { Card } from '../components/Card';
@@ -34,8 +34,6 @@ const KEY_STEP_OFFSETS = 'notif_step_offsets_v3';
 const KEY_EVENT_BEFORE = 'notif_event_before_v4';
 const KEY_GOAL_BEFORE = 'notif_goal_before_v4';
 const KEY_STEP_BEFORE = 'notif_step_before_v4';
-
-type DailyTime = { hour: number; minute: number };
 
 type OffsetUnit = 'minutes' | 'hours' | 'days';
 
@@ -92,32 +90,35 @@ function parseCompoundBefore(raw: string | null): CompoundBefore | null {
   }
 }
 
-function pad2(v: number) {
-  return String(v).padStart(2, '0');
-}
-
-function formatTime(t: DailyTime) {
-  return `${pad2(t.hour)}:${pad2(t.minute)}`;
-}
-
-function parseTime(s: string | null): DailyTime | null {
-  if (!s) return null;
-  const m = /^\s*(\d{1,2})\s*:\s*(\d{1,2})\s*$/.exec(s);
-  if (!m) return null;
-  const hour = Number(m[1]);
-  const minute = Number(m[2]);
-  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
-  if (hour < 0 || hour > 23) return null;
-  if (minute < 0 || minute > 59) return null;
-  return { hour, minute };
-}
-
 async function ensurePermission(): Promise<boolean> {
   const existing = await Notifications.getPermissionsAsync();
-  if (existing.granted) return true;
+  if (existing.granted) {
+    if (Platform.OS === 'android') {
+      try {
+        await Notifications.setNotificationChannelAsync('default', {
+          name: 'Default',
+          importance: Notifications.AndroidImportance.HIGH,
+          vibrationPattern: [0, 250, 250, 250],
+        });
+      } catch {
+      }
+    }
+    return true;
+  }
 
   const req = await Notifications.requestPermissionsAsync();
-  return !!req.granted;
+  const ok = !!req.granted;
+  if (ok && Platform.OS === 'android') {
+    try {
+      await Notifications.setNotificationChannelAsync('default', {
+        name: 'Default',
+        importance: Notifications.AndroidImportance.HIGH,
+        vibrationPattern: [0, 250, 250, 250],
+      });
+    } catch {
+    }
+  }
+  return ok;
 }
 
 function daysUntil(date: Date) {
@@ -311,7 +312,6 @@ export function NotificationSettingsScreen() {
   const { state } = useAuth();
 
   const [enabled, setEnabled] = useState<boolean>(false);
-  const [dailyTime, setDailyTime] = useState<DailyTime>({ hour: 20, minute: 0 });
   const [permissionGranted, setPermissionGranted] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -319,23 +319,11 @@ export function NotificationSettingsScreen() {
   const [goalBefore, setGoalBefore] = useState<CompoundBefore>({ days: 1, hours: 0, minutes: 0 });
   const [stepBefore, setStepBefore] = useState<CompoundBefore>({ days: 0, hours: 3, minutes: 0 });
 
-  const timePresets: DailyTime[] = useMemo(
-    () => [
-      { hour: 8, minute: 0 },
-      { hour: 12, minute: 0 },
-      { hour: 18, minute: 0 },
-      { hour: 20, minute: 0 },
-      { hour: 21, minute: 0 },
-    ],
-    []
-  );
-
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const [
         en,
-        t,
         dailyId,
         evOff,
         goalOff,
@@ -354,7 +342,6 @@ export function NotificationSettingsScreen() {
         stepBeforeRaw,
       ] = await Promise.all([
         AsyncStorage.getItem(KEY_ENABLED),
-        AsyncStorage.getItem(KEY_DAILY_TIME),
         AsyncStorage.getItem(KEY_DAILY_ID),
         AsyncStorage.getItem(KEY_EVENT_OFFSET_MIN),
         AsyncStorage.getItem(KEY_GOAL_OFFSET_DAYS),
@@ -375,8 +362,16 @@ export function NotificationSettingsScreen() {
 
       setEnabled(en === '1');
 
-      const parsed = parseTime(t);
-      if (parsed) setDailyTime(parsed);
+      // Daily check-in is no longer used; cancel any legacy scheduled notification.
+      if (dailyId) {
+        try {
+          await Notifications.cancelScheduledNotificationAsync(String(dailyId));
+        } catch {
+          // ignore
+        }
+        await AsyncStorage.removeItem(KEY_DAILY_ID);
+      }
+      await AsyncStorage.removeItem(KEY_DAILY_TIME);
 
       const perm = await Notifications.getPermissionsAsync();
       const granted = !!perm.granted;
@@ -466,16 +461,8 @@ export function NotificationSettingsScreen() {
       }
 
       const isEnabled = en === '1';
-      if (isEnabled && granted && !dailyId) {
-        const fallback = parseTime(t) ?? { hour: 20, minute: 0 };
-        const id = await Notifications.scheduleNotificationAsync({
-          content: {
-            title: 'Daily check-in',
-            body: "What’s your plan for today? Open the app to see your goals and schedule.",
-          },
-          trigger: { type: 'calendar', hour: fallback.hour, minute: fallback.minute, repeats: true, channelId: 'default' } as any,
-        });
-        await AsyncStorage.setItem(KEY_DAILY_ID, id);
+      if (isEnabled && granted) {
+        // Daily check-in reminders intentionally removed.
       }
     } catch {
       // ignore
@@ -491,9 +478,8 @@ export function NotificationSettingsScreen() {
   const canEnable = !loading;
 
   const save = useCallback(
-    async (nextEnabled: boolean, nextTime: DailyTime) => {
+    async (nextEnabled: boolean) => {
       await AsyncStorage.setItem(KEY_ENABLED, nextEnabled ? '1' : '0');
-      await AsyncStorage.setItem(KEY_DAILY_TIME, formatTime(nextTime));
     },
     []
   );
@@ -543,38 +529,9 @@ export function NotificationSettingsScreen() {
     [saveOffsetsV2]
   );
 
-  const cancelDaily = useCallback(async () => {
-    const id = await AsyncStorage.getItem(KEY_DAILY_ID);
-    if (id) {
-      try {
-        await Notifications.cancelScheduledNotificationAsync(id);
-      } catch {
-        // ignore
-      }
-      await AsyncStorage.removeItem(KEY_DAILY_ID);
-    }
-  }, []);
-
   const cancelRuleNotifications = useCallback(async () => {
     await Promise.all([cancelAnyIfExists(KEY_EVENT_ID), cancelAnyIfExists(KEY_GOAL_DUE_ID), cancelAnyIfExists(KEY_STEP_DUE_ID)]);
   }, []);
-
-  const scheduleDaily = useCallback(
-    async (t: DailyTime) => {
-      await cancelDaily();
-
-      const id = await Notifications.scheduleNotificationAsync({
-        content: {
-          title: 'Daily check-in',
-          body: "What’s your plan for today? Open the app to see your goals and schedule.",
-        },
-        trigger: { type: 'calendar', hour: t.hour, minute: t.minute, repeats: true, channelId: 'default' } as any,
-      });
-
-      await AsyncStorage.setItem(KEY_DAILY_ID, id);
-    },
-    [cancelDaily]
-  );
 
   const scheduleRuleNotifications = useCallback(async () => {
     const token = state.accessToken;
@@ -624,7 +581,10 @@ export function NotificationSettingsScreen() {
     const dueSteps = (dash.todaySteps ?? [])
       .filter(s => !s.doneToday)
       .map(s => {
-        const due = s.dueAt ? new Date(String(s.dueAt)) : nextOccurrenceFromRepeat({ repeat: s.repeat, repeatDay: s.repeatDay, repeatMonth: s.repeatMonth });
+        const due = s.dueAt
+          ? new Date(String(s.dueAt))
+          : nextOccurrenceFromRepeat({ repeat: s.repeat, repeatDay: s.repeatDay, repeatMonth: s.repeatMonth }) ||
+            new Date(new Date().setHours(23, 59, 59, 999));
         return { ...s, due };
       })
       .filter(s => s.due instanceof Date && !Number.isNaN((s.due as Date).getTime()))
@@ -649,6 +609,18 @@ export function NotificationSettingsScreen() {
     }
   }, [eventBefore, goalBefore, state.accessToken, stepBefore]);
 
+  useEffect(() => {
+    if (!enabled) return;
+    if (!permissionGranted) return;
+    if (!state.accessToken) return;
+    void (async () => {
+      try {
+        await scheduleRuleNotifications();
+      } catch {
+      }
+    })();
+  }, [enabled, permissionGranted, scheduleRuleNotifications, state.accessToken]);
+
   const toggleEnabled = useCallback(
     async (value: boolean) => {
       setEnabled(value);
@@ -661,18 +633,19 @@ export function NotificationSettingsScreen() {
           if (!ok) {
             setEnabled(false);
             toast('Notification permission is required.');
-            await save(false, dailyTime);
-            await cancelDaily();
+            await save(false);
             return;
           }
 
-          await save(true, dailyTime);
-          await scheduleDaily(dailyTime);
-          await scheduleRuleNotifications();
+          await save(true);
+          try {
+            await scheduleRuleNotifications();
+          } catch (e: any) {
+            throw new Error(String(e?.message ?? 'Failed to schedule reminders'));
+          }
           toast('Notifications enabled.');
         } else {
-          await save(false, dailyTime);
-          await cancelDaily();
+          await save(false);
           await cancelRuleNotifications();
           toast('Notifications disabled.');
         }
@@ -680,35 +653,7 @@ export function NotificationSettingsScreen() {
         toast(String(e?.message ?? 'Failed to update notifications'));
       }
     },
-    [cancelDaily, cancelRuleNotifications, dailyTime, save, scheduleDaily, scheduleRuleNotifications]
-  );
-
-  const pickTime = useCallback(
-    async (t: DailyTime) => {
-      setDailyTime(t);
-
-      try {
-        await save(enabled, t);
-        if (enabled) {
-          const ok = await ensurePermission();
-          setPermissionGranted(ok);
-          if (!ok) {
-            setEnabled(false);
-            toast('Notification permission is required.');
-            await save(false, t);
-            await cancelDaily();
-            return;
-          }
-
-          await scheduleDaily(t);
-          await scheduleRuleNotifications();
-          toast('Reminder time updated.');
-        }
-      } catch (e: any) {
-        toast(String(e?.message ?? 'Failed to update reminder time'));
-      }
-    },
-    [cancelDaily, enabled, save, scheduleDaily, scheduleRuleNotifications]
+    [cancelRuleNotifications, save, scheduleRuleNotifications]
   );
 
   const setBeforeSafe = useCallback(
@@ -743,7 +688,6 @@ export function NotificationSettingsScreen() {
           <View style={styles.rowBetween}>
             <View style={{ flex: 1 }}>
               <Text style={styles.cardTitle}>Enable reminders</Text>
-              <Text style={styles.muted12}>Daily check-in reminder.</Text>
             </View>
             <Switch value={enabled} onValueChange={toggleEnabled} disabled={!canEnable || loading} />
           </View>
@@ -756,24 +700,6 @@ export function NotificationSettingsScreen() {
         </Card>
 
         <Card>
-          <Text style={styles.cardTitle}>Reminder time</Text>
-          <View style={{ height: 10 }} />
-
-          <View style={styles.pillsRow}>
-            {timePresets.map((t) => {
-              const active = t.hour === dailyTime.hour && t.minute === dailyTime.minute;
-              return (
-                <Pressable key={formatTime(t)} onPress={() => void pickTime(t)}>
-                  <Pill dot={active}>{formatTime(t)}</Pill>
-                </Pressable>
-              );
-            })}
-          </View>
-
-          <View style={{ height: 12 }} />
-          <Text style={styles.muted12}>Current: {formatTime(dailyTime)}</Text>
-
-          <View style={{ height: 10 }} />
           <Button
             title="Send test notification"
             full
@@ -796,74 +722,9 @@ export function NotificationSettingsScreen() {
           />
 
           <View style={{ height: 10 }} />
-          <Button
-            title="Reschedule reminders now"
-            full
-            onPress={async () => {
-              try {
-                const ok = await ensurePermission();
-                setPermissionGranted(ok);
-                if (!ok) {
-                  toast('Notification permission is required.');
-                  return;
-                }
-                await scheduleRuleNotifications();
-                toast('Reminders rescheduled.');
-              } catch (e: any) {
-                toast(String(e?.message ?? 'Failed to reschedule reminders'));
-              }
-            }}
-          />
+        </Card>
 
-          <View style={{ height: 10 }} />
-          <Button
-            title="Debug: show scheduled notifications"
-            full
-            onPress={async () => {
-              try {
-                const all = await Notifications.getAllScheduledNotificationsAsync();
-                const now = new Date();
-
-                const next = all
-                  .map(n => getTriggerFireTimeMs((n as any).trigger, now))
-                  .filter((x): x is number => typeof x === 'number')
-                  .sort((a, b) => a - b)[0];
-
-                const nextText = next ? new Date(next).toLocaleString() : 'unknown';
-                const counts = all.reduce(
-                  (acc: Record<string, number>, n) => {
-                    const t: any = n.trigger;
-                    const key = String(t?.type ?? (t?.date ? 'date' : t?.hour != null ? 'calendar' : 'unknown'));
-                    acc[key] = (acc[key] ?? 0) + 1;
-                    return acc;
-                  },
-                  {}
-                );
-                const summary = Object.entries(counts)
-                  .map(([k, v]) => `${k}:${v}`)
-                  .join(', ');
-
-                const lines = all
-                  .slice(0, 4)
-                  .map(n => {
-                    const t: any = (n as any).trigger;
-                    const fire = getTriggerFireTimeMs(t, now);
-                    const fireTxt = fire ? new Date(fire).toLocaleString() : 'unknown';
-                    const title = String((n as any).content?.title ?? '');
-                    const type = String(t?.type ?? 'unknown');
-                    return `${type} | ${fireTxt} | ${title}`.trim();
-                  })
-                  .filter(Boolean)
-                  .join('\n');
-
-                toast(`Scheduled: ${all.length} (${summary}). Next: ${nextText}${lines ? `\n${lines}` : ''}`);
-              } catch (e: any) {
-                toast(String(e?.message ?? 'Failed to read scheduled notifications'));
-              }
-            }}
-          />
-
-          <View style={{ height: 10 }} />
+        <Card>
           <Button
             title="Test goal due tomorrow (60s)"
             full

@@ -1,5 +1,10 @@
 import bcrypt from 'bcrypt';
 import { randomUUID } from 'crypto';
+import fs from 'fs';
+import fsp from 'fs/promises';
+import os from 'os';
+import path from 'path';
+import { pipeline } from 'stream/promises';
 import { Request, Response, Router } from 'express';
 import cors from 'cors';
 import express from 'express';
@@ -7,6 +12,8 @@ import { DeleteObjectCommand, GetObjectCommand, S3Client, PutObjectCommand } fro
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import jwt, { type Secret, type SignOptions } from 'jsonwebtoken';
 import { z } from 'zod';
+import ffmpeg from 'fluent-ffmpeg';
+import ffmpegPath from 'ffmpeg-static';
 
 import { prisma } from '../utils/prisma.js';
 import { getConfig } from '../utils/config.js';
@@ -31,6 +38,13 @@ import {
 export const authRouter = Router();
 
 const prismaAny: any = prisma;
+
+if (ffmpegPath) {
+  try {
+    ffmpeg.setFfmpegPath(String(ffmpegPath));
+  } catch {
+  }
+}
 
 function getS3ClientOrNull() {
   const config = getConfig();
@@ -71,6 +85,24 @@ function endOfLocalDay(d: Date) {
   const x = new Date(d);
   x.setHours(23, 59, 59, 999);
   return x;
+}
+
+async function createProofDecisionNotification(params: { userId: string; goalId: string; attemptId: string; status: 'APPROVED' | 'REJECTED' }) {
+  const { userId, goalId, attemptId, status } = params;
+  const goal = await prismaAny.goal.findFirst({ where: { id: goalId }, select: { id: true, title: true } });
+  const goalTitle = String(goal?.title ?? 'Goal');
+  const title = status === 'APPROVED' ? 'Proof approved' : 'Proof rejected';
+  const body = `${goalTitle} was ${status === 'APPROVED' ? 'approved' : 'rejected'}.`;
+  await prismaAny.userNotification.create({
+    data: {
+      userId,
+      type: 'proof_decision',
+      title,
+      body,
+      data: { goalId, goalTitle, attemptId, status },
+    },
+    select: { id: true },
+  });
 }
 
 function daysInMonth(year: number, monthIndex0: number) {
@@ -640,6 +672,11 @@ authRouter.post('/admin/proof-attempts/:attemptId/decision', async (req: Request
   const nextStatus = decision === 'APPROVE' ? 'APPROVED' : 'REJECTED';
   await prismaAny.smartGoalProofAttempt.update({ where: { id: attemptId }, data: { status: nextStatus, aiFeedback: feedback }, select: { id: true } });
 
+  try {
+    await createProofDecisionNotification({ userId: attempt.userId, goalId: attempt.goalId, attemptId, status: nextStatus });
+  } catch {
+  }
+
   if (decision === 'APPROVE') {
     const done = await completeGoalForUser({ userId: attempt.userId, goalId: attempt.goalId });
     if (!done.ok) return res.status(404).json({ error: done.error });
@@ -651,6 +688,265 @@ authRouter.post('/admin/proof-attempts/:attemptId/decision', async (req: Request
   });
   return res.json({ attempt: updated });
 });
+
+authRouter.get('/me/notifications', async (req: Request, res: Response) => {
+  const token = getAccessTokenFromReq(req);
+  if (!token) return res.status(401).json({ error: 'Missing access token' });
+
+  let userId: string;
+  try {
+    userId = verifyAccessToken(token).sub;
+  } catch {
+    return res.status(401).json({ error: 'Invalid access token' });
+  }
+
+  const sinceMsRaw = (req.query as any)?.sinceMs;
+  const sinceMs = sinceMsRaw != null ? Number(sinceMsRaw) : null;
+  const sinceDate = sinceMs && Number.isFinite(sinceMs) && sinceMs > 0 ? new Date(sinceMs) : null;
+
+  const notifs = await prismaAny.userNotification.findMany({
+    where: {
+      userId,
+      ...(sinceDate ? { createdAt: { gt: sinceDate } } : {}),
+    },
+    orderBy: [{ createdAt: 'desc' }],
+    select: { id: true, type: true, title: true, body: true, data: true, createdAt: true, readAt: true },
+    take: 50,
+  });
+
+  const notifications = notifs.map((n: any) => ({
+    id: String(n.id),
+    type: String(n.type),
+    title: String(n.title),
+    body: String(n.body),
+    data: n.data ?? null,
+    createdAt: n.createdAt ? new Date(n.createdAt).toISOString() : null,
+    readAt: n.readAt ? new Date(n.readAt).toISOString() : null,
+  }));
+
+  return res.json({ notifications });
+});
+
+authRouter.post('/admin/proof-attempts/:attemptId/ai-review', async (req: Request, res: Response) => {
+  const admin = await requireAdminFromReq(req);
+  if (!admin) return res.status(403).json({ error: 'Forbidden' });
+
+  const attemptId = String(req.params.attemptId);
+
+  const run = await runAiReviewForAttemptId(attemptId);
+  if (!run.ok) {
+    const code = run.error === 'Not found' ? 404 : 400;
+    return res.status(code).json({ error: run.error });
+  }
+
+  try {
+    const attempt = await prismaAny.smartGoalProofAttempt.findFirst({ where: { id: attemptId }, select: { id: true, userId: true, goalId: true, status: true } });
+    if (attempt?.userId && attempt?.goalId && (attempt.status === 'APPROVED' || attempt.status === 'REJECTED')) {
+      await createProofDecisionNotification({ userId: attempt.userId, goalId: attempt.goalId, attemptId, status: attempt.status });
+    }
+  } catch {
+  }
+
+  const updated = await prismaAny.smartGoalProofAttempt.findFirst({
+    where: { id: attemptId },
+    select: { id: true, userId: true, goalId: true, status: true, requirementText: true, aiFeedback: true, createdAt: true, updatedAt: true },
+  });
+  return res.json({ attempt: updated });
+});
+
+authRouter.get('/admin/settings/auto-ai-review', async (req: Request, res: Response) => {
+  const admin = await requireAdminFromReq(req);
+  if (!admin) return res.status(403).json({ error: 'Forbidden' });
+
+  const enabled = await getAutoAiReviewEnabled();
+  return res.json({ enabled });
+});
+
+authRouter.post('/admin/settings/auto-ai-review', async (req: Request, res: Response) => {
+  const admin = await requireAdminFromReq(req);
+  if (!admin) return res.status(403).json({ error: 'Forbidden' });
+
+  const enabled = Boolean((req.body as any)?.enabled);
+  await setAppSetting('auto_ai_review_enabled', enabled ? '1' : '0');
+  return res.json({ enabled });
+});
+
+async function extractVideoFrames(params: { videoPath: string; framesDir: string }): Promise<string[]> {
+  const { videoPath, framesDir } = params;
+
+  await new Promise<void>((resolve, reject) => {
+    ffmpeg(videoPath)
+      .outputOptions(['-vf', 'fps=1/2,scale=640:-1'])
+      .output(path.join(framesDir, 'frame-%03d.png'))
+      .frames(6)
+      .on('end', () => resolve())
+      .on('error', (err: any) => reject(err))
+      .run();
+  });
+
+  const files = await fsp.readdir(framesDir);
+  return files
+    .filter(f => f.toLowerCase().endsWith('.png'))
+    .sort()
+    .slice(0, 6)
+    .map(f => path.join(framesDir, f));
+}
+
+async function runOpenAiProofReview(params: {
+  apiKey: string;
+  requirementText: string | null;
+  proofUrl: string | null;
+  frameFiles: string[];
+}): Promise<{ decision: 'APPROVE' | 'REJECT'; feedback: string | null }> {
+  const { apiKey, requirementText, proofUrl, frameFiles } = params;
+
+  const images = await Promise.all(
+    frameFiles.map(async f => {
+      const buf = await fsp.readFile(f);
+      return { type: 'image_url', image_url: { url: `data:image/png;base64,${buf.toString('base64')}` } };
+    })
+  );
+
+  const system =
+    'You are a strict proof verifier for a goal-tracking app. You must decide APPROVE or REJECT based only on the visible evidence in the frames. If evidence is unclear, incomplete, or not readable, you MUST REJECT.';
+
+  const userText =
+    `Requirement:\n${requirementText ?? '(none)'}\n\n` +
+    `Proof video URL (may be unusable; rely on frames):\n${proofUrl ?? '(none)'}\n\n` +
+    'Return ONLY valid JSON with this shape: {"decision":"APPROVE"|"REJECT","feedback":"short reason"}. Do not include any extra text.';
+
+  const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: process.env.OPENAI_MODEL ?? 'gpt-4o-mini',
+      temperature: 0.0,
+      messages: [
+        { role: 'system', content: system },
+        {
+          role: 'user',
+          content: [{ type: 'text', text: userText }, ...images],
+        },
+      ],
+    }),
+  });
+
+  const data: any = await resp.json().catch(() => null);
+  if (!resp.ok) {
+    const msg = data?.error?.message ? String(data.error.message) : 'AI request failed';
+    throw new Error(msg);
+  }
+
+  const content = String(data?.choices?.[0]?.message?.content ?? '').trim();
+  const jsonText = extractFirstJsonObject(content);
+  let parsed: any = null;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch {
+    throw new Error('AI response was not valid JSON');
+  }
+
+  const decisionRaw = String(parsed?.decision ?? '').toUpperCase();
+  const decision = decisionRaw === 'APPROVE' ? 'APPROVE' : 'REJECT';
+  const feedback = typeof parsed?.feedback === 'string' ? String(parsed.feedback).trim() : null;
+  return { decision, feedback: feedback || null };
+}
+
+function extractFirstJsonObject(s: string): string {
+  const start = s.indexOf('{');
+  const end = s.lastIndexOf('}');
+  if (start >= 0 && end > start) return s.slice(start, end + 1);
+  return s;
+}
+
+async function getAppSetting(key: string): Promise<string | null> {
+  const row = await prismaAny.appSetting.findUnique({ where: { key }, select: { value: true } });
+  return row?.value ?? null;
+}
+
+async function setAppSetting(key: string, value: string): Promise<void> {
+  await prismaAny.appSetting.upsert({
+    where: { key },
+    create: { key, value },
+    update: { value },
+    select: { key: true },
+  });
+}
+
+async function getAutoAiReviewEnabled(): Promise<boolean> {
+  const v = await getAppSetting('auto_ai_review_enabled');
+  return v === '1' || v === 'true';
+}
+
+async function runAiReviewForAttemptId(attemptId: string): Promise<{ ok: true; status: 'APPROVED' | 'REJECTED' } | { ok: false; error: string }> {
+  const attempt = await prismaAny.smartGoalProofAttempt.findFirst({
+    where: { id: attemptId },
+    select: {
+      id: true,
+      status: true,
+      userId: true,
+      goalId: true,
+      requirementText: true,
+      proofKey: true,
+      proofUrl: true,
+    },
+  });
+  if (!attempt) return { ok: false, error: 'Not found' };
+  if (attempt.status !== 'PENDING_REVIEW') return { ok: false, error: 'Attempt is not pending review' };
+  if (!attempt.proofKey) return { ok: false, error: 'No proof uploaded' };
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return { ok: false, error: 'AI is not configured on the server' };
+
+  const s3c = getS3ClientOrNull();
+  if (!s3c) return { ok: false, error: 'S3 is not configured' };
+
+  const tmpBase = await fsp.mkdtemp(path.join(os.tmpdir(), 'proof-ai-'));
+  const videoPath = path.join(tmpBase, 'proof.mp4');
+  const framesDir = path.join(tmpBase, 'frames');
+
+  try {
+    await fsp.mkdir(framesDir, { recursive: true });
+    const obj = await s3c.s3.send(new GetObjectCommand({ Bucket: s3c.bucket, Key: String(attempt.proofKey) }));
+    const body: any = (obj as any)?.Body;
+    if (!body) return { ok: false, error: 'Failed to read proof from storage' };
+    await pipeline(body, fs.createWriteStream(videoPath));
+
+    const frameFiles = await extractVideoFrames({ videoPath, framesDir });
+    if (frameFiles.length === 0) return { ok: false, error: 'Failed to extract frames from video' };
+
+    const decision = await runOpenAiProofReview({
+      apiKey,
+      requirementText: attempt.requirementText ?? null,
+      proofUrl: attempt.proofUrl ?? null,
+      frameFiles,
+    });
+
+    const nextStatus = decision.decision === 'APPROVE' ? 'APPROVED' : 'REJECTED';
+    await prismaAny.smartGoalProofAttempt.update({
+      where: { id: attemptId },
+      data: { status: nextStatus, aiFeedback: decision.feedback ?? null },
+      select: { id: true },
+    });
+
+    if (decision.decision === 'APPROVE') {
+      const done = await completeGoalForUser({ userId: attempt.userId, goalId: attempt.goalId });
+      if (!done.ok) return { ok: false, error: done.error };
+    }
+
+    return { ok: true, status: nextStatus };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message ?? 'AI review failed') };
+  } finally {
+    try {
+      await fsp.rm(tmpBase, { recursive: true, force: true });
+    } catch {
+    }
+  }
+}
 
 authRouter.post('/logout', async (req: Request, res: Response) => {
   const parsed = LogoutSchema.safeParse(req.body);
@@ -1244,7 +1540,46 @@ authRouter.post('/goals/:id/proof-attempts/:attemptId/submit', async (req: Reque
     select: { id: true, status: true, aiFeedback: true },
   });
 
-  return res.json({ attempt: updated });
+  let updatedForClient: any = updated;
+
+  try {
+    const autoAi = await getAutoAiReviewEnabled();
+    if (autoAi) {
+      try {
+        updatedForClient = await prismaAny.smartGoalProofAttempt.update({
+          where: { id: attemptId },
+          data: { aiFeedback: updated?.aiFeedback ? updated.aiFeedback : 'SmartGoal review queued…' },
+          select: { id: true, status: true, aiFeedback: true },
+        });
+      } catch {
+      }
+
+      void (async () => {
+        const run = await runAiReviewForAttemptId(attemptId);
+        if (run.ok) {
+          try {
+            await createProofDecisionNotification({ userId, goalId, attemptId, status: run.status });
+          } catch {
+          }
+          return;
+        }
+
+        try {
+          const msg = String(run.error ?? 'AI review failed');
+          const clipped = msg.length > 500 ? msg.slice(0, 500) : msg;
+          await prismaAny.smartGoalProofAttempt.update({
+            where: { id: attemptId },
+            data: { aiFeedback: `Auto AI review failed: ${clipped}` },
+            select: { id: true },
+          });
+        } catch {
+        }
+      })();
+    }
+  } catch {
+  }
+
+  return res.json({ attempt: updatedForClient });
 });
 
 authRouter.delete('/goals/:id/proof-attempts/:attemptId', async (req: Request, res: Response) => {

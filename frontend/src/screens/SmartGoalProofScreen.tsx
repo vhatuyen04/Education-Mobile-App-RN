@@ -249,28 +249,6 @@ export function SmartGoalProofScreen() {
     };
   }, [attemptId, goalId, nav, polling, state.accessToken]);
 
-  const simulate = useCallback(
-    async (decision: 'APPROVE' | 'REJECT') => {
-      const token = state.accessToken;
-      if (!token) return;
-      if (!attemptId) return;
-      try {
-        const resp = await authApi.mockReviewSmartGoalProof(token, goalId, attemptId, {
-          decision,
-          feedback: decision === 'APPROVE' ? 'Mock approved.' : 'Mock rejected.',
-        });
-        setStatus(resp.attempt.status);
-        setFeedback(resp.attempt.aiFeedback ?? null);
-        if (resp.attempt.status === 'APPROVED') {
-          setPolling(true);
-        }
-      } catch (e: any) {
-        toast(String(e?.message ?? 'Failed'));
-      }
-    },
-    [attemptId, goalId, state.accessToken]
-  );
-
   const viewUploaded = useCallback(async () => {
     const token = state.accessToken;
     if (!token) return;
@@ -348,13 +326,6 @@ export function SmartGoalProofScreen() {
 
           {status === 'REJECTED' ? (
             <Text style={[styles.body, { marginTop: 10 }]}>Verification rejected. Your goal is still active. No XP was awarded.</Text>
-          ) : null}
-
-          {__DEV__ && attemptId ? (
-            <View style={{ marginTop: 14, flexDirection: 'row', gap: 10, flexWrap: 'wrap' }}>
-              <Button title="Mock approve" small onPress={() => simulate('APPROVE')} />
-              <Button title="Mock reject" small onPress={() => simulate('REJECT')} />
-            </View>
           ) : null}
         </Card>
       </ScrollView>

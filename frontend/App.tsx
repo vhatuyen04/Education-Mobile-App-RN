@@ -4,13 +4,14 @@ import React, { useEffect } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { NavigationContainer } from '@react-navigation/native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 
 import { RootStack } from './src/navigation/RootStack';
 import { AuthProvider } from './src/auth/AuthContext';
 import { SettingsProvider } from './src/settings/SettingsContext';
 import { appendInbox } from './src/notifications/inbox';
+import { autoScheduleRemindersForSignedInUser } from './src/notifications/scheduler';
 
 export default function App() {
   useEffect(() => {
@@ -56,9 +57,18 @@ export default function App() {
       });
     }
 
+    void autoScheduleRemindersForSignedInUser();
+
+    const subApp = AppState.addEventListener('change', s => {
+      if (s === 'active') {
+        void autoScheduleRemindersForSignedInUser();
+      }
+    });
+
     return () => {
       subRecv.remove();
       subResp.remove();
+      subApp.remove();
     };
   }, []);
 

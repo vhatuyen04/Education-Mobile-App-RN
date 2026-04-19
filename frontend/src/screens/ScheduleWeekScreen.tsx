@@ -10,6 +10,7 @@ import { Button } from '../components/Button';
 import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
+import { autoScheduleRemindersForSignedInUser } from '../notifications/scheduler';
 
 type DayKey = 'Mon' | 'Tue' | 'Wed' | 'Thu' | 'Fri' | 'Sat' | 'Sun';
 
@@ -314,6 +315,7 @@ export function ScheduleWeekScreen() {
       }
 
       await refresh();
+      void autoScheduleRemindersForSignedInUser({ minIntervalMs: 0 });
       toast('Saved');
       closeEdit();
     } catch (e: any) {
@@ -347,6 +349,7 @@ export function ScheduleWeekScreen() {
     try {
       await authApi.deleteEvent(token, confirm.id, { scope });
       await refresh();
+      void autoScheduleRemindersForSignedInUser({ minIntervalMs: 0 });
       toast('Deleted');
       closeConfirm();
       closeEdit();

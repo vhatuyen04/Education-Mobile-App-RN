@@ -258,6 +258,16 @@ export type AdminSmartGoalProofAttempt = {
   updatedAt?: string;
 };
 
+export type UserNotificationItem = {
+  id: string;
+  type: string;
+  title: string;
+  body: string;
+  data: any | null;
+  createdAt: string | null;
+  readAt: string | null;
+};
+
 export async function presignSmartGoalProof(
   accessToken: string,
   goalId: string,
@@ -318,6 +328,16 @@ export async function appendMyScoreHistoryPoint(
   return postJsonAuth('/auth/me/score-history/append', body, accessToken);
 }
 
+export async function listMyNotifications(
+  accessToken: string,
+  opts?: { sinceMs?: number }
+): Promise<{ notifications: UserNotificationItem[] }> {
+  const sp = new URLSearchParams();
+  if (opts?.sinceMs != null) sp.set('sinceMs', String(opts.sinceMs));
+  const qs = sp.toString();
+  return getJsonAuth(`/auth/me/notifications${qs ? `?${qs}` : ''}`, accessToken);
+}
+
 export async function mockReviewSmartGoalProof(
   accessToken: string,
   goalId: string,
@@ -350,6 +370,21 @@ export async function adminDecideProofAttempt(
   body: { decision: 'APPROVE' | 'REJECT'; feedback?: string | null }
 ): Promise<{ attempt: AdminSmartGoalProofAttempt } | { attempt: any }> {
   return postJsonAuth(`/auth/admin/proof-attempts/${encodeURIComponent(attemptId)}/decision`, body, accessToken);
+}
+
+export async function adminAiReviewProofAttempt(
+  accessToken: string,
+  attemptId: string
+): Promise<{ attempt: AdminSmartGoalProofAttempt } | { attempt: any }> {
+  return postJsonAuth(`/auth/admin/proof-attempts/${encodeURIComponent(attemptId)}/ai-review`, {}, accessToken);
+}
+
+export async function adminGetAutoAiReviewSetting(accessToken: string): Promise<{ enabled: boolean }> {
+  return getJsonAuth('/auth/admin/settings/auto-ai-review', accessToken);
+}
+
+export async function adminSetAutoAiReviewSetting(accessToken: string, body: { enabled: boolean }): Promise<{ enabled: boolean }> {
+  return postJsonAuth('/auth/admin/settings/auto-ai-review', body, accessToken);
 }
 
 export type LeaderboardField = 'Sport' | 'Academy' | 'Entertainment';

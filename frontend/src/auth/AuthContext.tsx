@@ -1,8 +1,8 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import * as SecureStore from 'expo-secure-store';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import * as authApi from '../api/auth';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
 type AuthState = {
   user: authApi.AuthUser | null;
@@ -25,6 +25,27 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 const KEY_ACCESS = 'auth_access_token';
 const KEY_REFRESH = 'auth_refresh_token';
 const KEY_USER = 'auth_user';
+const KEY_LAST_USER_ID = 'auth_last_user_id_v1';
+const KEY_INBOX_BASE = 'notif_inbox_v1';
+
+function safeParseInbox(raw: string | null): Array<{ id: string; receivedAt: number; title: string; body: string; data?: any | null }> {
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .map(x => ({
+        id: String(x?.id ?? ''),
+        receivedAt: Number(x?.receivedAt ?? 0),
+        title: String(x?.title ?? ''),
+        body: String(x?.body ?? ''),
+        data: x?.data && typeof x.data === 'object' ? x.data : null,
+      }))
+      .filter(x => x.id && Number.isFinite(x.receivedAt));
+  } catch {
+    return [];
+  }
+}
 
 async function setSecure(key: string, value: string | null) {
   if (value === null) {
@@ -32,12 +53,6 @@ async function setSecure(key: string, value: string | null) {
     return;
   }
   await SecureStore.setItemAsync(key, value);
-}
-
-async function clearInboxForUserIds(userIds: Array<string | null | undefined>) {
-  const base = 'notif_inbox_v1';
-  const keys = userIds.map(id => (id ? `${base}_${id}` : `${base}_anon`));
-  await Promise.all(keys.map(k => AsyncStorage.removeItem(k)));
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -75,13 +90,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   async function applyAuth(resp: authApi.AuthResponse) {
+    const userId = String(resp.user?.id ?? '');
     await Promise.all([
       setSecure(KEY_ACCESS, resp.accessToken),
       setSecure(KEY_REFRESH, resp.refreshToken),
       setSecure(KEY_USER, JSON.stringify(resp.user)),
+      AsyncStorage.setItem(KEY_LAST_USER_ID, userId),
     ]);
 
-    await clearInboxForUserIds([null, resp.user?.id]);
+    try {
+      if (userId) {
+        const anonKey = `${KEY_INBOX_BASE}_anon`;
+        const userKey = `${KEY_INBOX_BASE}_${userId}`;
+        const [anonRaw, userRaw] = await Promise.all([AsyncStorage.getItem(anonKey), AsyncStorage.getItem(userKey)]);
+        const anonItems = safeParseInbox(anonRaw);
+        if (anonItems.length) {
+          const userItems = safeParseInbox(userRaw);
+          const byId = new Map<string, any>();
+          for (const it of [...anonItems, ...userItems]) byId.set(String(it.id), it);
+          const merged = Array.from(byId.values()).sort((a, b) => Number(b.receivedAt) - Number(a.receivedAt)).slice(0, 200);
+          await Promise.all([AsyncStorage.setItem(userKey, JSON.stringify(merged)), AsyncStorage.removeItem(anonKey)]);
+        }
+      }
+    } catch {
+    }
 
     setState({ user: resp.user, accessToken: resp.accessToken, refreshToken: resp.refreshToken, isRestoring: false });
   }
@@ -127,12 +159,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   async function signOut() {
     const refresh = state.refreshToken;
-    const prevUserId = state.user?.id ?? null;
 
     await Promise.all([setSecure(KEY_ACCESS, null), setSecure(KEY_REFRESH, null), setSecure(KEY_USER, null)]);
     setState({ user: null, accessToken: null, refreshToken: null, isRestoring: false });
-
-    await clearInboxForUserIds([prevUserId, null]);
 
     if (refresh) {
       try {
