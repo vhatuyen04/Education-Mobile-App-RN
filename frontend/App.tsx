@@ -6,6 +6,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AppState, Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
+import * as SecureStore from 'expo-secure-store';
 
 import { RootStack } from './src/navigation/RootStack';
 import { AuthProvider } from './src/auth/AuthContext';
@@ -17,6 +18,7 @@ export default function App() {
   useEffect(() => {
     Notifications.setNotificationHandler({
       handleNotification: async () => ({
+        shouldShowAlert: true,
         shouldShowBanner: true,
         shouldShowList: true,
         shouldPlaySound: false,
@@ -25,28 +27,72 @@ export default function App() {
     });
 
     const subRecv = Notifications.addNotificationReceivedListener(n => {
-      const title = String(n.request.content?.title ?? 'Notification');
-      const body = String(n.request.content?.body ?? '');
+      const reqId = String((n as any)?.request?.identifier ?? '');
+      const titleRaw = String(n.request.content?.title ?? '').trim();
+      const bodyRaw = String(n.request.content?.body ?? '').trim();
       const data = (n.request.content as any)?.data ?? null;
-      void appendInbox({
-        receivedAt: Date.now(),
-        title,
-        body,
-        data,
-      });
+      void (async () => {
+        if (!titleRaw && !bodyRaw) return;
+        if (titleRaw === 'Notification' && !bodyRaw) return;
+        const title = titleRaw || 'Reminder';
+        const body = bodyRaw;
+        try {
+          const rawUser = await SecureStore.getItemAsync('auth_user');
+          const user = rawUser ? JSON.parse(rawUser) : null;
+          const curUserId = String(user?.id ?? '').trim();
+          const ownerUserId = String((data as any)?.ownerUserId ?? '').trim();
+          if (ownerUserId && curUserId && ownerUserId !== curUserId) return;
+        } catch {
+        }
+        const scheduledForMs = Number((data as any)?.scheduledForMs ?? NaN);
+        const ts = Number.isFinite(scheduledForMs)
+          ? scheduledForMs
+          : (n as any)?.date instanceof Date
+            ? (n as any).date.getTime()
+            : Date.now();
+        await appendInbox({
+          id: reqId ? `expo_${reqId}` : undefined,
+          receivedAt: ts,
+          title,
+          body,
+          data,
+        });
+      })();
     });
 
     const subResp = Notifications.addNotificationResponseReceivedListener(r => {
       const content = r.notification.request.content;
-      const title = String(content?.title ?? 'Notification');
-      const body = String(content?.body ?? '');
+      const reqId = String((r as any)?.notification?.request?.identifier ?? '');
+      const titleRaw = String(content?.title ?? '').trim();
+      const bodyRaw = String(content?.body ?? '').trim();
       const data = (content as any)?.data ?? null;
-      void appendInbox({
-        receivedAt: Date.now(),
-        title,
-        body,
-        data,
-      });
+      void (async () => {
+        if (!titleRaw && !bodyRaw) return;
+        if (titleRaw === 'Notification' && !bodyRaw) return;
+        const title = titleRaw || 'Reminder';
+        const body = bodyRaw;
+        try {
+          const rawUser = await SecureStore.getItemAsync('auth_user');
+          const user = rawUser ? JSON.parse(rawUser) : null;
+          const curUserId = String(user?.id ?? '').trim();
+          const ownerUserId = String((data as any)?.ownerUserId ?? '').trim();
+          if (ownerUserId && curUserId && ownerUserId !== curUserId) return;
+        } catch {
+        }
+        const scheduledForMs = Number((data as any)?.scheduledForMs ?? NaN);
+        const ts = Number.isFinite(scheduledForMs)
+          ? scheduledForMs
+          : (r as any)?.notification?.date instanceof Date
+            ? (r as any).notification.date.getTime()
+            : Date.now();
+        await appendInbox({
+          id: reqId ? `expo_${reqId}` : undefined,
+          receivedAt: ts,
+          title,
+          body,
+          data,
+        });
+      })();
     });
 
     if (Platform.OS === 'android') {

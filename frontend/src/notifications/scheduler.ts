@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 import * as SecureStore from 'expo-secure-store';
+import { Platform } from 'react-native';
 
 import * as authApi from '../api/auth';
 
@@ -75,12 +76,50 @@ async function scheduleAt(key: string, when: Date, content: Notifications.Notifi
   await cancelAnyIfExists(key);
   const t = when.getTime();
   if (!Number.isFinite(t)) return;
-  if (t <= Date.now() + 1000) return;
+  const nowMs = Date.now();
+  const minTs = nowMs + 5_000;
+  const safeWhen = t < minTs ? new Date(minTs) : when;
+  const nextContent: Notifications.NotificationContentInput = {
+    ...(content as any),
+    ...(Platform.OS === 'android' ? { channelId: 'default' } : null),
+  } as any;
   const id = await Notifications.scheduleNotificationAsync({
-    content,
-    trigger: { type: 'date', date: when, channelId: 'default' } as any,
+    content: nextContent,
+    trigger: { type: 'date', date: safeWhen } as any,
   });
   await AsyncStorage.setItem(key, id);
+}
+
+async function scheduleManyAt(
+  key: string,
+  items: Array<{ when: Date; content: Notifications.NotificationContentInput }>
+) {
+  const nowMs = Date.now();
+  const minTs = nowMs + 5_000;
+  const valid = items
+    .filter(x => x.when instanceof Date && !Number.isNaN(x.when.getTime()))
+    .map(x => ({ ...x, when: x.when.getTime() < minTs ? new Date(minTs) : x.when }));
+
+  await cancelAnyIfExists(key);
+
+  if (!valid.length) {
+    await AsyncStorage.removeItem(key);
+    return;
+  }
+
+  const ids: string[] = [];
+  for (const it of valid) {
+    const nextContent: Notifications.NotificationContentInput = {
+      ...(it.content as any),
+      ...(Platform.OS === 'android' ? { channelId: 'default' } : null),
+    } as any;
+    const id = await Notifications.scheduleNotificationAsync({
+      content: nextContent,
+      trigger: { type: 'date', date: it.when } as any,
+    });
+    ids.push(id);
+  }
+  await AsyncStorage.setItem(key, JSON.stringify(ids));
 }
 
 function nextOccurrenceFromRepeat(params: { repeat?: string | null; repeatDay?: number | null; repeatMonth?: number | null }): Date | null {
@@ -150,6 +189,15 @@ export async function autoScheduleRemindersFromDashboard(dash: authApi.Dashboard
     const enabled = await AsyncStorage.getItem(KEY_ENABLED);
     if (enabled !== '1') return;
 
+    let ownerUserId = '';
+    try {
+      const rawUser = await SecureStore.getItemAsync('auth_user');
+      const user = rawUser ? JSON.parse(rawUser) : null;
+      ownerUserId = String(user?.id ?? '').trim();
+    } catch {
+      ownerUserId = '';
+    }
+
     const [eventBefore, goalBefore, stepBefore] = await Promise.all([
       readBefore(KEY_EVENT_BEFORE, DEFAULT_EVENT_BEFORE),
       readBefore(KEY_GOAL_BEFORE, DEFAULT_GOAL_BEFORE),
@@ -158,13 +206,52 @@ export async function autoScheduleRemindersFromDashboard(dash: authApi.Dashboard
 
     if (!dash) return;
 
-    if (dash.nextEvent?.startAt) {
-      const start = new Date(dash.nextEvent.startAt);
-      const when = new Date(start.getTime() - compoundToMs(eventBefore));
-      await scheduleAt(KEY_EVENT_ID, when, {
-        title: 'Upcoming event',
-        body: `${beforeToAnnouncement(eventBefore)}: ${dash.nextEvent.title}`,
-      });
+    const allEventCandidates: Array<{ id: string; title: string; startAt: string }> = [];
+    for (const e of (dash.todayEvents ?? []) as any[]) {
+      if (!e) continue;
+      const id = String((e as any).id ?? '');
+      const title = String((e as any).title ?? '');
+      const startAt = String((e as any).startAt ?? '');
+      if (id && title && startAt) allEventCandidates.push({ id, title, startAt });
+    }
+    if ((dash as any)?.nextEvent) {
+      const ne: any = (dash as any).nextEvent;
+      const id = String(ne?.id ?? '');
+      const title = String(ne?.title ?? '');
+      const startAt = String(ne?.startAt ?? '');
+      if (id && title && startAt) allEventCandidates.push({ id, title, startAt });
+    }
+
+    const seen = new Set<string>();
+    const upcomingEvents = allEventCandidates
+      .filter(e => {
+        if (seen.has(e.id)) return false;
+        seen.add(e.id);
+        return true;
+      })
+      .map(e => ({ id: e.id, title: e.title, start: new Date(String(e.startAt)) }))
+      .filter(e => e.id && e.title && e.start instanceof Date && !Number.isNaN(e.start.getTime()))
+      .filter(e => e.start.getTime() > Date.now())
+      .sort((a, b) => a.start.getTime() - b.start.getTime())
+      .slice(0, 25);
+
+    if (upcomingEvents.length) {
+      const ann = beforeToAnnouncement(eventBefore);
+      const ms = compoundToMs(eventBefore);
+      await scheduleManyAt(
+        KEY_EVENT_ID,
+        upcomingEvents.map(ev => {
+          const when = new Date(ev.start.getTime() - ms);
+          return {
+            when,
+            content: {
+              title: 'Upcoming event',
+              body: `${ann}: ${ev.title}`,
+              data: { ownerUserId, kind: 'event', eventId: ev.id, scheduledForMs: when.getTime() },
+            },
+          };
+        })
+      );
     } else {
       await cancelAnyIfExists(KEY_EVENT_ID);
     }
@@ -176,6 +263,7 @@ export async function autoScheduleRemindersFromDashboard(dash: authApi.Dashboard
         await scheduleAt(KEY_GOAL_DUE_ID, when, {
           title: 'Goal reminder',
           body: `${beforeToAnnouncement(goalBefore)}: ${dash.nextGoal.title}`,
+          data: { ownerUserId, kind: 'goal', goalId: dash.nextGoal.id, scheduledForMs: when.getTime() },
         });
       } else {
         await cancelAnyIfExists(KEY_GOAL_DUE_ID);
@@ -203,6 +291,7 @@ export async function autoScheduleRemindersFromDashboard(dash: authApi.Dashboard
       await scheduleAt(KEY_STEP_DUE_ID, when, {
         title: 'Deadline soon',
         body: `${beforeToAnnouncement(stepBefore)}: ${String((nextStep as any).text ?? '')}`,
+        data: { ownerUserId, kind: 'step', stepId: (nextStep as any).id, goalId: (nextStep as any).goalId, scheduledForMs: when.getTime() },
       });
     } else {
       await cancelAnyIfExists(KEY_STEP_DUE_ID);

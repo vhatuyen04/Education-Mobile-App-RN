@@ -246,21 +246,22 @@ async function cancelAnyIfExists(key: string) {
 
 async function scheduleAt(key: string, when: Date, content: { title: string; body: string }) {
   if (!(when instanceof Date) || Number.isNaN(when.getTime())) return;
-  if (when.getTime() <= Date.now() + 15_000) return; // ignore too-soon / past
+  const minTs = Date.now() + 15_000;
+  const safeWhen = when.getTime() < minTs ? new Date(minTs) : when;
 
   await cancelIfExists(key);
   const id = await Notifications.scheduleNotificationAsync({
-    content,
-    trigger: { type: 'date', date: when, channelId: 'default' } as any,
+    content: { ...(content as any), ...(Platform.OS === 'android' ? { channelId: 'default' } : null) } as any,
+    trigger: { type: 'date', date: safeWhen } as any,
   });
   await AsyncStorage.setItem(key, id);
 }
 
-async function scheduleManyAt(key: string, items: Array<{ when: Date; content: { title: string; body: string } }>) {
-  const now = Date.now();
+async function scheduleManyAt(key: string, items: Array<{ when: Date; content: { title: string; body: string; data?: any } }>) {
+  const minTs = Date.now() + 15_000;
   const valid = items
     .filter(x => x.when instanceof Date && !Number.isNaN(x.when.getTime()))
-    .filter(x => x.when.getTime() > now + 15_000);
+    .map(x => ({ ...x, when: x.when.getTime() < minTs ? new Date(minTs) : x.when }));
 
   await cancelAnyIfExists(key);
 
@@ -272,8 +273,8 @@ async function scheduleManyAt(key: string, items: Array<{ when: Date; content: {
   const ids: string[] = [];
   for (const it of valid) {
     const id = await Notifications.scheduleNotificationAsync({
-      content: it.content,
-      trigger: { type: 'date', date: it.when, channelId: 'default' } as any,
+      content: { ...(it.content as any), ...(Platform.OS === 'android' ? { channelId: 'default' } : null) } as any,
+      trigger: { type: 'date', date: it.when } as any,
     });
     ids.push(id);
   }
@@ -284,11 +285,26 @@ async function scheduleManyAt(key: string, items: Array<{ when: Date; content: {
 function getTriggerFireTimeMs(trigger: any, now: Date): number | null {
   if (!trigger) return null;
 
+  if (trigger instanceof Date) {
+    const t = trigger.getTime();
+    return Number.isFinite(t) ? t : null;
+  }
+  if (typeof trigger === 'number') {
+    return Number.isFinite(trigger) ? trigger : null;
+  }
+
   // Date trigger: { type: 'date', date: number|string|Date }
   if (trigger.date !== undefined && trigger.date !== null) {
     const raw = trigger.date;
     const d = raw instanceof Date ? raw : new Date(typeof raw === 'number' ? raw : String(raw));
     return !Number.isNaN(d.getTime()) ? d.getTime() : null;
+  }
+
+  for (const k of ['timestamp', 'value', 'time'] as const) {
+    const raw = (trigger as any)?.[k];
+    if (raw === undefined || raw === null) continue;
+    const d = raw instanceof Date ? raw : new Date(typeof raw === 'number' ? raw : String(raw));
+    if (!Number.isNaN(d.getTime())) return d.getTime();
   }
 
   // Calendar trigger: { type: 'calendar', hour, minute, repeats }
@@ -537,23 +553,40 @@ export function NotificationSettingsScreen() {
     const token = state.accessToken;
     if (!token) return;
 
+    const ownerUserId = String(state.user?.id ?? '').trim();
+
     const dash = await authApi.getDashboard(token);
 
-    // (1) Event reminder: 30 minutes before nextEvent.startAt
-    if (dash.nextEvent?.startAt) {
-      const ev = dash.nextEvent;
-      const start = new Date(dash.nextEvent.startAt);
-      const ms = compoundToMs(eventBefore);
-      const ann = beforeToAnnouncement(eventBefore);
-      await scheduleManyAt(KEY_EVENT_ID, [
-        {
-          when: new Date(start.getTime() - ms),
-          content: {
-            title: 'Upcoming event',
-            body: `${ann}: ${ev.title}`,
-          },
-        },
-      ]);
+    // (1) Event reminder: schedule all upcoming events today
+    const evMs = compoundToMs(eventBefore);
+    const evAnn = beforeToAnnouncement(eventBefore);
+    const upcomingEvents = (dash.todayEvents ?? [])
+      .filter(e => e && (e as any).startAt)
+      .map(e => ({
+        id: String((e as any).id ?? ''),
+        title: String((e as any).title ?? ''),
+        start: new Date(String((e as any).startAt)),
+      }))
+      .filter(e => e.id && e.title && e.start instanceof Date && !Number.isNaN(e.start.getTime()))
+      .filter(e => e.start.getTime() > Date.now())
+      .sort((a, b) => a.start.getTime() - b.start.getTime())
+      .slice(0, 25);
+
+    if (upcomingEvents.length) {
+      await scheduleManyAt(
+        KEY_EVENT_ID,
+        upcomingEvents.map(ev => {
+          const when = new Date(ev.start.getTime() - evMs);
+          return {
+            when,
+            content: {
+              title: 'Upcoming event',
+              body: `${evAnn}: ${ev.title}`,
+              data: { ownerUserId, kind: 'event', eventId: ev.id, scheduledForMs: when.getTime() },
+            },
+          };
+        })
+      );
     } else {
       await cancelAnyIfExists(KEY_EVENT_ID);
     }
@@ -688,6 +721,7 @@ export function NotificationSettingsScreen() {
           <View style={styles.rowBetween}>
             <View style={{ flex: 1 }}>
               <Text style={styles.cardTitle}>Enable reminders</Text>
+              <Text style={styles.muted12}>Schedules reminders for up to 25 upcoming events.</Text>
             </View>
             <Switch value={enabled} onValueChange={toggleEnabled} disabled={!canEnable || loading} />
           </View>
@@ -714,10 +748,35 @@ export function NotificationSettingsScreen() {
                 content: {
                   title: 'Test notification',
                   body: 'This is a test reminder from the app.',
+                  ...(Platform.OS === 'android' ? { channelId: 'default' } : null),
                 },
-                trigger: { type: 'timeInterval', seconds: 2, repeats: false, channelId: 'default' } as any,
+                trigger: { type: 'timeInterval', seconds: 2, repeats: false } as any,
               });
               toast('Test notification scheduled (2s)');
+            }}
+          />
+
+          <View style={{ height: 10 }} />
+
+          <Button
+            title="Debug: scheduled reminders"
+            full
+            onPress={async () => {
+              try {
+                const list = await Notifications.getAllScheduledNotificationsAsync();
+                const now = new Date();
+                const times = list
+                  .map((n: any) => getTriggerFireTimeMs(n?.trigger, now))
+                  .filter((t: any) => typeof t === 'number' && Number.isFinite(t)) as number[];
+                times.sort((a, b) => a - b);
+                const next = times.find(t => t >= now.getTime()) ?? null;
+                toast(
+                  `Scheduled: ${list.length} | dated: ${times.length}` +
+                    (next ? ` | next: ${new Date(next).toLocaleString()}` : '')
+                );
+              } catch {
+                toast('Failed to read scheduled notifications');
+              }
             }}
           />
 

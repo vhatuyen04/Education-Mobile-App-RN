@@ -1927,7 +1927,7 @@ authRouter.get('/events', async (req: Request, res: Response) => {
       seriesStartAt: true,
       seriesEndAt: true,
     },
-    take: 200,
+    take: 1000,
   });
 
   return res.json({ events });

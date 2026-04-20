@@ -57,12 +57,19 @@ export async function getInbox(): Promise<InboxItem[]> {
   const key = await getInboxKey();
   const raw = await AsyncStorage.getItem(key);
   const items = safeParse(raw);
-  const byId = new Map<string, InboxItem>();
+  const bySemantic = new Map<string, InboxItem>();
   for (const it of items) {
-    const prev = byId.get(it.id);
-    if (!prev || it.receivedAt > prev.receivedAt) byId.set(it.id, it);
+    const d: any = it.data ?? null;
+    const scheduledForMs = Number(d?.scheduledForMs ?? NaN);
+    const kind = String(d?.kind ?? '').trim();
+    const entityId = String(d?.eventId ?? d?.goalId ?? d?.stepId ?? '').trim();
+    const semanticKey = kind && entityId && Number.isFinite(scheduledForMs)
+      ? `k:${kind}|id:${entityId}|t:${Math.floor(scheduledForMs)}`
+      : `id:${it.id}`;
+    const prev = bySemantic.get(semanticKey);
+    if (!prev || it.receivedAt > prev.receivedAt) bySemantic.set(semanticKey, it);
   }
-  const unique = Array.from(byId.values());
+  const unique = Array.from(bySemantic.values());
   unique.sort((a, b) => b.receivedAt - a.receivedAt);
   return unique;
 }

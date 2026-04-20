@@ -50,11 +50,15 @@ export function HomeScreen() {
           const list = resp.notifications ?? [];
           for (const n of list) {
             const receivedAt = n.createdAt ? new Date(n.createdAt).getTime() : Date.now();
+            const titleRaw = String(n.title ?? '').trim();
+            const bodyRaw = String(n.body ?? '').trim();
+            if (!titleRaw && !bodyRaw) continue;
+            if (titleRaw === 'Notification' && !bodyRaw) continue;
             await appendInbox({
               id: `srv_${n.id}`,
               receivedAt,
-              title: String(n.title ?? 'Notification'),
-              body: String(n.body ?? ''),
+              title: titleRaw || 'Reminder',
+              body: bodyRaw,
               data: n.data ?? null,
             });
           }
@@ -68,15 +72,22 @@ export function HomeScreen() {
         const presented = await Notifications.getPresentedNotificationsAsync();
         for (const p of presented) {
           const id = String((p as any)?.request?.identifier ?? (p as any)?.identifier ?? '');
-          const title = String((p as any)?.request?.content?.title ?? (p as any)?.content?.title ?? 'Notification');
-          const body = String((p as any)?.request?.content?.body ?? (p as any)?.content?.body ?? '');
+          const titleRaw = String((p as any)?.request?.content?.title ?? (p as any)?.content?.title ?? '').trim();
+          const bodyRaw = String((p as any)?.request?.content?.body ?? (p as any)?.content?.body ?? '').trim();
+          const data = ((p as any)?.request?.content?.data ?? (p as any)?.content?.data ?? null) as any;
           if (!id) continue;
+          if (!titleRaw && !bodyRaw) continue;
+          if (titleRaw === 'Notification' && !bodyRaw) continue;
+
+          const scheduledForMs = Number((data as any)?.scheduledForMs ?? NaN);
+          const tsRaw = (p as any)?.date;
+          const receivedAt = Number.isFinite(scheduledForMs) ? scheduledForMs : tsRaw instanceof Date ? tsRaw.getTime() : Date.now();
           await appendInbox({
             id: `expo_${id}`,
-            receivedAt: Date.now(),
-            title,
-            body,
-            data: ((p as any)?.request?.content?.data ?? (p as any)?.content?.data ?? null) as any,
+            receivedAt,
+            title: titleRaw || 'Reminder',
+            body: bodyRaw,
+            data,
           });
         }
       } catch {
