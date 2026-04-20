@@ -162,6 +162,8 @@ export function GoalDetailScreen() {
   const [desc, setDesc] = useState('');
   const [dueAt, setDueAt] = useState<string | null>(null);
   const [requirement, setRequirement] = useState<string>('');
+  const [pointsAwarded, setPointsAwarded] = useState<number | null>(null);
+  const [xpAwarded, setXpAwarded] = useState<number | null>(null);
   const [steps, setSteps] = useState<UiStep[]>([]);
   const [saving, setSaving] = useState(false);
   const [completed, setCompleted] = useState(false);
@@ -226,6 +228,13 @@ export function GoalDetailScreen() {
       }
       setDueAt(resp.goal.dueAt ?? null);
       setRequirement(String((resp.goal as any).requirement ?? ''));
+      if (app) {
+        setPointsAwarded(typeof (resp.goal as any).pointsAwarded === 'number' ? (resp.goal as any).pointsAwarded : null);
+        setXpAwarded(typeof (resp.goal as any).xpAwarded === 'number' ? (resp.goal as any).xpAwarded : null);
+      } else {
+        setPointsAwarded(null);
+        setXpAwarded(null);
+      }
       setDeadlineDraft(resp.goal.dueAt ? toYmdLocal(new Date(resp.goal.dueAt)) : '');
       setCompleted(!!resp.goal.completed);
       const stepResp = await authApi.listGoalSteps(token, goalId);
@@ -499,6 +508,16 @@ export function GoalDetailScreen() {
             </Pressable>
             {!completed && !isSmartGoal ? <Text style={styles.meta}>Tap to edit (YYYY-MM-DD)</Text> : null}
           </View>
+
+          {isSmartGoal && (typeof pointsAwarded === 'number' || typeof xpAwarded === 'number') ? (
+            <View style={styles.field}>
+              <Text style={styles.label}>Rewards</Text>
+              <View style={styles.hSub}>
+                {typeof pointsAwarded === 'number' ? <Pill>Points: {pointsAwarded}</Pill> : null}
+                {typeof xpAwarded === 'number' ? <Pill>XP: {xpAwarded}</Pill> : null}
+              </View>
+            </View>
+          ) : null}
 
           <View style={styles.field}>
             <Text style={styles.label}>Status</Text>

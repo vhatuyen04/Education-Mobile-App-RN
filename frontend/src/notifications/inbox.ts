@@ -111,4 +111,19 @@ export async function removeInboxItemsByRecoId(recoId: string): Promise<void> {
   await AsyncStorage.setItem(key, JSON.stringify(next));
 }
 
+export async function pruneAiRecoInboxItems(validRecoIds: Set<string>): Promise<void> {
+  const key = await getInboxKey();
+  const prev = await getInbox();
+  const next = prev.filter(x => {
+    const d: any = x.data ?? null;
+    if (d?.type !== 'ai_goal_reco') return true;
+    const rid = String(d?.recoId ?? '').trim();
+    if (!rid) return false;
+    return validRecoIds.has(rid);
+  });
+  if (next.length !== prev.length) {
+    await AsyncStorage.setItem(key, JSON.stringify(next));
+  }
+}
+
 export type { InboxItem };

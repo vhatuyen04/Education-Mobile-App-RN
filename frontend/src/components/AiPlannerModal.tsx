@@ -454,6 +454,8 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
   const [goalField, setGoalField] = useState<'Sport' | 'Academy' | 'Entertainment'>('Academy');
   const [goalDeadline, setGoalDeadline] = useState('');
   const [goalRequirement, setGoalRequirement] = useState('');
+  const [goalPointsAwarded, setGoalPointsAwarded] = useState<number | null>(null);
+  const [goalXpAwarded, setGoalXpAwarded] = useState<number | null>(null);
   const [steps, setSteps] = useState<Array<Step & { schedule?: authApi.AiGoalStepSchedule }>>([]);
 
   const displaySteps = useMemo(() => sanitizePlannerSteps(steps), [steps]);
@@ -475,6 +477,8 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
     setGoalField('Academy');
     setGoalDeadline(deadline);
     setGoalRequirement('');
+    setGoalPointsAwarded(null);
+    setGoalXpAwarded(null);
     setSteps([]);
     setAiHelp(null);
     setDirty(false);
@@ -639,6 +643,8 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
       setGoalField(resp.suggestion.field);
       setGoalDeadline(resp.suggestion.deadline || resolvedDeadline);
       setGoalRequirement(resp.suggestion.requirement || '');
+      setGoalPointsAwarded(typeof (resp.suggestion as any).pointsAwarded === 'number' ? (resp.suggestion as any).pointsAwarded : null);
+      setGoalXpAwarded(typeof (resp.suggestion as any).xpAwarded === 'number' ? (resp.suggestion as any).xpAwarded : null);
       const effectiveDeadline = resp.suggestion.deadline || resolvedDeadline;
       const mapped = resp.suggestion.steps.map(s => ({
         id: makeId(),
@@ -694,6 +700,8 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
         requirement: goalRequirement.trim() ? goalRequirement.trim() : null,
         rankField: goalField,
         dueAt: dueIso,
+        pointsAwarded: goalPointsAwarded ?? undefined,
+        xpAwarded: goalXpAwarded ?? undefined,
       });
 
       const goalId = created.goal.id;
@@ -860,6 +868,8 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
                   <View style={{ flexDirection: 'row', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
                     <Pill>Field: {goalField}</Pill>
                     <Pill>Deadline: {goalDeadline || deadline || '—'}</Pill>
+                    {typeof goalPointsAwarded === 'number' ? <Pill>Points: {goalPointsAwarded}</Pill> : null}
+                    {typeof goalXpAwarded === 'number' ? <Pill>XP: {goalXpAwarded}</Pill> : null}
                   </View>
                 </Card>
 

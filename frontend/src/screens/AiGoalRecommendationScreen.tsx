@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 
 import { Screen } from '../components/Screen';
@@ -132,6 +132,77 @@ function parseDeadlineToISOEndOfDay(v: string): string | null {
   return dt.toISOString();
 }
 
+function parseYmdDate(v: string): Date | null {
+  const raw = String(v ?? '').trim();
+  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  if (Number.isNaN(d.getTime())) return null;
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function formatYmd(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${dd}`;
+}
+
+function addDays(d: Date, days: number): Date {
+  const x = new Date(d);
+  x.setDate(x.getDate() + days);
+  return x;
+}
+
+function normalizeOnceSchedulesInDraft(steps: UiStep[], deadlineYmd: string): UiStep[] {
+  const dl0 = parseYmdDate(deadlineYmd);
+  if (!dl0) return steps;
+
+  const today0 = new Date();
+  today0.setHours(0, 0, 0, 0);
+
+  const parsed = steps.map(s => {
+    const schedule = parseScheduleShortText(s.scheduleText);
+    return { ...s, _schedule: schedule } as any;
+  });
+
+  const invalidOnceIdx: number[] = [];
+  for (let i = 0; i < parsed.length; i += 1) {
+    const sch = parsed[i]._schedule as authApi.AiGoalStepSchedule;
+    if (sch?.type !== 'once') continue;
+    const due0 = parseYmdDate((sch as any).due);
+    if (!due0) {
+      invalidOnceIdx.push(i);
+      continue;
+    }
+    if (due0.getTime() < today0.getTime() || due0.getTime() > dl0.getTime()) {
+      invalidOnceIdx.push(i);
+    }
+  }
+
+  if (invalidOnceIdx.length === 0) return steps;
+
+  const start0 = today0.getTime() <= dl0.getTime() ? today0 : dl0;
+  const totalDays = Math.max(0, Math.round((dl0.getTime() - start0.getTime()) / 86400000));
+  const slotCount = invalidOnceIdx.length;
+
+  const picks: Date[] = [];
+  for (let j = 0; j < slotCount; j += 1) {
+    const offset = slotCount <= 1 ? Math.min(7, totalDays) : Math.round((j * totalDays) / (slotCount - 1));
+    const pick = addDays(start0, Math.max(0, Math.min(totalDays, offset)));
+    picks.push(pick);
+  }
+
+  const next = parsed.map((s: any) => ({ id: s.id, text: s.text, scheduleText: s.scheduleText } as UiStep));
+  for (let k = 0; k < invalidOnceIdx.length; k += 1) {
+    const idx = invalidOnceIdx[k];
+    const ymd = formatYmd(picks[k] ?? dl0);
+    next[idx] = { ...next[idx], scheduleText: `once:${ymd}` };
+  }
+  return next;
+}
+
 export function AiGoalRecommendationScreen() {
   const nav = useNavigation<any>();
   const route = useRoute<any>();
@@ -142,6 +213,7 @@ export function AiGoalRecommendationScreen() {
   const [loading, setLoading] = useState(false);
   const [rec, setRec] = useState<Awaited<ReturnType<typeof getRecommendation>>>(null);
 
+  const [descriptionDraft, setDescriptionDraft] = useState('');
   const [deadlineDraft, setDeadlineDraft] = useState('');
   const [stepsDraft, setStepsDraft] = useState<UiStep[]>([]);
 
@@ -157,14 +229,15 @@ export function AiGoalRecommendationScreen() {
 
   useEffect(() => {
     if (!rec) return;
+    setDescriptionDraft(String((rec.suggestion as any)?.description ?? rec.contextSummary ?? ''));
     setDeadlineDraft(String(rec.suggestion?.deadline ?? ''));
-    setStepsDraft(
-      (rec.suggestion?.steps ?? []).map(s => ({
-        id: makeId(),
-        text: String(s.text ?? ''),
-        scheduleText: scheduleToShortText(s.schedule),
-      }))
-    );
+    const baseSteps = (rec.suggestion?.steps ?? []).map(s => ({
+      id: makeId(),
+      text: String(s.text ?? ''),
+      scheduleText: scheduleToShortText(s.schedule),
+    }));
+    const dl = String(rec.suggestion?.deadline ?? '').trim();
+    setStepsDraft(dl ? normalizeOnceSchedulesInDraft(baseSteps, dl) : baseSteps);
   }, [rec?.id]);
 
   const steps = useMemo(() => rec?.suggestion?.steps ?? [], [rec]);
@@ -172,7 +245,10 @@ export function AiGoalRecommendationScreen() {
   async function saveEdits() {
     if (!rec) return;
 
-    const nextSteps: authApi.AiGoalStep[] = stepsDraft
+    const nextStepsDraft = deadlineDraft.trim() ? normalizeOnceSchedulesInDraft(stepsDraft, deadlineDraft.trim()) : stepsDraft;
+    setStepsDraft(nextStepsDraft);
+
+    const nextSteps: authApi.AiGoalStep[] = nextStepsDraft
       .map(s => ({
         text: s.text.trim(),
         schedule: parseScheduleShortText(s.scheduleText),
@@ -181,6 +257,7 @@ export function AiGoalRecommendationScreen() {
 
     const nextRec = {
       ...rec,
+      contextSummary: descriptionDraft,
       suggestion: {
         ...rec.suggestion,
         deadline: deadlineDraft.trim(),
@@ -207,7 +284,24 @@ export function AiGoalRecommendationScreen() {
       return;
     }
 
-    const dueIso = parseDeadlineToISOEndOfDay(String(rec.suggestion?.deadline ?? ''));
+    const normalized = deadlineDraft.trim() ? normalizeOnceSchedulesInDraft(stepsDraft, deadlineDraft.trim()) : stepsDraft;
+    setStepsDraft(normalized);
+
+    const nextRec = {
+      ...rec,
+      contextSummary: descriptionDraft,
+      suggestion: {
+        ...rec.suggestion,
+        deadline: deadlineDraft.trim(),
+        steps: normalized
+          .map(s => ({ text: s.text.trim(), schedule: parseScheduleShortText(s.scheduleText) as any }))
+          .filter(s => s.text),
+      },
+    };
+    await upsertRecommendation(nextRec);
+    setRec(nextRec);
+
+    const dueIso = parseDeadlineToISOEndOfDay(String(nextRec.suggestion?.deadline ?? ''));
     if (!dueIso) {
       toast('Missing/invalid deadline');
       return;
@@ -218,17 +312,22 @@ export function AiGoalRecommendationScreen() {
     try {
       const created = await authApi.createGoal(token, {
         title,
-        description: 'SmartGoal recommended goal',
+        description: descriptionDraft.trim() ? descriptionDraft.trim() : null,
         rankField: rec.suggestion.field,
         requirement: String((rec.suggestion as any).requirement ?? '').trim() || null,
         dueAt: dueIso,
+        difficultyScore: (rec.suggestion as any).difficultyScore,
+        difficultyConfidence: (rec.suggestion as any).difficultyConfidence,
+        difficultyReason: (rec.suggestion as any).difficultyReason,
+        pointsAwarded: (rec.suggestion as any).pointsAwarded,
+        xpAwarded: (rec.suggestion as any).xpAwarded,
       });
 
       const goalId = created.goal.id;
       await markAppGoal(goalId);
 
-      for (let i = 0; i < steps.length; i += 1) {
-        const s = steps[i];
+      for (let i = 0; i < (nextRec.suggestion.steps ?? []).length; i += 1) {
+        const s = (nextRec.suggestion.steps ?? [])[i];
         const text = String(s.text ?? '').trim();
         if (!text) continue;
 
@@ -280,7 +379,9 @@ export function AiGoalRecommendationScreen() {
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.headerRow}>
           <Text style={styles.title}>SmartGoal recommendation</Text>
-          <Button title="Back" small onPress={() => nav.goBack()} />
+          <Pressable onPress={() => nav.goBack()} hitSlop={10} style={styles.backBtn}>
+            <Text style={styles.backBtnText}>←</Text>
+          </Pressable>
         </View>
 
         <Card>
@@ -289,10 +390,27 @@ export function AiGoalRecommendationScreen() {
           <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
             <Pill>Field: {rec.suggestion.field}</Pill>
             <Pill>Deadline: {rec.suggestion.deadline}</Pill>
+            {typeof (rec.suggestion as any).pointsAwarded === 'number' ? <Pill>Points: {(rec.suggestion as any).pointsAwarded}</Pill> : null}
+            {typeof (rec.suggestion as any).xpAwarded === 'number' ? <Pill>XP: {(rec.suggestion as any).xpAwarded}</Pill> : null}
           </View>
 
           <View style={{ height: 12 }} />
-          <Text style={styles.label}>Edit deadline</Text>
+          <Text style={styles.label}>Description</Text>
+          <TextInput
+            value={descriptionDraft}
+            onChangeText={setDescriptionDraft}
+            placeholder="Description"
+            placeholderTextColor={colors.muted}
+            multiline
+            style={[styles.input, { minHeight: 88, textAlignVertical: 'top' } as any]}
+          />
+
+          <View style={{ height: 12 }} />
+          <Text style={styles.label}>Requirement</Text>
+          <Text style={styles.muted}>{String((rec.suggestion as any).requirement ?? '').trim() || '—'}</Text>
+
+          <View style={{ height: 12 }} />
+          <Text style={styles.label}>Deadline</Text>
           <TextInput value={deadlineDraft} onChangeText={setDeadlineDraft} placeholder="YYYY-MM-DD" placeholderTextColor={colors.muted} style={styles.input} />
         </Card>
 
@@ -319,9 +437,9 @@ export function AiGoalRecommendationScreen() {
                   style={styles.inputSmall}
                 />
               </View>
-              <View style={{ gap: 8 }}>
-                <Button title="Remove" small onPress={() => setStepsDraft(prev => prev.filter(p => p.id !== s.id))} />
-              </View>
+              <Pressable onPress={() => setStepsDraft(prev => prev.filter(p => p.id !== s.id))} hitSlop={10} style={styles.stepRemove}>
+                <Text style={styles.stepRemoveText}>🗑</Text>
+              </Pressable>
             </View>
           ))}
 
@@ -350,6 +468,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 10,
+  },
+  backBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: colors.surface2,
+  },
+  backBtnText: {
+    color: colors.text,
+    fontWeight: '900',
+    fontSize: 16,
   },
   title: {
     color: colors.text,
@@ -414,6 +545,19 @@ const styles = StyleSheet.create({
     gap: 10,
     marginTop: 10,
     alignItems: 'flex-start',
+  },
+  stepRemove: {
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    alignSelf: 'flex-start',
+    backgroundColor: colors.surface2,
+  },
+  stepRemoveText: {
+    color: colors.danger,
+    fontWeight: '900',
   },
   stepNum: {
     color: colors.muted,

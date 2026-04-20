@@ -139,9 +139,15 @@ export async function changeMyPassword(
 
 export type AiGoalSuggestion = {
   title: string;
+  description?: string;
   field: LeaderboardField;
   deadline: string;
   requirement: string;
+  difficultyScore: number;
+  difficultyConfidence: number;
+  difficultyReason: string;
+  pointsAwarded: number;
+  xpAwarded: number;
   steps: AiGoalStep[];
 };
 
@@ -185,6 +191,8 @@ export type GoalItem = {
   progressPct: number;
   dueAt: string | null;
   completed: boolean;
+  pointsAwarded?: number | null;
+  xpAwarded?: number | null;
   deletedAt?: string | null;
   failedAt?: string | null;
   failedReason?: 'EXPIRED' | 'GAVE_UP' | null;
@@ -223,6 +231,7 @@ export type TodayStepItem = {
 
 export type DashboardResponse = {
   score: number;
+  xp: number;
   tasksPlanned: number;
   nextGoal: DashboardGoal;
   nextEvent: DashboardEvent;
@@ -469,6 +478,11 @@ export async function createGoal(
     rankField?: LeaderboardField;
     progressPct?: number;
     dueAt?: string;
+    difficultyScore?: number;
+    difficultyConfidence?: number;
+    difficultyReason?: string;
+    pointsAwarded?: number;
+    xpAwarded?: number;
   }
 ): Promise<{ goal: GoalItem }> {
   return postJsonAuth<{ goal: GoalItem }>('/auth/goals', body, accessToken);

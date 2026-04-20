@@ -13,6 +13,7 @@ import { AuthProvider } from './src/auth/AuthContext';
 import { SettingsProvider } from './src/settings/SettingsContext';
 import { appendInbox } from './src/notifications/inbox';
 import { autoScheduleRemindersForSignedInUser } from './src/notifications/scheduler';
+import { getRecommendation } from './src/ai/recommendations';
 
 export default function App() {
   useEffect(() => {
@@ -34,6 +35,18 @@ export default function App() {
       void (async () => {
         if (!titleRaw && !bodyRaw) return;
         if (titleRaw === 'Notification' && !bodyRaw) return;
+        if ((data as any)?.type === 'ai_goal_reco') {
+          const rid = String((data as any)?.recoId ?? '').trim();
+          if (!rid || !(await getRecommendation(rid))) {
+            if (reqId) {
+              try {
+                await Notifications.dismissNotificationAsync(reqId);
+              } catch {
+              }
+            }
+            return;
+          }
+        }
         const title = titleRaw || 'Reminder';
         const body = bodyRaw;
         try {
@@ -69,6 +82,18 @@ export default function App() {
       void (async () => {
         if (!titleRaw && !bodyRaw) return;
         if (titleRaw === 'Notification' && !bodyRaw) return;
+        if ((data as any)?.type === 'ai_goal_reco') {
+          const rid = String((data as any)?.recoId ?? '').trim();
+          if (!rid || !(await getRecommendation(rid))) {
+            if (reqId) {
+              try {
+                await Notifications.dismissNotificationAsync(reqId);
+              } catch {
+              }
+            }
+            return;
+          }
+        }
         const title = titleRaw || 'Reminder';
         const body = bodyRaw;
         try {

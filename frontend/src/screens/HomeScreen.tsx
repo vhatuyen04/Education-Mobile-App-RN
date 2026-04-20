@@ -16,7 +16,7 @@ import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
 import type { RootStackParamList } from '../navigation/types';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { appendInbox, clearInbox, getInbox, removeInboxItem } from '../notifications/inbox';
+import { appendInbox, clearInbox, getInbox, pruneAiRecoInboxItems, removeInboxItem } from '../notifications/inbox';
 import * as Notifications from 'expo-notifications';
 import { listRecommendations, upsertRecommendation } from '../ai/recommendations';
 import { getLocalProgress, type LocalProgress } from '../motivation/progress';
@@ -37,6 +37,9 @@ export function HomeScreen() {
   const loadInbox = useCallback(async () => {
     setNotifLoading(true);
     try {
+      const recos = await listRecommendations();
+      const validRecoIds = new Set(recos.map(r => String(r.id)));
+
       const token = state.accessToken;
       if (token) {
         try {
@@ -79,6 +82,17 @@ export function HomeScreen() {
           if (!titleRaw && !bodyRaw) continue;
           if (titleRaw === 'Notification' && !bodyRaw) continue;
 
+          if (data?.type === 'ai_goal_reco') {
+            const rid = String(data?.recoId ?? '').trim();
+            if (!rid || !validRecoIds.has(rid)) {
+              try {
+                await Notifications.dismissNotificationAsync(id);
+              } catch {
+              }
+              continue;
+            }
+          }
+
           const scheduledForMs = Number((data as any)?.scheduledForMs ?? NaN);
           const tsRaw = (p as any)?.date;
           const receivedAt = Number.isFinite(scheduledForMs) ? scheduledForMs : tsRaw instanceof Date ? tsRaw.getTime() : Date.now();
@@ -93,6 +107,7 @@ export function HomeScreen() {
       } catch {
       }
 
+      await pruneAiRecoInboxItems(validRecoIds);
       const items = await getInbox();
       setNotifItems(items);
     } finally {
@@ -225,7 +240,7 @@ export function HomeScreen() {
         createdAt: Date.now(),
         status: 'pending',
         suggestion: ai.suggestion,
-        contextSummary,
+        contextSummary: String((ai.suggestion as any)?.description ?? '').trim() || contextSummary,
       });
 
       await Notifications.scheduleNotificationAsync({
@@ -580,6 +595,15 @@ export function HomeScreen() {
                       title="Delete"
                       small
                       onPress={async () => {
+                        if (String(n.id).startsWith('expo_')) {
+                          const expoId = String(n.id).slice('expo_'.length);
+                          if (expoId) {
+                            try {
+                              await Notifications.dismissNotificationAsync(expoId);
+                            } catch {
+                            }
+                          }
+                        }
                         await removeInboxItem(n.id);
                         setNotifItems(prev => prev.filter(x => x.id !== n.id));
                       }}
