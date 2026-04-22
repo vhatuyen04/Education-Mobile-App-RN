@@ -131,12 +131,8 @@ export function SmartGoalProofScreen() {
 
     setUploading(true);
     try {
-      console.log('[SmartGoalProof] submit:start', { goalId, videoUri, attemptId, status });
-
       if (attemptId && status === 'PENDING_UPLOAD' && !videoUri) {
-        console.log('[SmartGoalProof] submitAttemptOnly:start', { attemptId });
         const submitted = await authApi.submitSmartGoalProof(token, goalId, attemptId);
-        console.log('[SmartGoalProof] submitAttemptOnly:done', submitted);
         setStatus(submitted.attempt.status);
         setFeedback(submitted.attempt.aiFeedback ?? null);
         setPolling(true);
@@ -159,8 +155,6 @@ export function SmartGoalProofScreen() {
         fileExt,
       });
 
-      console.log('[SmartGoalProof] presign:ok', presign);
-
       setAttemptId(presign.attemptId);
       setStatus(presign.status);
       setProofUrl(presign.proofUrl);
@@ -169,14 +163,6 @@ export function SmartGoalProofScreen() {
         (FileSystem as any)?.FileSystemUploadType?.BINARY_CONTENT ??
         (FileSystem as any)?.FileSystemUploadType?.BINARY ??
         0;
-
-      try {
-        console.log('[SmartGoalProof] uploadType', uploadType, 'FileSystemUploadType', (FileSystem as any)?.FileSystemUploadType);
-      } catch {
-        // ignore
-      }
-
-      console.log('[SmartGoalProof] upload:start', { uploadUrl: presign.uploadUrl, contentType, fileExt });
       const up = await FileSystem.uploadAsync(presign.uploadUrl, localVideoUri, {
         httpMethod: 'PUT',
         headers: {
@@ -185,21 +171,16 @@ export function SmartGoalProofScreen() {
         uploadType,
       });
 
-      console.log('[SmartGoalProof] upload:done', { status: up.status, headers: (up as any).headers, bodyLen: String((up as any).body ?? '').length });
-
       if (up.status < 200 || up.status >= 300) {
         throw new Error(`Upload failed (${up.status})`);
       }
 
-      console.log('[SmartGoalProof] submitAttempt:start', { attemptId: presign.attemptId });
       const submitted = await authApi.submitSmartGoalProof(token, goalId, presign.attemptId);
-      console.log('[SmartGoalProof] submitAttempt:done', submitted);
       setStatus(submitted.attempt.status);
       setFeedback(submitted.attempt.aiFeedback ?? null);
       setPolling(true);
       toast('Submitted. Waiting for verification…');
     } catch (e: any) {
-      console.log('[SmartGoalProof] submit:error', e);
       const msg = String(e?.message ?? e ?? 'Failed to upload');
       toast(msg);
     } finally {
