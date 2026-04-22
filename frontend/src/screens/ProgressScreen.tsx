@@ -10,7 +10,6 @@ import { colors } from '../theme/colors';
 import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
-import { getLocalProgress } from '../motivation/progress';
 import { getFailedGoalsMap, type FailedReason } from '../motivation/failedGoals';
 import { Button } from '../components/Button';
 import { Badge } from '../components/Badge';
@@ -192,9 +191,8 @@ export function ProgressScreen() {
 
     setLoading(true);
     try {
-      const [goalsResp, lp, dash, fm, proofResp] = await Promise.all([
+      const [goalsResp, dash, fm, proofResp] = await Promise.all([
         authApi.listGoals(token, { includeDeleted: true }),
-        getLocalProgress(),
         authApi.getDashboard(token),
         getFailedGoalsMap(),
         authApi.listMySmartGoalProofAttempts(token),
@@ -202,8 +200,8 @@ export function ProgressScreen() {
       setGoals(goalsResp.goals ?? []);
       setFailedMap(fm);
       setProofs((proofResp as any)?.attempts ?? []);
-      setGoalStreakDays(lp.goalStreakDays ?? 0);
-      setLevel(lp.level ?? 1);
+      setGoalStreakDays(dash?.goalStreakDays ?? 0);
+      setLevel(dash?.level ?? 1);
 
       const nextScore = dash?.score ?? 0;
       setScore(nextScore);

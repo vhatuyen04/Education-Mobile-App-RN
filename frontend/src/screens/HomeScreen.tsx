@@ -19,7 +19,6 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { appendInbox, clearInbox, getInbox, pruneAiRecoInboxItems, removeInboxItem } from '../notifications/inbox';
 import * as Notifications from 'expo-notifications';
 import { listRecommendations, upsertRecommendation } from '../ai/recommendations';
-import { getLocalProgress, type LocalProgress } from '../motivation/progress';
 import { getFailedGoalsMap, type FailedReason } from '../motivation/failedGoals';
 import { autoScheduleRemindersFromDashboard } from '../notifications/scheduler';
 
@@ -117,7 +116,6 @@ export function HomeScreen() {
 
   const [dash, setDash] = useState<authApi.DashboardResponse | null>(null);
   const [loading, setLoading] = useState(false);
-  const [localProgress, setLocalProgress] = useState<LocalProgress | null>(null);
   const [failedMap, setFailedMap] = useState<Record<string, FailedReason>>({});
 
   const today = useMemo(() => {
@@ -136,23 +134,6 @@ export function HomeScreen() {
       setFailedMap(fm);
 
       void autoScheduleRemindersFromDashboard(resp);
-
-      try {
-        const rawSteps = resp?.todaySteps ?? [];
-        const filteredOut = rawSteps.filter((s: any) => fm[String(s.goalId)] === 'gave_up').length;
-        console.log('[HomeScreen] dashboard counts', {
-          tasksPlanned: resp?.tasksPlanned,
-          todayEvents: (resp?.todayEvents ?? []).length,
-          todayGoals: (resp?.todayGoals ?? []).length,
-          todaySteps: rawSteps.length,
-          filteredOutSteps_gave_up: filteredOut,
-        });
-      } catch {
-        // ignore
-      }
-
-      const lp = await getLocalProgress();
-      setLocalProgress(lp);
     } catch (e: any) {
       toast(String(e?.message ?? 'Failed to load'));
     } finally {
@@ -292,8 +273,8 @@ export function HomeScreen() {
     return g;
   }, [dash?.nextGoal]);
   const nextEvent = dash?.nextEvent ?? null;
-  const level = localProgress?.level ?? 1;
-  const goalStreakDays = localProgress?.goalStreakDays ?? 0;
+  const level = dash?.level ?? 1;
+  const goalStreakDays = dash?.goalStreakDays ?? 0;
   const todayEvents = dash?.todayEvents ?? [];
   const todayGoals = useMemo(() => {
     return (dash?.todayGoals ?? []).filter(g => {

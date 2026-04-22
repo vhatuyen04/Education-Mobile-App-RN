@@ -13,10 +13,8 @@ import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
 import type { RootStackParamList } from '../navigation/types';
-import { applyGoalCompletedBonus } from '../motivation/progress';
-import { messageForCustomGoalCompleted, messageForProgressEvent } from '../motivation/messages';
+import { messageForCustomGoalCompleted } from '../motivation/messages';
 import { isAppGoal, markAppGoal, unmarkAppGoal } from '../motivation/appGoals';
-import { getLocalProgress, setLocalProgress } from '../motivation/progress';
 import { appendScorePoint } from '../motivation/scoreHistory';
 import { appendInbox } from '../notifications/inbox';
 import { getFailedGoalsMap, markFailedGoal, type FailedReason, unmarkFailedGoal } from '../motivation/failedGoals';
@@ -115,8 +113,11 @@ export function GoalsScreen() {
           const already = await isAppGoal(g.id);
           if (already) return g.id;
 
-          const desc = String(g.description ?? '').toLowerCase();
-          if (desc.includes('ai recommended goal') || desc.includes('smartgoal')) {
+          const looksSmart =
+            (g as any).requirementSource === 'AI' ||
+            typeof (g as any).pointsAwarded === 'number' ||
+            typeof (g as any).xpAwarded === 'number';
+          if (looksSmart) {
             await markAppGoal(g.id);
             return g.id;
           }
@@ -132,15 +133,6 @@ export function GoalsScreen() {
       setLoading(false);
     }
   }, [state.accessToken]);
-
-  async function applySmartGoalXpLoss(goalId: string, xpLoss: number) {
-    if (xpLoss <= 0) return;
-    const app = await isAppGoal(goalId);
-    if (!app) return;
-    const p = await getLocalProgress();
-    const nextXp = Math.max(0, Number(p.xp ?? 0) - xpLoss);
-    await setLocalProgress({ ...p, xp: nextXp });
-  }
 
   async function requestComplete(g: Goal) {
     try {
@@ -240,7 +232,6 @@ export function GoalsScreen() {
       if (confirm.action === 'quit') {
         await authApi.failGoal(token, confirm.goal.id, { reason: 'GAVE_UP' });
         await markFailedGoal(confirm.goal.id, 'gave_up');
-        await applySmartGoalXpLoss(confirm.goal.id, Number(confirm.xpLoss ?? 0));
         setFailedMap(prev => ({ ...prev, [confirm.goal!.id]: 'gave_up' }));
         toast('Moved to Failed');
         closeConfirm();
@@ -253,8 +244,6 @@ export function GoalsScreen() {
       await unmarkFailedGoal(confirm.goal.id);
       if (app) {
         await unmarkAppGoal(confirm.goal.id);
-        const p = await getLocalProgress();
-        await setLocalProgress({ ...p, goalStreakDays: 0, lastGoalCompletedYmd: null });
       }
       await refresh();
       toast('Deleted');

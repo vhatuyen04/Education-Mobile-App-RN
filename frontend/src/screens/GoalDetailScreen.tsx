@@ -14,8 +14,7 @@ import { Button } from '../components/Button';
 import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
-import { applyGoalCompletedBonus } from '../motivation/progress';
-import { messageForCustomGoalCompleted, messageForProgressEvent } from '../motivation/messages';
+import { messageForCustomGoalCompleted } from '../motivation/messages';
 import { isAppGoal, unmarkAppGoal } from '../motivation/appGoals';
 import { getFailedReason, type FailedReason } from '../motivation/failedGoals';
 import { appendScorePoint } from '../motivation/scoreHistory';
@@ -412,7 +411,7 @@ export function GoalDetailScreen() {
           return;
         }
 
-        await authApi.updateGoal(token, effectiveGoalId, { completed: true });
+        const updated = await authApi.updateGoal(token, effectiveGoalId, { completed: true });
 
         try {
           const dash = await authApi.getDashboard(token);
@@ -421,9 +420,9 @@ export function GoalDetailScreen() {
           // ignore
         }
 
-        const localEv = await applyGoalCompletedBonus();
-        const msg = messageForProgressEvent(localEv);
-        toast(`${msg} +1 point.`);
+        const points = Number((updated as any)?.rewardsApplied?.points ?? 0);
+        const xp = Number((updated as any)?.rewardsApplied?.xp ?? 0);
+        toast(`SmartGoal: Goal completed. +${xp} XP. +${points} point${points === 1 ? '' : 's'}.`);
       } else {
         toast('Saved');
       }

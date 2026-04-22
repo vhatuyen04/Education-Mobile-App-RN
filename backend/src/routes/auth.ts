@@ -63,25 +63,207 @@ async function completeGoalForUser(params: { userId: string; goalId: string }) {
   const { userId, goalId } = params;
   const existing = await prismaAny.goal.findFirst({
     where: { id: goalId, userId },
-    select: { id: true, completed: true, rankField: true, pointsAwarded: true, xpAwarded: true },
+    select: {
+      id: true,
+      completed: true,
+      rankField: true,
+      title: true,
+      description: true,
+      requirementSource: true,
+      difficultyScore: true,
+      pointsAwarded: true,
+      xpAwarded: true,
+    },
   });
   if (!existing) return { ok: false as const, error: 'Not found' };
-  if (existing.completed) return { ok: true as const };
+  if (existing.completed) return { ok: true as const, awardedPoints: 0, awardedXp: 0 };
 
   await prismaAny.goal.update({ where: { id: goalId }, data: { completed: true }, select: { id: true } });
 
-  const points = Math.max(1, Math.floor(Number(existing.pointsAwarded ?? 1)));
-  const xp = Math.max(0, Math.floor(Number(existing.xpAwarded ?? 0)));
+  const rewards = await computeSmartGoalRewardsForCompletion({
+    userId,
+    goal: {
+      id: existing.id,
+      title: existing.title,
+      description: existing.description,
+      rankField: existing.rankField,
+      requirementSource: existing.requirementSource,
+      difficultyScore: existing.difficultyScore,
+      pointsAwarded: existing.pointsAwarded,
+      xpAwarded: existing.xpAwarded,
+    },
+  });
+
+  const points = rewards.points;
+  const xp = rewards.xp;
   if (xp > 0) {
     await prismaAny.user.update({ where: { id: userId }, data: { xp: { increment: xp } }, select: { id: true } });
   }
-  if (existing.rankField) {
+  if (points > 0 && existing.rankField) {
     const scoreField = scoreFieldForRankField(existing.rankField);
     await prismaAny.user.update({ where: { id: userId }, data: { [scoreField]: { increment: points } }, select: { id: true } });
     await refreshLeaderboardTop(existing.rankField);
   }
 
-  return { ok: true as const };
+  await updateGoalStreakForUser(userId);
+
+  return { ok: true as const, awardedPoints: points, awardedXp: xp };
+}
+
+async function computeSmartGoalRewardsForCompletion(params: {
+  userId: string;
+  goal: {
+    id: string;
+    title: string;
+    description: string | null;
+    rankField: string | null;
+    requirementSource: 'USER' | 'AI' | null;
+    difficultyScore: number | null;
+    pointsAwarded: number | null;
+    xpAwarded: number | null;
+  };
+}): Promise<{ points: number; xp: number }> {
+  const { userId, goal } = params;
+
+  // Only SmartGoals can award points/xp.
+  // Primary signal is requirementSource='AI', but we also support legacy SmartGoals
+  // that were created with AI reward/scoring fields but without requirementSource set.
+  const looksLikeSmartGoal =
+    goal.requirementSource === 'AI' ||
+    goal.difficultyScore !== null ||
+    typeof goal.pointsAwarded === 'number' ||
+    typeof goal.xpAwarded === 'number';
+  if (!looksLikeSmartGoal) return { points: 0, xp: 0 };
+  if (!goal.rankField) return { points: 0, xp: 0 };
+
+  const basePoints = Math.max(1, Math.floor(Number(goal.pointsAwarded ?? 1)));
+  const baseXp = Math.max(0, Math.floor(Number(goal.xpAwarded ?? 0)));
+
+  const recent = await prismaAny.goal.findMany({
+    where: {
+      userId,
+      completed: true,
+      requirementSource: 'AI',
+      rankField: goal.rankField,
+      id: { not: goal.id },
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 20,
+    select: { id: true, title: true, description: true, difficultyScore: true },
+  });
+
+  if (!recent.length) return { points: basePoints, xp: baseXp };
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (apiKey) {
+    const decision = await runOpenAiSmartGoalFarmCheck({
+      apiKey,
+      newGoal: {
+        title: goal.title,
+        description: goal.description,
+        difficultyScore: goal.difficultyScore,
+        rankField: goal.rankField,
+      },
+      completedGoals: recent.map((g: any) => ({ title: g.title, description: g.description, difficultyScore: g.difficultyScore })),
+    }).catch(() => null);
+
+    if (decision?.farm === true) {
+      return { points: 0, xp: 0 };
+    }
+    return { points: basePoints, xp: baseXp };
+  }
+
+  // Fallback heuristic when OpenAI isn't configured.
+  const norm = (s: string) =>
+    String(s || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
+  const tokenSet = (s: string) => new Set(norm(s).split(' ').filter(Boolean));
+  const overlap = (x: Set<string>, y: Set<string>) => {
+    let inter = 0;
+    for (const t of x) if (y.has(t)) inter++;
+    const union = x.size + y.size - inter;
+    return union ? inter / union : 0;
+  };
+
+  const curTokens = tokenSet(goal.title);
+  const curDiff = typeof goal.difficultyScore === 'number' ? Number(goal.difficultyScore) : null;
+
+  for (const g of recent) {
+    const sim = overlap(curTokens, tokenSet(String(g.title ?? '')));
+    if (sim < 0.55) continue;
+
+    const prevDiff = typeof g.difficultyScore === 'number' ? Number(g.difficultyScore) : null;
+    // If we have difficulty scores, enforce "same or easier => 0".
+    if (curDiff !== null && prevDiff !== null && curDiff <= prevDiff) return { points: 0, xp: 0 };
+
+    // If missing scores, only block exact-match titles to avoid false positives.
+    if (curDiff === null || prevDiff === null) {
+      if (norm(goal.title) === norm(String(g.title ?? ''))) return { points: 0, xp: 0 };
+    }
+  }
+
+  return { points: basePoints, xp: baseXp };
+}
+
+async function runOpenAiSmartGoalFarmCheck(params: {
+  apiKey: string;
+  newGoal: { title: string; description: string | null; difficultyScore: number | null; rankField: string | null };
+  completedGoals: { title: string; description: string | null; difficultyScore: number | null }[];
+}): Promise<{ farm: boolean; reason: string | null }> {
+  const { apiKey, newGoal, completedGoals } = params;
+
+  const system =
+    'You are an anti-cheat assistant for a goal-tracking app. Determine if the NEW goal is the same topic as any completed goal AND is the same difficulty or easier. If yes, return farm=true. If the new goal is clearly harder (higher level), return farm=false.';
+
+  const userText =
+    `NEW goal:\n` +
+    `- title: ${newGoal.title}\n` +
+    `- description: ${newGoal.description ?? ''}\n` +
+    `- field: ${newGoal.rankField ?? ''}\n` +
+    `- difficultyScore (1-100): ${newGoal.difficultyScore ?? ''}\n\n` +
+    `COMPLETED SmartGoals in same field (most recent first):\n` +
+    completedGoals
+      .slice(0, 20)
+      .map((g, i) => `#${i + 1} title=${g.title}; difficultyScore=${g.difficultyScore ?? ''}; description=${g.description ?? ''}`)
+      .join('\n') +
+    `\n\nReturn ONLY valid JSON: {"farm":true|false,"reason":"short"}. No extra text.`;
+
+  const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: process.env.OPENAI_MODEL ?? 'gpt-4o-mini',
+      temperature: 0.0,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: userText },
+      ],
+    }),
+  });
+
+  const data: any = await resp.json().catch(() => null);
+  if (!resp.ok) {
+    const msg = data?.error?.message ? String(data.error.message) : 'AI request failed';
+    throw new Error(msg);
+  }
+
+  const content = String(data?.choices?.[0]?.message?.content ?? '').trim();
+  const jsonText = extractFirstJsonObject(content);
+  let parsed: any = null;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch {
+    throw new Error('AI response was not valid JSON');
+  }
+
+  const farm = parsed?.farm === true;
+  const reason = typeof parsed?.reason === 'string' ? String(parsed.reason).trim() : null;
+  return { farm, reason: reason || null };
 }
 
 function startOfLocalDay(d: Date) {
@@ -269,6 +451,54 @@ function scoreFieldForRankField(field: 'Sport' | 'Academy' | 'Entertainment') {
   if (field === 'Sport') return 'sportScore';
   if (field === 'Entertainment') return 'entertainmentScore';
   return 'academyScore';
+}
+
+function computeLevelFromXp(xp: number) {
+  const lvl = Math.floor(Number(xp ?? 0) / 100) + 1;
+  return Math.max(1, lvl);
+}
+
+function ymdUtc(d: Date) {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function addDaysUtc(ymdStr: string, deltaDays: number) {
+  const [yy, mm, dd] = ymdStr.split('-').map(v => Number(v));
+  const dt = new Date(Date.UTC(yy, (mm ?? 1) - 1, dd ?? 1));
+  dt.setUTCDate(dt.getUTCDate() + deltaDays);
+  return ymdUtc(dt);
+}
+
+async function updateGoalStreakForUser(userId: string, now = new Date()) {
+  const user = await prismaAny.user.findUnique({
+    where: { id: userId },
+    select: { id: true, goalStreakDays: true, lastGoalCompletedAt: true },
+  });
+  if (!user) return;
+
+  const today = ymdUtc(now);
+  const last = user.lastGoalCompletedAt ? ymdUtc(new Date(user.lastGoalCompletedAt)) : null;
+  const prevStreak = Number(user.goalStreakDays ?? 0);
+
+  let nextStreak = prevStreak;
+  if (!last) {
+    nextStreak = 1;
+  } else if (last === today) {
+    nextStreak = prevStreak;
+  } else if (addDaysUtc(last, 1) === today) {
+    nextStreak = Math.max(0, prevStreak) + 1;
+  } else {
+    nextStreak = 1;
+  }
+
+  await prismaAny.user.update({
+    where: { id: userId },
+    data: { goalStreakDays: nextStreak, lastGoalCompletedAt: now },
+    select: { id: true },
+  });
 }
 
 function inferRankFieldFromDescription(desc: string | null | undefined): 'Sport' | 'Academy' | 'Entertainment' | null {
@@ -506,6 +736,8 @@ authRouter.get('/admin/proof-attempts', async (req: Request, res: Response) => {
       proofKey: true,
       proofUrl: true,
       aiFeedback: true,
+      awardedPoints: true,
+      awardedXp: true,
       createdAt: true,
       updatedAt: true,
       goal: { select: { title: true } },
@@ -525,6 +757,8 @@ authRouter.get('/admin/proof-attempts', async (req: Request, res: Response) => {
     proofKey: a.proofKey,
     proofUrl: a.proofUrl,
     aiFeedback: a.aiFeedback,
+    awardedPoints: a.awardedPoints,
+    awardedXp: a.awardedXp,
     createdAt: a.createdAt,
     updatedAt: a.updatedAt,
   }));
@@ -628,6 +862,8 @@ authRouter.get('/me/proof-attempts', async (req: Request, res: Response) => {
       requirementText: true,
       proofUrl: true,
       aiFeedback: true,
+      awardedPoints: true,
+      awardedXp: true,
       createdAt: true,
       updatedAt: true,
     },
@@ -689,11 +925,27 @@ authRouter.post('/admin/proof-attempts/:attemptId/decision', async (req: Request
   if (decision === 'APPROVE') {
     const done = await completeGoalForUser({ userId: attempt.userId, goalId: attempt.goalId });
     if (!done.ok) return res.status(404).json({ error: done.error });
+
+    await prismaAny.smartGoalProofAttempt.update({
+      where: { id: attemptId },
+      data: { awardedPoints: Number(done.awardedPoints ?? 0), awardedXp: Number(done.awardedXp ?? 0) },
+      select: { id: true },
+    });
   }
 
   const updated = await prismaAny.smartGoalProofAttempt.findFirst({
     where: { id: attemptId },
-    select: { id: true, userId: true, goalId: true, status: true, aiFeedback: true, createdAt: true, updatedAt: true },
+    select: {
+      id: true,
+      userId: true,
+      goalId: true,
+      status: true,
+      aiFeedback: true,
+      awardedPoints: true,
+      awardedXp: true,
+      createdAt: true,
+      updatedAt: true,
+    },
   });
   return res.json({ attempt: updated });
 });
@@ -785,9 +1037,9 @@ async function extractVideoFrames(params: { videoPath: string; framesDir: string
 
   await new Promise<void>((resolve, reject) => {
     ffmpeg(videoPath)
-      .outputOptions(['-vf', 'fps=1/2,scale=640:-1'])
+      .outputOptions(['-vf', 'fps=6,scale=768:-1'])
       .output(path.join(framesDir, 'frame-%03d.png'))
-      .frames(6)
+      .frames(60)
       .on('end', () => resolve())
       .on('error', (err: any) => reject(err))
       .run();
@@ -797,7 +1049,7 @@ async function extractVideoFrames(params: { videoPath: string; framesDir: string
   return files
     .filter(f => f.toLowerCase().endsWith('.png'))
     .sort()
-    .slice(0, 6)
+    .slice(0, 60)
     .map(f => path.join(framesDir, f));
 }
 
@@ -809,6 +1061,22 @@ async function runOpenAiProofReview(params: {
 }): Promise<{ decision: 'APPROVE' | 'REJECT'; feedback: string | null }> {
   const { apiKey, requirementText, proofUrl, frameFiles } = params;
 
+  const requiredReps = (() => {
+    const t = String(requirementText ?? '').toLowerCase();
+    if (!t.trim()) return null;
+    const m = t.match(/\b(\d{1,4})\b[^\n]{0,40}\b(push\s*-?\s*up|pushup|sit\s*-?\s*up|situp|rep|reps)\b/);
+    if (m && m[1]) {
+      const n = Number(m[1]);
+      if (Number.isFinite(n) && n > 0) return Math.floor(n);
+    }
+    const anyNum = t.match(/\b(\d{1,4})\b/);
+    if (anyNum && anyNum[1]) {
+      const n = Number(anyNum[1]);
+      if (Number.isFinite(n) && n > 0) return Math.floor(n);
+    }
+    return null;
+  })();
+
   const images = await Promise.all(
     frameFiles.map(async f => {
       const buf = await fsp.readFile(f);
@@ -817,12 +1085,13 @@ async function runOpenAiProofReview(params: {
   );
 
   const system =
-    'You are a strict proof verifier for a goal-tracking app. You must decide APPROVE or REJECT based only on the visible evidence in the frames. If evidence is unclear, incomplete, or not readable, you MUST REJECT.';
+    'You are a proof verifier for a goal-tracking app. You must decide APPROVE or REJECT based only on the visible evidence in the frames. If evidence is unclear, incomplete, or not readable, you MUST REJECT. For repetition-based requirements (e.g., push-ups), you must (1) infer the required repetition count from the requirement text, (2) estimate how many reps are shown in the sequence of frames, and (3) APPROVE only if you are confident the estimated reps meet or exceed the required reps; otherwise REJECT.';
 
   const userText =
     `Requirement:\n${requirementText ?? '(none)'}\n\n` +
+    (requiredReps ? `Required reps (parsed): ${requiredReps}\n\n` : '') +
     `Proof video URL (may be unusable; rely on frames):\n${proofUrl ?? '(none)'}\n\n` +
-    'Return ONLY valid JSON with this shape: {"decision":"APPROVE"|"REJECT","feedback":"short reason"}. Do not include any extra text.';
+    'Return ONLY valid JSON with this shape: {"decision":"APPROVE"|"REJECT","feedback":"short reason"}. If you can, include the estimated reps and required reps in feedback. Do not include any extra text.';
 
   const resp = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -944,6 +1213,12 @@ async function runAiReviewForAttemptId(attemptId: string): Promise<{ ok: true; s
     if (decision.decision === 'APPROVE') {
       const done = await completeGoalForUser({ userId: attempt.userId, goalId: attempt.goalId });
       if (!done.ok) return { ok: false, error: done.error };
+
+      await prismaAny.smartGoalProofAttempt.update({
+        where: { id: attemptId },
+        data: { awardedPoints: Number(done.awardedPoints ?? 0), awardedXp: Number(done.awardedXp ?? 0) },
+        select: { id: true },
+      });
     }
 
     return { ok: true, status: nextStatus };
@@ -1154,12 +1429,56 @@ Return a short description (1-3 short sentences) explaining why this goal is a g
       const score = Math.max(1, Math.min(100, Math.floor(Number((out.data as any).suggestion.difficultyScore ?? 1))));
       const pointsAwarded = Math.max(1, Math.round(Math.pow(score, 1.2)));
       const xpAwarded = Math.max(0, pointsAwarded);
+
+      const suggestionRankField = String((out.data as any).suggestion.field ?? '').trim() as any;
+      let finalPoints = pointsAwarded;
+      let finalXp = xpAwarded;
+
+      try {
+        if (suggestionRankField === 'Sport' || suggestionRankField === 'Academy' || suggestionRankField === 'Entertainment') {
+          const recent = await prismaAny.goal.findMany({
+            where: {
+              userId,
+              completed: true,
+              rankField: suggestionRankField,
+            },
+            orderBy: { createdAt: 'desc' },
+            take: 20,
+            select: { title: true, description: true, difficultyScore: true },
+          });
+
+          if (recent.length > 0) {
+            const decision = await runOpenAiSmartGoalFarmCheck({
+              apiKey,
+              newGoal: {
+                title: String((out.data as any).suggestion.title ?? ''),
+                description: String((out.data as any).suggestion.description ?? ''),
+                difficultyScore: score,
+                rankField: suggestionRankField,
+              },
+              completedGoals: recent.map((g: any) => ({
+                title: String(g.title ?? ''),
+                description: g.description ?? null,
+                difficultyScore: typeof g.difficultyScore === 'number' ? Number(g.difficultyScore) : null,
+              })),
+            }).catch(() => null);
+
+            if (decision?.farm === true) {
+              finalPoints = 0;
+              finalXp = 0;
+            }
+          }
+        }
+      } catch {
+        // ignore; keep base rewards
+      }
+
       return res.json({
         ...out.data,
         suggestion: {
           ...(out.data as any).suggestion,
-          pointsAwarded,
-          xpAwarded,
+          pointsAwarded: finalPoints,
+          xpAwarded: finalXp,
         },
       });
     }
@@ -1257,7 +1576,17 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
 
   const user = await prismaAny.user.findUnique({
     where: { id: userId },
-    select: { id: true, email: true, name: true, sportScore: true, academyScore: true, entertainmentScore: true, xp: true },
+    select: {
+      id: true,
+      email: true,
+      name: true,
+      sportScore: true,
+      academyScore: true,
+      entertainmentScore: true,
+      xp: true,
+      goalStreakDays: true,
+      lastGoalCompletedAt: true,
+    },
   });
 
   if (!user) {
@@ -1446,6 +1775,9 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
   return res.json({
     score: Number(user.sportScore ?? 0) + Number(user.academyScore ?? 0) + Number(user.entertainmentScore ?? 0),
     xp: Number(user.xp ?? 0),
+    level: computeLevelFromXp(Number(user.xp ?? 0)),
+    goalStreakDays: Number(user.goalStreakDays ?? 0),
+    lastGoalCompletedAt: user.lastGoalCompletedAt ? new Date(user.lastGoalCompletedAt).toISOString() : null,
     tasksPlanned: tasksPlanned + todaySteps.length,
     nextGoal: computedNextGoal,
     nextEvent,
@@ -1649,7 +1981,17 @@ authRouter.get('/goals/:id/proof-attempts/latest', async (req: Request, res: Res
   const attempt = await prismaAny.smartGoalProofAttempt.findFirst({
     where: { userId, goalId },
     orderBy: [{ createdAt: 'desc' }],
-    select: { id: true, status: true, requirementText: true, proofUrl: true, aiFeedback: true, createdAt: true, updatedAt: true },
+    select: {
+      id: true,
+      status: true,
+      requirementText: true,
+      proofUrl: true,
+      aiFeedback: true,
+      awardedPoints: true,
+      awardedXp: true,
+      createdAt: true,
+      updatedAt: true,
+    },
   });
 
   return res.json({ attempt: attempt ?? null });
@@ -1671,7 +2013,17 @@ authRouter.get('/goals/:id/proof-attempts/:attemptId', async (req: Request, res:
 
   const attempt = await prismaAny.smartGoalProofAttempt.findFirst({
     where: { id: attemptId, userId, goalId },
-    select: { id: true, status: true, requirementText: true, proofUrl: true, aiFeedback: true, createdAt: true, updatedAt: true },
+    select: {
+      id: true,
+      status: true,
+      requirementText: true,
+      proofUrl: true,
+      aiFeedback: true,
+      awardedPoints: true,
+      awardedXp: true,
+      createdAt: true,
+      updatedAt: true,
+    },
   });
   if (!attempt) return res.status(404).json({ error: 'Not found' });
   return res.json({ attempt });
@@ -1970,7 +2322,14 @@ authRouter.post('/goals', async (req: Request, res: Response) => {
   }
 
   const d = String(parsed.data.description ?? '').toLowerCase();
-  const isSmart = d.includes('smartgoal') || d.includes('ai recommended goal');
+  const isSmart =
+    d.includes('smartgoal') ||
+    d.includes('ai recommended goal') ||
+    parsed.data.difficultyScore !== undefined ||
+    parsed.data.difficultyConfidence !== undefined ||
+    parsed.data.difficultyReason !== undefined ||
+    parsed.data.pointsAwarded !== undefined ||
+    parsed.data.xpAwarded !== undefined;
 
   const goal = await prismaAny.goal.create({
     data: {
@@ -2150,23 +2509,57 @@ authRouter.put('/goals/:id', async (req: Request, res: Response) => {
   }
 
   const willComplete = data.completed === true && existing.completed === false;
-  if (willComplete && existing.requirementSource === 'AI') {
-    const points = Math.max(1, Math.floor(Number(existing.pointsAwarded ?? 1)));
-    const xp = Math.max(0, Math.floor(Number(existing.xpAwarded ?? 0)));
-    if (xp > 0) {
-      await prismaAny.user.update({ where: { id: userId }, data: { xp: { increment: xp } }, select: { id: true } });
-    }
-    if (existing.rankField) {
-      const scoreField = scoreFieldForRankField(existing.rankField);
-      await prismaAny.user.update({
-        where: { id: userId },
-        data: {
-          [scoreField]: { increment: points },
+  let rewardsApplied: { points: number; xp: number } | null = null;
+  if (willComplete) {
+    const full = await prismaAny.goal.findFirst({
+      where: { id, userId },
+      select: {
+        id: true,
+        title: true,
+        description: true,
+        rankField: true,
+        requirementSource: true,
+        difficultyScore: true,
+        pointsAwarded: true,
+        xpAwarded: true,
+      },
+    });
+
+    if (full) {
+      const rewards = await computeSmartGoalRewardsForCompletion({
+        userId,
+        goal: {
+          id: full.id,
+          title: full.title,
+          description: full.description,
+          rankField: full.rankField,
+          requirementSource: full.requirementSource,
+          difficultyScore: full.difficultyScore,
+          pointsAwarded: full.pointsAwarded,
+          xpAwarded: full.xpAwarded,
         },
-        select: { id: true },
       });
-      await refreshLeaderboardTop(existing.rankField);
+
+      const points = rewards.points;
+      const xp = rewards.xp;
+      rewardsApplied = { points, xp };
+      if (xp > 0) {
+        await prismaAny.user.update({ where: { id: userId }, data: { xp: { increment: xp } }, select: { id: true } });
+      }
+      if (points > 0 && full.rankField) {
+        const scoreField = scoreFieldForRankField(full.rankField);
+        await prismaAny.user.update({
+          where: { id: userId },
+          data: {
+            [scoreField]: { increment: points },
+          },
+          select: { id: true },
+        });
+        await refreshLeaderboardTop(full.rankField);
+      }
     }
+
+    await updateGoalStreakForUser(userId);
   }
   const goal = await prismaAny.goal.update({
     where: { id },

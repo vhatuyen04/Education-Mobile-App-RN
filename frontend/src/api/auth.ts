@@ -232,6 +232,9 @@ export type TodayStepItem = {
 export type DashboardResponse = {
   score: number;
   xp: number;
+  level: number;
+  goalStreakDays: number;
+  lastGoalCompletedAt: string | null;
   tasksPlanned: number;
   nextGoal: DashboardGoal;
   nextEvent: DashboardEvent;
@@ -244,12 +247,15 @@ export type SmartGoalProofStatus = 'PENDING_UPLOAD' | 'PENDING_REVIEW' | 'APPROV
 
 export type SmartGoalProofAttempt = {
   id: string;
+  goalId?: string;
   status: SmartGoalProofStatus;
   requirementText: string | null;
   proofUrl: string | null;
   aiFeedback: string | null;
-  createdAt?: string;
-  updatedAt?: string;
+  awardedPoints?: number | null;
+  awardedXp?: number | null;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type AdminSmartGoalProofAttempt = {
@@ -263,6 +269,8 @@ export type AdminSmartGoalProofAttempt = {
   proofKey: string | null;
   proofUrl: string | null;
   aiFeedback: string | null;
+  awardedPoints?: number | null;
+  awardedXp?: number | null;
   createdAt?: string;
   updatedAt?: string;
 };
@@ -565,8 +573,8 @@ export async function updateGoal(
     dueAt?: string | null;
     completed?: boolean;
   }
-): Promise<{ goal: GoalItem }> {
-  return putJsonAuth<{ goal: GoalItem }>(`/auth/goals/${id}`, body, accessToken);
+): Promise<{ goal: GoalItem; rewardsApplied?: { points: number; xp: number } | null }> {
+  return putJsonAuth<{ goal: GoalItem; rewardsApplied?: { points: number; xp: number } | null }>(`/auth/goals/${id}`, body, accessToken);
 }
 
 export async function deleteGoal(accessToken: string, id: string): Promise<{ ok: true }> {
