@@ -2273,10 +2273,23 @@ authRouter.get('/events', async (req: Request, res: Response) => {
 
   const where: any = { userId };
   if (from || to) {
-    where.startAt = {
+    const startWithin: any = {
       ...(from ? { gte: from } : null),
       ...(to ? { lte: to } : null),
     };
+    // For repeating events, we also include any event whose series overlaps the window.
+    // This is important for calendar month views where the base event may start before `from`.
+    where.OR = [
+      { startAt: startWithin },
+      {
+        repeat: { not: null },
+        startAt: to ? { lte: to } : undefined,
+        OR: [
+          { seriesEndAt: null },
+          ...(from ? [{ seriesEndAt: { gte: from } }] : []),
+        ],
+      },
+    ];
   }
 
   const events = await prismaAny.event.findMany({
@@ -3030,6 +3043,14 @@ authRouter.put('/events/:id', async (req: Request, res: Response) => {
     if (data.title !== undefined) patch.title = data.title;
     if (data.repeat !== undefined) patch.repeat = data.repeat;
 
+    const effectiveRepeat = (data.repeat !== undefined ? data.repeat : existingAfter.repeat) ?? null;
+    const isSeriesRepeating = isRepeating(effectiveRepeat);
+    if (isSeriesRepeating && data.endAt) {
+      const nextSeriesEndAt = new Date(data.endAt);
+      nextSeriesEndAt.setHours(23, 59, 59, 999);
+      patch.seriesEndAt = nextSeriesEndAt;
+    }
+
     if (deltaMs !== 0 || data.endAt !== undefined) {
       const seriesEvents = await prismaAny.event.findMany({
         where: { userId, seriesId },
@@ -3046,7 +3067,8 @@ authRouter.put('/events/:id', async (req: Request, res: Response) => {
             } else {
               const oldDurationMs = new Date(existingAfter.endAt).getTime() - new Date(existingAfter.startAt).getTime();
               const newDurationMs = new Date(data.endAt).getTime() - new Date(data.startAt ?? existing.startAt).getTime();
-              const durationMs = Number.isFinite(newDurationMs) ? newDurationMs : oldDurationMs;
+              const looksLikeSeriesEndEdit = isSeriesRepeating && Number.isFinite(newDurationMs) && newDurationMs > 48 * 60 * 60 * 1000;
+              const durationMs = looksLikeSeriesEndEdit ? oldDurationMs : Number.isFinite(newDurationMs) ? newDurationMs : oldDurationMs;
               nextEndAt = nextStartAt ? new Date(nextStartAt.getTime() + durationMs) : new Date(new Date(e.endAt).getTime() + deltaMs);
             }
           } else if (deltaMs !== 0) {

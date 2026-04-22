@@ -16,12 +16,159 @@ import type { RootStackParamList } from '../navigation/types';
 
 type EventItem = authApi.EventItem;
 
+type CalendarEventInstance = EventItem & {
+  _instanceId: string;
+  _baseEventId: string;
+  _occurrenceStartAt: string;
+};
+
 function pad2(n: number) {
   return n < 10 ? `0${n}` : `${n}`;
 }
 
 function daysInMonth(year: number, monthIndex0: number) {
   return new Date(year, monthIndex0 + 1, 0).getDate();
+}
+
+function startOfDayLocal(d: Date) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+function endOfDayLocal(d: Date) {
+  const x = new Date(d);
+  x.setHours(23, 59, 59, 999);
+  return x;
+}
+
+function addDaysLocal(d: Date, days: number) {
+  const x = new Date(d);
+  x.setDate(x.getDate() + days);
+  return x;
+}
+
+function addMonthsLocal(d: Date, months: number) {
+  const x = new Date(d);
+  x.setMonth(x.getMonth() + months);
+  return x;
+}
+
+function addYearsLocal(d: Date, years: number) {
+  const x = new Date(d);
+  x.setFullYear(x.getFullYear() + years);
+  return x;
+}
+
+function normalizeRepeat(r: string | null | undefined) {
+  const t = String(r ?? '').trim().toLowerCase();
+  return t && t !== 'once' ? t : 'once';
+}
+
+function expandEventsForMonth(params: { events: EventItem[]; from: Date; to: Date }): CalendarEventInstance[] {
+  const { events, from, to } = params;
+  const windowStart = startOfDayLocal(from);
+  const windowEnd = endOfDayLocal(to);
+
+  const out: CalendarEventInstance[] = [];
+  for (const e of events) {
+    const repeat = normalizeRepeat(e.repeat);
+    const baseStart = new Date(e.startAt);
+    if (Number.isNaN(baseStart.getTime())) continue;
+
+    const seriesStart = e.seriesStartAt ? new Date(e.seriesStartAt) : baseStart;
+    const seriesEnd = e.seriesEndAt ? new Date(e.seriesEndAt) : null;
+
+    const effectiveStart = seriesStart.getTime() > windowStart.getTime() ? seriesStart : windowStart;
+    const effectiveEnd = seriesEnd && seriesEnd.getTime() < windowEnd.getTime() ? seriesEnd : windowEnd;
+    if (effectiveEnd.getTime() < effectiveStart.getTime()) continue;
+
+    if (repeat === 'once') {
+      if (baseStart.getTime() < windowStart.getTime() || baseStart.getTime() > windowEnd.getTime()) continue;
+      out.push({
+        ...e,
+        _instanceId: `${e.id}@${e.startAt}`,
+        _baseEventId: e.id,
+        _occurrenceStartAt: e.startAt,
+      });
+      continue;
+    }
+
+    if (repeat === 'daily') {
+      for (let cur = startOfDayLocal(effectiveStart); cur.getTime() <= effectiveEnd.getTime(); cur = addDaysLocal(cur, 1)) {
+        const occ = new Date(cur);
+        occ.setHours(baseStart.getHours(), baseStart.getMinutes(), 0, 0);
+        out.push({
+          ...e,
+          startAt: occ.toISOString(),
+          _instanceId: `${e.id}@${occ.toISOString()}`,
+          _baseEventId: e.id,
+          _occurrenceStartAt: occ.toISOString(),
+        });
+      }
+      continue;
+    }
+
+    if (repeat === 'weekly') {
+      let cursor = new Date(baseStart);
+      while (cursor.getTime() < effectiveStart.getTime()) cursor = addDaysLocal(cursor, 7);
+      while (cursor.getTime() <= effectiveEnd.getTime()) {
+        out.push({
+          ...e,
+          startAt: cursor.toISOString(),
+          _instanceId: `${e.id}@${cursor.toISOString()}`,
+          _baseEventId: e.id,
+          _occurrenceStartAt: cursor.toISOString(),
+        });
+        cursor = addDaysLocal(cursor, 7);
+      }
+      continue;
+    }
+
+    if (repeat === 'monthly') {
+      let cursor = new Date(baseStart);
+      while (cursor.getTime() < effectiveStart.getTime()) cursor = addMonthsLocal(cursor, 1);
+      while (cursor.getTime() <= effectiveEnd.getTime()) {
+        out.push({
+          ...e,
+          startAt: cursor.toISOString(),
+          _instanceId: `${e.id}@${cursor.toISOString()}`,
+          _baseEventId: e.id,
+          _occurrenceStartAt: cursor.toISOString(),
+        });
+        cursor = addMonthsLocal(cursor, 1);
+      }
+      continue;
+    }
+
+    if (repeat === 'yearly') {
+      let cursor = new Date(baseStart);
+      while (cursor.getTime() < effectiveStart.getTime()) cursor = addYearsLocal(cursor, 1);
+      while (cursor.getTime() <= effectiveEnd.getTime()) {
+        out.push({
+          ...e,
+          startAt: cursor.toISOString(),
+          _instanceId: `${e.id}@${cursor.toISOString()}`,
+          _baseEventId: e.id,
+          _occurrenceStartAt: cursor.toISOString(),
+        });
+        cursor = addYearsLocal(cursor, 1);
+      }
+      continue;
+    }
+
+    // Unknown repeat type: keep existing behavior (only show if within window).
+    if (baseStart.getTime() >= windowStart.getTime() && baseStart.getTime() <= windowEnd.getTime()) {
+      out.push({
+        ...e,
+        _instanceId: `${e.id}@${e.startAt}`,
+        _baseEventId: e.id,
+        _occurrenceStartAt: e.startAt,
+      });
+    }
+  }
+
+  return out;
 }
 
 function parseDateDMY(raw: string): Date | null {
@@ -108,13 +255,25 @@ export function CalendarScreen() {
     return cells;
   }, [firstOffset, monthDays]);
 
+  const monthRange = useMemo(() => {
+    const from = new Date(year, monthIndex0, 1);
+    from.setHours(0, 0, 0, 0);
+    const to = new Date(year, monthIndex0 + 1, 0);
+    to.setHours(23, 59, 59, 999);
+    return { from, to };
+  }, [monthIndex0, year]);
+
+  const calendarEvents = useMemo(() => {
+    return expandEventsForMonth({ events, from: monthRange.from, to: monthRange.to });
+  }, [events, monthRange.from, monthRange.to]);
+
   const selectedDayEvents = useMemo(() => {
     if (!dayEvents.day) return [];
-    return events.filter(e => {
+    return calendarEvents.filter(e => {
       const d = new Date(e.startAt);
       return d.getFullYear() === year && d.getMonth() === monthIndex0 && d.getDate() === dayEvents.day;
     });
-  }, [events, dayEvents.day, monthIndex0, year]);
+  }, [calendarEvents, dayEvents.day, monthIndex0, year]);
 
   const editingEvent = useMemo(() => {
     if (!edit.eventId) return null;
@@ -130,14 +289,6 @@ export function CalendarScreen() {
     repeat: 'Once',
     desc: 'None',
   });
-
-  const monthRange = useMemo(() => {
-    const from = new Date(year, monthIndex0, 1);
-    from.setHours(0, 0, 0, 0);
-    const to = new Date(year, monthIndex0 + 1, 0);
-    to.setHours(23, 59, 59, 999);
-    return { from, to };
-  }, [monthIndex0, year]);
 
   useEffect(() => {
     const startAt = route.params?.openEventStartAt;
@@ -384,10 +535,11 @@ export function CalendarScreen() {
                 );
               }
 
-              const count = events.filter(e => {
+              const count = calendarEvents.filter(e => {
                 const d = new Date(e.startAt);
                 return d.getFullYear() === year && d.getMonth() === monthIndex0 && d.getDate() === c.day;
               }).length;
+
               const has = count > 0;
               const dotStrength = Math.min(4, count);
               const dotOpacity = 0.25 + dotStrength * 0.18;
@@ -438,10 +590,10 @@ export function CalendarScreen() {
               ) : (
                 selectedDayEvents.map(e => (
                   <Pressable
-                    key={e.id}
+                    key={(e as any)._instanceId ?? e.id}
                     onPress={() => {
                       closeDayEvents();
-                      openEdit(e.id);
+                      openEdit((e as any)._baseEventId ?? e.id);
                     }}
                     style={({ pressed }) => [styles.modalItem, pressed ? { opacity: 0.85 } : null]}
                   >
