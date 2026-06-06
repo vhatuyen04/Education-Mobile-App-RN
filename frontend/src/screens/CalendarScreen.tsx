@@ -42,6 +42,12 @@ function endOfDayLocal(d: Date) {
   return x;
 }
 
+function endOfDayLocalByDateParts(d: Date) {
+  const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  x.setHours(23, 59, 59, 999);
+  return x;
+}
+
 function addDaysLocal(d: Date, days: number) {
   const x = new Date(d);
   x.setDate(x.getDate() + days);
@@ -77,7 +83,7 @@ function expandEventsForMonth(params: { events: EventItem[]; from: Date; to: Dat
     if (Number.isNaN(baseStart.getTime())) continue;
 
     const seriesStart = e.seriesStartAt ? new Date(e.seriesStartAt) : baseStart;
-    const seriesEnd = e.seriesEndAt ? new Date(e.seriesEndAt) : null;
+    const seriesEnd = e.seriesEndAt ? endOfDayLocalByDateParts(new Date(e.seriesEndAt)) : null;
 
     const effectiveStart = seriesStart.getTime() > windowStart.getTime() ? seriesStart : windowStart;
     const effectiveEnd = seriesEnd && seriesEnd.getTime() < windowEnd.getTime() ? seriesEnd : windowEnd;
