@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Modal, Pressable, StyleSheet, Text, View, FlatList } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -255,123 +255,159 @@ export function GoalsScreen() {
     }
   }
 
-  return (
-    <Screen style={{ padding: 0 }}>
-      <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.topRow}>
-          <View>
-            <Text style={styles.hTitle}>Goals</Text>
+  type Row =
+    | { kind: 'section'; key: string; title: string }
+    | { kind: 'active' | 'failed' | 'completed'; key: string; goal: Goal };
+
+  const rows = useMemo<Row[]>(() => {
+    const out: Row[] = [];
+    if (!loading && activeGoals.length > 0) {
+      out.push({ kind: 'section', key: 's_active', title: 'Active goals' });
+      for (const g of activeGoals) out.push({ kind: 'active', key: `a_${g.id}`, goal: g });
+    }
+    if (!loading && failedGoals.length > 0) {
+      out.push({ kind: 'section', key: 's_failed', title: 'Failed goals' });
+      for (const g of failedGoals) out.push({ kind: 'failed', key: `f_${g.id}`, goal: g });
+    }
+    if (!loading && completedGoals.length > 0) {
+      out.push({ kind: 'section', key: 's_completed', title: 'Completed goals' });
+      for (const g of completedGoals) out.push({ kind: 'completed', key: `c_${g.id}`, goal: g });
+    }
+    return out;
+  }, [activeGoals, completedGoals, failedGoals, loading]);
+
+  const renderRow = ({ item }: { item: Row }) => {
+    if (item.kind === 'section') {
+      return <Text style={styles.sectionTitle}>{item.title}</Text>;
+    }
+
+    const g = item.goal;
+
+    if (item.kind === 'active') {
+      return (
+        <Pressable
+          onPress={() => openGoal(g)}
+          style={({ pressed }) => [styles.item, pressed ? { opacity: 0.85 } : null]}
+        >
+          <View style={{ flex: 1 }}>
+            <Text style={styles.name}>{displayGoalTitle(g.title)}</Text>
+            <Text style={styles.meta}>Completed: {g.progressPct}% steps</Text>
           </View>
+
+          <View style={styles.goalActions}>
+            <Badge>{goalTypeLabel(g)}</Badge>
+            <Pressable
+              onPress={e => {
+                e.stopPropagation();
+                requestComplete(g);
+              }}
+              style={({ pressed }) => [styles.tinyBtn, pressed ? { opacity: 0.85 } : null]}
+            >
+              <Text style={styles.tinyBtnText}>✓</Text>
+            </Pressable>
+
+            <Pressable
+              onPress={e => {
+                e.stopPropagation();
+                void requestQuit(g);
+              }}
+              style={({ pressed }) => [styles.tinyBtn, pressed ? { opacity: 0.85 } : null]}
+            >
+              <Text style={styles.tinyBtnText}>✕</Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      );
+    }
+
+    if (item.kind === 'failed') {
+      return (
+        <Pressable
+          onPress={() => openGoal(g)}
+          style={({ pressed }) => [styles.item, pressed ? { opacity: 0.85 } : null]}
+        >
+          <View style={{ flex: 1 }}>
+            <Text style={styles.name}>{displayGoalTitle(g.title)}</Text>
+            <Text style={styles.meta}>Reason: {failedMap[g.id] === 'gave_up' ? 'Gave up' : 'Expired'}</Text>
+          </View>
+
+          <View style={styles.goalActions}>
+            <Badge>{goalTypeLabel(g)}</Badge>
+            <Pressable
+              onPress={e => {
+                e.stopPropagation();
+                requestDelete(g);
+              }}
+              style={({ pressed }) => [styles.tinyBtn, styles.tinyDanger, pressed ? { opacity: 0.85 } : null]}
+            >
+              <Text style={[styles.tinyBtnText, { color: '#1a0a0f' }]}>🗑</Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      );
+    }
+
+    // completed
+    return (
+      <Pressable
+        onPress={() => openGoal(g)}
+        style={({ pressed }) => [styles.item, pressed ? { opacity: 0.85 } : null]}
+      >
+        <View style={{ flex: 1 }}>
+          <Text style={styles.name}>{displayGoalTitle(g.title)}</Text>
+          <Text style={styles.meta}>Completed: {g.progressPct}% steps</Text>
         </View>
 
-        <Card>
-          <View style={styles.cardTitleRow}>
-            <Text style={styles.cardTitle}>List of goals</Text>
-            <Badge>
-              {activeCount} active · {completedCount} completed
-            </Badge>
-          </View>
+        <View style={styles.goalActions}>
+          <Badge>{goalTypeLabel(g)}</Badge>
+          <Pressable
+            onPress={e => {
+              e.stopPropagation();
+              requestDelete(g);
+            }}
+            style={({ pressed }) => [styles.tinyBtn, styles.tinyDanger, pressed ? { opacity: 0.85 } : null]}
+          >
+            <Text style={[styles.tinyBtnText, { color: '#1a0a0f' }]}>🗑</Text>
+          </Pressable>
+        </View>
+      </Pressable>
+    );
+  };
 
-          <View style={{ height: 10 }} />
+  const ListHeader = (
+    <>
+      <View style={styles.topRow}>
+        <View>
+          <Text style={styles.hTitle}>Goals</Text>
+        </View>
+      </View>
 
-          <View style={{ gap: 10 }}>
-            {loading ? <Text style={styles.meta}>Loading…</Text> : null}
-            {!loading && goals.filter(g => !g.deletedAt).length === 0 ? <Text style={styles.meta}>No goals yet.</Text> : null}
+      <Card>
+        <View style={styles.cardTitleRow}>
+          <Text style={styles.cardTitle}>List of goals</Text>
+          <Badge>
+            {activeCount} active · {completedCount} completed
+          </Badge>
+        </View>
+      </Card>
 
-            {!loading && activeGoals.length > 0 ? <Text style={styles.sectionTitle}>Active goals</Text> : null}
-            {activeGoals.map(g => (
-              <Pressable
-                key={g.id}
-                onPress={() => openGoal(g)}
-                style={({ pressed }) => [styles.item, pressed ? { opacity: 0.85 } : null]}
-              >
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.name}>{displayGoalTitle(g.title)}</Text>
-                  <Text style={styles.meta}>Completed: {g.progressPct}% steps</Text>
-                </View>
+      {loading ? <Text style={styles.meta}>Loading…</Text> : null}
+      {!loading && goals.filter(g => !g.deletedAt).length === 0 ? (
+        <Text style={styles.meta}>No goals yet.</Text>
+      ) : null}
+    </>
+  );
 
-                <View style={styles.goalActions}>
-                  <Badge>{goalTypeLabel(g)}</Badge>
-                  <Pressable
-                    onPress={e => {
-                      e.stopPropagation();
-                      requestComplete(g);
-                    }}
-                    style={({ pressed }) => [styles.tinyBtn, pressed ? { opacity: 0.85 } : null]}
-                  >
-                    <Text style={styles.tinyBtnText}>✓</Text>
-                  </Pressable>
-
-                  <Pressable
-                    onPress={e => {
-                      e.stopPropagation();
-                      void requestQuit(g);
-                    }}
-                    style={({ pressed }) => [styles.tinyBtn, pressed ? { opacity: 0.85 } : null]}
-                  >
-                    <Text style={styles.tinyBtnText}>✕</Text>
-                  </Pressable>
-                </View>
-              </Pressable>
-            ))}
-
-            {!loading && failedGoals.length > 0 ? <Text style={styles.sectionTitle}>Failed goals</Text> : null}
-            {failedGoals.map(g => (
-              <Pressable
-                key={g.id}
-                onPress={() => openGoal(g)}
-                style={({ pressed }) => [styles.item, pressed ? { opacity: 0.85 } : null]}
-              >
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.name}>{displayGoalTitle(g.title)}</Text>
-                  <Text style={styles.meta}>Reason: {failedMap[g.id] === 'gave_up' ? 'Gave up' : 'Expired'}</Text>
-                </View>
-
-                <View style={styles.goalActions}>
-                  <Badge>{goalTypeLabel(g)}</Badge>
-                  <Pressable
-                    onPress={e => {
-                      e.stopPropagation();
-                      requestDelete(g);
-                    }}
-                    style={({ pressed }) => [styles.tinyBtn, styles.tinyDanger, pressed ? { opacity: 0.85 } : null]}
-                  >
-                    <Text style={[styles.tinyBtnText, { color: '#1a0a0f' }]}>🗑</Text>
-                  </Pressable>
-                </View>
-              </Pressable>
-            ))}
-
-            {!loading && completedGoals.length > 0 ? <Text style={styles.sectionTitle}>Completed goals</Text> : null}
-            {completedGoals.map(g => (
-              <Pressable
-                key={g.id}
-                onPress={() => openGoal(g)}
-                style={({ pressed }) => [styles.item, pressed ? { opacity: 0.85 } : null]}
-              >
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.name}>{displayGoalTitle(g.title)}</Text>
-                  <Text style={styles.meta}>Completed: {g.progressPct}% steps</Text>
-                </View>
-
-                <View style={styles.goalActions}>
-                  <Badge>{goalTypeLabel(g)}</Badge>
-                  <Pressable
-                    onPress={e => {
-                      e.stopPropagation();
-                      requestDelete(g);
-                    }}
-                    style={({ pressed }) => [styles.tinyBtn, styles.tinyDanger, pressed ? { opacity: 0.85 } : null]}
-                  >
-                    <Text style={[styles.tinyBtnText, { color: '#1a0a0f' }]}>🗑</Text>
-                  </Pressable>
-                </View>
-              </Pressable>
-            ))}
-          </View>
-
-        </Card>
-      </ScrollView>
+  return (
+    <Screen style={{ padding: 0 }}>
+      <FlatList
+        data={rows}
+        keyExtractor={r => r.key}
+        renderItem={renderRow}
+        contentContainerStyle={styles.content}
+        ListHeaderComponent={ListHeader}
+        ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
+      />
 
       <Pressable
         onPress={() => nav.navigate('GoalDetail', { title: 'New goal' })}
