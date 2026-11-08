@@ -125,7 +125,7 @@ export default function App() {
         name: 'Default',
         importance: Notifications.AndroidImportance.HIGH,
         vibrationPattern: [0, 250, 250, 250],
-      });
+      }).catch(() => {});
     }
 
     void autoScheduleRemindersForSignedInUser();
