@@ -215,9 +215,12 @@ export function GoalDetailScreen() {
       setIsSmartGoal(app);
 
       const fr = await getFailedReason(goalId);
-      setFailedReason(fr);
 
       const resp = await authApi.getGoal(token, goalId);
+      const serverFailedReason: FailedReason | null = resp.goal.failedAt
+        ? (resp.goal.failedReason === 'GAVE_UP' ? 'gave_up' : 'expired')
+        : null;
+      setFailedReason(fr ?? serverFailedReason);
       setTitle(stripLegacyStepsFromGoalTitle(resp.goal.title));
       const rawDesc = resp.goal.description ?? '';
       if (app && (!rawDesc || rawDesc.toLowerCase().includes('ai recommended goal'))) {
@@ -607,7 +610,7 @@ export function GoalDetailScreen() {
           </View>
 
           <View style={{ height: 10 }} />
-          {!completed ? (
+          {!completed && !failedReason ? (
             <View style={{ gap: 10 }}>
               <Button title={'+ Add step'} full onPress={addStep} />
               <Button title={'Save'} full onPress={save} />

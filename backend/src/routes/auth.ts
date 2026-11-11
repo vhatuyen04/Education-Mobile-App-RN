@@ -1188,6 +1188,11 @@ async function runAiReviewForAttemptId(attemptId: string): Promise<{ ok: true; s
 
   try {
     await fsp.mkdir(framesDir, { recursive: true });
+    // console.log('AI review S3 lookup:', {
+    //   attemptId,
+    //   bucket: s3c.bucket,
+    //   proofKey: attempt.proofKey,
+    // });
     const obj = await s3c.s3.send(new GetObjectCommand({ Bucket: s3c.bucket, Key: String(attempt.proofKey) }));
     const body: any = (obj as any)?.Body;
     if (!body) return { ok: false, error: 'Failed to read proof from storage' };
