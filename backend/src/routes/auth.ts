@@ -10,13 +10,22 @@ import cors from 'cors';
 import express from 'express';
 import { DeleteObjectCommand, GetObjectCommand, S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import jwt, { type Secret, type SignOptions } from 'jsonwebtoken';
+import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegPath from 'ffmpeg-static';
 
 import { prisma } from '../utils/prisma.js';
 import { getConfig } from '../utils/config.js';
+import {
+  assertStoredRefreshToken,
+  refreshTokenMaterial,
+  signAccessToken,
+  signRefreshToken,
+  verifyAccessToken,
+  verifyRefreshToken,
+  writeRefreshHashIfUnchanged,
+} from '../auth/tokens.js';
 import {
   AiGoalSuggestSchema,
   ChangePasswordSchema,
@@ -27,6 +36,7 @@ import {
   ListRangeSchema,
   LoginSchema,
   LogoutSchema,
+  RefreshSchema,
   RegisterSchema,
   ToggleGoalStepCompletionSchema,
   UpdateEventSchema,
@@ -596,35 +606,11 @@ function hasInvalidEmail(error: z.ZodError) {
   return error.issues.some(issue => issue.path[0] === 'email');
 }
 
-function signAccessToken(userId: string, role: 'USER' | 'ADMIN') {
-  const config = getConfig();
-  const options: SignOptions = { expiresIn: config.accessTokenTtl as SignOptions['expiresIn'] };
-  return jwt.sign({ sub: userId, type: 'access', role }, config.jwtAccessSecret as Secret, options);
-}
-
-function signRefreshToken(userId: string) {
-  const config = getConfig();
-  const options: SignOptions = { expiresIn: config.refreshTokenTtl as SignOptions['expiresIn'] };
-  return jwt.sign({ sub: userId, type: 'refresh' }, config.jwtRefreshSecret as Secret, options);
-}
-
 function getAccessTokenFromReq(req: Request): string | null {
   const raw = req.header('authorization') || req.header('Authorization');
   if (!raw) return null;
   const m = raw.match(/^Bearer\s+(.+)$/i);
   return m ? m[1] : null;
-}
-
-function verifyAccessToken(token: string): { sub: string; role: 'USER' | 'ADMIN' } {
-  const config = getConfig();
-  const payload: any = jwt.verify(token, config.jwtAccessSecret);
-
-  if (!payload?.sub || payload?.type !== 'access') {
-    throw new Error('Invalid token');
-  }
-
-  const role = payload?.role === 'ADMIN' ? 'ADMIN' : 'USER';
-  return { sub: String(payload.sub), role };
 }
 
 async function requireAdminFromReq(req: Request): Promise<{ userId: string } | null> {
@@ -668,7 +654,7 @@ authRouter.post('/register', async (req: Request, res: Response) => {
 
   const accessToken = signAccessToken(user.id, (user.role as any) === 'ADMIN' ? 'ADMIN' : 'USER');
   const refreshToken = signRefreshToken(user.id);
-  const refreshTokenHash = await bcrypt.hash(refreshToken, 10);
+  const refreshTokenHash = await bcrypt.hash(refreshTokenMaterial(refreshToken), 10);
 
   await prismaAny.user.update({
     where: { id: user.id },
@@ -702,7 +688,7 @@ authRouter.post('/login', async (req: Request, res: Response) => {
   const role = (user as any)?.role === 'ADMIN' ? 'ADMIN' : 'USER';
   const accessToken = signAccessToken(user.id, role);
   const refreshToken = signRefreshToken(user.id);
-  const refreshTokenHash = await bcrypt.hash(refreshToken, 10);
+  const refreshTokenHash = await bcrypt.hash(refreshTokenMaterial(refreshToken), 10);
 
   await prismaAny.user.update({
     where: { id: user.id },
@@ -1256,12 +1242,80 @@ authRouter.post('/logout', async (req: Request, res: Response) => {
     return res.status(200).json({ ok: true });
   }
 
-  await prisma.user.update({
+  const user = await prisma.user.findUnique({
     where: { id: String(payload.sub) },
-    data: { refreshTokenHash: null },
+    select: { id: true, refreshTokenHash: true },
   });
+  if (!user?.refreshTokenHash) {
+    return res.status(200).json({ ok: true });
+  }
+
+  const matches = await bcrypt.compare(refreshTokenMaterial(parsed.data.refreshToken), user.refreshTokenHash);
+  if (!matches) {
+    return res.status(200).json({ ok: true });
+  }
+
+  await writeRefreshHashIfUnchanged(
+    args => prismaAny.user.updateMany(args),
+    user.id,
+    user.refreshTokenHash,
+    null
+  );
 
   return res.json({ ok: true });
+});
+
+authRouter.post('/refresh', async (req: Request, res: Response) => {
+  const parsed = RefreshSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Invalid payload' });
+  }
+
+  let userId: string;
+  try {
+    userId = verifyRefreshToken(parsed.data.refreshToken).sub;
+  } catch {
+    return res.status(401).json({ error: 'Invalid refresh token' });
+  }
+
+  const user = await prismaAny.user.findUnique({
+    where: { id: userId },
+    select: { id: true, email: true, name: true, role: true, refreshTokenHash: true },
+  });
+
+  try {
+    await assertStoredRefreshToken(parsed.data.refreshToken, user?.refreshTokenHash ?? null, bcrypt.compare);
+  } catch {
+    return res.status(401).json({ error: 'Invalid refresh token' });
+  }
+  if (!user) {
+    return res.status(401).json({ error: 'Invalid refresh token' });
+  }
+
+  const presentedHash = user.refreshTokenHash;
+  if (!presentedHash) {
+    return res.status(401).json({ error: 'Invalid refresh token' });
+  }
+
+  const role = user.role === 'ADMIN' ? 'ADMIN' : 'USER';
+  const accessToken = signAccessToken(user.id, role);
+  const refreshToken = signRefreshToken(user.id);
+  const refreshTokenHash = await bcrypt.hash(refreshTokenMaterial(refreshToken), 10);
+  const stored = await writeRefreshHashIfUnchanged(
+    args => prismaAny.user.updateMany(args),
+    user.id,
+    presentedHash,
+    refreshTokenHash
+  );
+  if (!stored) {
+    return res.status(401).json({ error: 'Invalid refresh token' });
+  }
+
+  return res.json({
+    user: { id: user.id, email: user.email, name: user.name, role: user.role ?? 'USER' },
+    accessToken,
+    refreshToken,
+  });
 });
 
 authRouter.post('/ai/goal', async (req: Request, res: Response) => {

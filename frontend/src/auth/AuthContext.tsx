@@ -3,6 +3,7 @@ import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import * as authApi from '../api/auth';
+import type { SessionSnapshot } from './refreshGate';
 
 type AuthState = {
   user: authApi.AuthUser | null;
@@ -55,6 +56,18 @@ async function setSecure(key: string, value: string | null) {
   await SecureStore.setItemAsync(key, value);
 }
 
+async function persistAuth(next: SessionSnapshot | null) {
+  if (!next) {
+    await Promise.all([setSecure(KEY_ACCESS, null), setSecure(KEY_REFRESH, null), setSecure(KEY_USER, null)]);
+    return;
+  }
+  await Promise.all([
+    setSecure(KEY_ACCESS, next.accessToken),
+    setSecure(KEY_REFRESH, next.refreshToken),
+    setSecure(KEY_USER, JSON.stringify(next.user)),
+  ]);
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AuthState>({
     user: null,
@@ -64,10 +77,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   });
 
   useEffect(() => {
+    authApi.configureSessionPersistence(persistAuth);
+    return authApi.subscribeSession(next => {
+      setState(current => ({
+        user: next?.user ?? null,
+        accessToken: next?.accessToken ?? null,
+        refreshToken: next?.refreshToken ?? null,
+        isRestoring: current.isRestoring,
+      }));
+    });
+  }, []);
+
+  useEffect(() => {
     let mounted = true;
 
     (async () => {
       try {
+        const seen = authApi.currentSessionGeneration();
         const [accessToken, refreshToken, userJson] = await Promise.all([
           SecureStore.getItemAsync(KEY_ACCESS),
           SecureStore.getItemAsync(KEY_REFRESH),
@@ -77,6 +103,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const user = userJson ? (JSON.parse(userJson) as authApi.AuthUser) : null;
 
         if (!mounted) return;
+        if (seen !== authApi.currentSessionGeneration()) {
+          setState(current => ({ ...current, isRestoring: false }));
+          return;
+        }
+        if (user && accessToken && refreshToken) {
+          authApi.adoptSession({ user, accessToken, refreshToken }, seen);
+        }
         setState({ user, accessToken, refreshToken, isRestoring: false });
       } catch {
         if (!mounted) return;
@@ -91,12 +124,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   async function applyAuth(resp: authApi.AuthResponse) {
     const userId = String(resp.user?.id ?? '');
-    await Promise.all([
-      setSecure(KEY_ACCESS, resp.accessToken),
-      setSecure(KEY_REFRESH, resp.refreshToken),
-      setSecure(KEY_USER, JSON.stringify(resp.user)),
-      AsyncStorage.setItem(KEY_LAST_USER_ID, userId),
-    ]);
+    await authApi.replaceSession({ user: resp.user, accessToken: resp.accessToken, refreshToken: resp.refreshToken });
+    await AsyncStorage.setItem(KEY_LAST_USER_ID, userId);
 
     try {
       if (userId) {
@@ -158,9 +187,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   async function signOut() {
-    const refresh = state.refreshToken;
+    const refresh = authApi.currentRefreshToken() ?? state.refreshToken;
 
-    await Promise.all([setSecure(KEY_ACCESS, null), setSecure(KEY_REFRESH, null), setSecure(KEY_USER, null)]);
+    await authApi.dropSession();
     setState({ user: null, accessToken: null, refreshToken: null, isRestoring: false });
 
     if (refresh) {

@@ -1,4 +1,6 @@
 import { API_BASE_URL } from '../config/api';
+import { createSessionGate, type SessionSnapshot } from '../auth/refreshGate';
+import { createSessionCoordinator } from '../auth/sessionCoordinator';
 
 export type AuthUser = {
   id: string;
@@ -16,6 +18,65 @@ export type AuthResponse = {
   user: AuthUser;
 } & AuthTokens;
 
+export type { SessionSnapshot };
+
+let persistSession: ((next: SessionSnapshot | null) => Promise<void>) | null = null;
+
+const coordinator = createSessionCoordinator({
+  persist: async next => {
+    await persistSession?.(next);
+  },
+});
+
+export function configureSessionPersistence(persist: (next: SessionSnapshot | null) => Promise<void>) {
+  persistSession = persist;
+}
+
+export function currentSessionGeneration() {
+  return coordinator.currentGeneration();
+}
+
+export function currentRefreshToken() {
+  return coordinator.getSession()?.refreshToken ?? null;
+}
+
+export function adoptSession(next: SessionSnapshot | null, seenGeneration?: number) {
+  return coordinator.adoptSession(next, seenGeneration);
+}
+
+export function subscribeSession(listener: (next: SessionSnapshot | null) => void) {
+  return coordinator.subscribe(listener);
+}
+
+export async function replaceSession(next: SessionSnapshot) {
+  await coordinator.replaceSession(next);
+}
+
+export async function dropSession() {
+  await coordinator.dropSession();
+}
+
+const gate = createSessionGate({
+  getSession: () => coordinator.getSession(),
+  getGeneration: () => coordinator.currentGeneration(),
+  setSession: (next, generation) => coordinator.replaceSession(next, generation),
+  clearSession: () => coordinator.dropSession(),
+  refresh: async refreshToken => {
+    const resp = await postJson<AuthResponse>('/auth/refresh', { refreshToken });
+    return { user: resp.user, accessToken: resp.accessToken, refreshToken: resp.refreshToken };
+  },
+});
+
+async function readBody(res: Response): Promise<any> {
+  const text = await res.text();
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
 async function postJson<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${API_BASE_URL}${path}`, {
     method: 'POST',
@@ -23,8 +84,7 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
 
-  const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
+  const data = await readBody(res);
 
   if (!res.ok) {
     const message = data?.error ?? `Request failed (${res.status})`;
@@ -32,86 +92,45 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   }
 
   return data as T;
+}
+
+async function authorized<T>(
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+  path: string,
+  body: unknown,
+  _accessToken: string
+): Promise<T> {
+  return gate.withAuthRetry(async accessToken => {
+    const res = await fetch(`${API_BASE_URL}${path}`, {
+      method,
+      headers: {
+        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        Authorization: `Bearer ${accessToken}`,
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    const data = await readBody(res);
+    if (!res.ok) {
+      throw new Error(data?.error ?? `Request failed (${res.status})`);
+    }
+    return data as T;
+  });
 }
 
 async function deleteJsonAuth<T>(path: string, accessToken: string): Promise<T> {
-  const res = await fetch(`${API_BASE_URL}${path}`, {
-    method: 'DELETE',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-    },
-  });
-
-  const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
-
-  if (!res.ok) {
-    const message = data?.error ?? `Request failed (${res.status})`;
-    throw new Error(message);
-  }
-
-  return data as T;
+  return authorized<T>('DELETE', path, undefined, accessToken);
 }
 
 async function postJsonAuth<T>(path: string, body: unknown, accessToken: string): Promise<T> {
-  const res = await fetch(`${API_BASE_URL}${path}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify(body),
-  });
-
-  const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
-
-  if (!res.ok) {
-    const message = data?.error ?? `Request failed (${res.status})`;
-    throw new Error(message);
-  }
-
-  return data as T;
+  return authorized<T>('POST', path, body, accessToken);
 }
 
 async function getJsonAuth<T>(path: string, accessToken: string): Promise<T> {
-  const res = await fetch(`${API_BASE_URL}${path}`, {
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-    },
-  });
-
-  const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
-
-  if (!res.ok) {
-    const message = data?.error ?? `Request failed (${res.status})`;
-    throw new Error(message);
-  }
-
-  return data as T;
+  return authorized<T>('GET', path, undefined, accessToken);
 }
 
 async function putJsonAuth<T>(path: string, body: unknown, accessToken: string): Promise<T> {
-  const res = await fetch(`${API_BASE_URL}${path}`, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify(body),
-  });
-
-  const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
-
-  if (!res.ok) {
-    const message = data?.error ?? `Request failed (${res.status})`;
-    throw new Error(message);
-  }
-
-  return data as T;
+  return authorized<T>('PUT', path, body, accessToken);
 }
 
 export async function register(email: string, password: string, name?: string): Promise<AuthResponse> {

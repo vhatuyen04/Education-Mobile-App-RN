@@ -15,6 +15,10 @@ export const LogoutSchema = z.object({
   refreshToken: z.string().min(1),
 });
 
+export const RefreshSchema = z.object({
+  refreshToken: z.string().min(1),
+});
+
 export const UpdateMeSchema = z.object({
   name: z.string().min(1),
 });
