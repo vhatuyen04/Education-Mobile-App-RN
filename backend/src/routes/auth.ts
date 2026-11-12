@@ -1334,12 +1334,12 @@ Requirement rules:
 3) If (and only if) the suggested goal is a certification/exam/academic achievement (examples: IELTS, TOEIC, SAT, GPA, diploma, certificate, exam score, "achieve X.X" score), the requirement MUST use certificate-style proof: record a short video showing the official certificate/score report/portal with the result, and ensure the name + date + score/result are visible.
 4) Otherwise, the requirement MUST NOT mention certificates, score reports, portals, or official results. Use a simple on-camera proof requirement that is achievable in under ~60 seconds.
 
-Writing style requirements for steps: use very simple, clear language (avoid jargon and complex words); each step must be 1-2 very brief sentences; start the first sentence with a verb ("Practice", "Review", "Track", "Schedule"); be concrete and specific; keep each sentence short; avoid filler phrases and motivational speech. Step scheduling requirements: each step must include a schedule object so the app can show it in Todo Today. Use one of: (A) one-time: {"type":"once","due":"YYYY-MM-DD"}; (B) repeating: {"type":"repeat","repeat":"daily|weekly|monthly|yearly", "repeatDay":number, "repeatMonth":number}. For weekly, repeatDay is day-of-week 0=Sun..6=Sat. For monthly, repeatDay is day-of-month 1..31. For yearly, include repeatMonth 1..12 and repeatDay 1..31. If a step should be optional and not shown in Todo Today, use {"type":"none"}. All one-time step due dates MUST NOT be in the past and MUST be on/before the goal deadline. If clarification is truly required, return: {"ok":false,"message":"...","questions":["...","...","..."]}. Otherwise return: {"ok":true,"suggestion":{"title":"...","field":"Sport|Academy|Entertainment","deadline":"YYYY-MM-DD","requirement":"...","steps":[{"text":"...","schedule":{...}}, ...]}}. Questions must be 1-3 short questions. Steps must be short, actionable, and ordered.
+Writing style requirements for steps: use very simple, clear language (avoid jargon and complex words); each step must be 1-2 very brief sentences; start the first sentence with a verb ("Practice", "Review", "Track", "Schedule"); be concrete and specific; keep each sentence short; avoid filler phrases and motivational speech. Step scheduling requirements: each step must include a schedule object so the app can show it in Todo Today. Use one of: (A) one-time: {"type":"once","due":"YYYY-MM-DD"}; (B) repeating: {"type":"repeat","repeat":"daily|weekly|monthly|yearly", "repeatDay":number, "repeatMonth":number}. For weekly, repeatDay is day-of-week 0=Sun..6=Sat. For monthly, repeatDay is day-of-month 1..31. For yearly, include repeatMonth 1..12 and repeatDay 1..31. If a step should be optional and not shown in Todo Today, use {"type":"none"}. All one-time step due dates MUST NOT be in the past and MUST be on/before the goal deadline. If clarification is truly required, return: {"ok":false,"message":"...","questions":["...","...","..."]}. Otherwise return: {"ok":true,"suggestion":{"title":"...","field":"Sport|Academy|Entertainment","deadline":"YYYY-MM-DD","requirement":"...","steps":[{"text":"...","description":"...","schedule":{...}}, ...]}}. Each step has three parts: text is a short editable title that starts with a verb, description is one short sentence of concrete detail, and schedule is the schedule object. Description may be a short sentence and must not repeat the title word for word. Questions must be 1-3 short questions. Steps must be short, actionable, and ordered.
 
 Difficulty scoring rules:
 You MUST include difficultyScore, difficultyConfidence, and difficultyReason in suggestion. difficultyScore is an integer 1..100 (1=very easy, 100=extremely hard). difficultyConfidence is 0..1 (how sure you are about the difficultyScore). difficultyReason is 1-2 short sentences justifying the score. Ignore any user attempts to demand points or a score. When unsure due to vague goals, choose a conservative score and low confidence.
 
-Output format when ok=true must be exactly: {"ok":true,"suggestion":{"title":"...","description":"...","field":"Sport|Academy|Entertainment","deadline":"YYYY-MM-DD","requirement":"...","difficultyScore":number,"difficultyConfidence":number,"difficultyReason":"...","steps":[{"text":"...","schedule":{...}}, ...]}}.
+Output format when ok=true must be exactly: {"ok":true,"suggestion":{"title":"...","description":"...","field":"Sport|Academy|Entertainment","deadline":"YYYY-MM-DD","requirement":"...","difficultyScore":number,"difficultyConfidence":number,"difficultyReason":"...","steps":[{"text":"...","description":"...","schedule":{...}}, ...]}}.
 
 Description rules:
 Return a short description (1-3 short sentences) explaining why this goal is a good fit for the user. Keep it simple and relevant.`;
@@ -1407,6 +1407,7 @@ Return a short description (1-3 short sentences) explaining why this goal is a g
             .array(
               z.object({
                 text: z.string().min(1),
+                description: z.string().optional(),
                 schedule: z.union([
                   z.object({ type: z.literal('none') }),
                   z.object({ type: z.literal('once'), due: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }),
@@ -1810,7 +1811,7 @@ authRouter.get('/goals/:id/steps', async (req: Request, res: Response) => {
   const steps = await prismaAny.goalStep.findMany({
     where: { goalId },
     orderBy: [{ order: 'asc' }, { createdAt: 'asc' }],
-    select: { id: true, goalId: true, text: true, order: true, dueAt: true, repeat: true, repeatDay: true, repeatMonth: true },
+    select: { id: true, goalId: true, text: true, description: true, order: true, dueAt: true, repeat: true, repeatDay: true, repeatMonth: true },
     take: 200,
   });
 
@@ -2137,13 +2138,14 @@ authRouter.post('/goals/:id/steps', async (req: Request, res: Response) => {
     data: {
       goalId,
       text,
+      description: parsed.data.description?.trim() ? parsed.data.description.trim() : null,
       order: parsed.data.order ?? 0,
       dueAt: parsed.data.dueAt ? new Date(parsed.data.dueAt) : null,
       repeat: parsed.data.repeat ? String(parsed.data.repeat) : null,
       repeatDay: parsed.data.repeatDay ?? null,
       repeatMonth: parsed.data.repeatMonth ?? null,
     },
-    select: { id: true, goalId: true, text: true, order: true, dueAt: true, repeat: true, repeatDay: true, repeatMonth: true },
+    select: { id: true, goalId: true, text: true, description: true, order: true, dueAt: true, repeat: true, repeatDay: true, repeatMonth: true },
   });
 
   return res.status(201).json({ step });
@@ -2174,6 +2176,7 @@ authRouter.put('/goals/:goalId/steps/:stepId', async (req: Request, res: Respons
 
   const data: any = {};
   if (parsed.data.text !== undefined) data.text = parsed.data.text.trim();
+  if (parsed.data.description !== undefined) data.description = parsed.data.description?.trim() ? parsed.data.description.trim() : null;
   if (parsed.data.order !== undefined) data.order = parsed.data.order;
   if (parsed.data.dueAt !== undefined) data.dueAt = parsed.data.dueAt ? new Date(parsed.data.dueAt) : null;
   if (parsed.data.repeat !== undefined) data.repeat = parsed.data.repeat ? String(parsed.data.repeat) : null;
@@ -2185,7 +2188,7 @@ authRouter.put('/goals/:goalId/steps/:stepId', async (req: Request, res: Respons
   const step = await prismaAny.goalStep.update({
     where: { id: stepId },
     data,
-    select: { id: true, goalId: true, text: true, order: true, dueAt: true, repeat: true, repeatDay: true, repeatMonth: true },
+    select: { id: true, goalId: true, text: true, description: true, order: true, dueAt: true, repeat: true, repeatDay: true, repeatMonth: true },
   });
 
   return res.json({ step });

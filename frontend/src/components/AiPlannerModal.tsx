@@ -84,7 +84,9 @@ function isMeaningfulStepText(t: unknown) {
   return /[a-z]/i.test(s);
 }
 
-function sanitizePlannerSteps(input: Array<Step & { schedule?: authApi.AiGoalStepSchedule }>) {
+type PlannerStep = Step & { schedule?: authApi.AiGoalStepSchedule; description?: string };
+
+function sanitizePlannerSteps(input: PlannerStep[]) {
   const out = (Array.isArray(input) ? input : [])
     .map(s => {
       const text = normStepText(s.text);
@@ -112,7 +114,7 @@ function sanitizePlannerSteps(input: Array<Step & { schedule?: authApi.AiGoalSte
 
       return { ...s, text, schedule };
     })
-    .filter(Boolean) as Array<Step & { schedule?: authApi.AiGoalStepSchedule }>;
+    .filter(Boolean) as PlannerStep[];
 
   return out.filter(s => isMeaningfulStepText(s.text));
 }
@@ -456,7 +458,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
   const [goalRequirement, setGoalRequirement] = useState('');
   const [goalPointsAwarded, setGoalPointsAwarded] = useState<number | null>(null);
   const [goalXpAwarded, setGoalXpAwarded] = useState<number | null>(null);
-  const [steps, setSteps] = useState<Array<Step & { schedule?: authApi.AiGoalStepSchedule }>>([]);
+  const [steps, setSteps] = useState<PlannerStep[]>([]);
 
   const displaySteps = useMemo(() => sanitizePlannerSteps(steps), [steps]);
   const stepCount = displaySteps.length;
@@ -471,11 +473,16 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
     []
   );
 
-  function resetGenerated() {
+  function resetGenerated(clearPlan = false) {
+    if (clearPlan) {
+      setPlanText('');
+      setDeadline('');
+      setIntensity('Normal');
+    }
     setGenerated(false);
     setGoalTitle('');
     setGoalField('Academy');
-    setGoalDeadline(deadline);
+    setGoalDeadline(clearPlan ? '' : deadline);
     setGoalRequirement('');
     setGoalPointsAwarded(null);
     setGoalXpAwarded(null);
@@ -554,7 +561,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
   }
 
   function addStep() {
-    setSteps(prev => [...prev, { id: makeId(), text: 'New step', schedule: { type: 'none' } }]);
+    setSteps(prev => [...prev, { id: makeId(), text: 'New step', description: '', schedule: { type: 'none' } }]);
   }
 
   function removeStep(id: string) {
@@ -649,6 +656,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
       const mapped = resp.suggestion.steps.map(s => ({
         id: makeId(),
         text: s.text,
+        description: String(s.description ?? '').trim(),
         schedule: normalizeAiStepSchedule(s.schedule, effectiveDeadline),
       }));
       const sanitized = sanitizePlannerSteps(mapped);
@@ -713,7 +721,8 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
 
       for (const { s, idx, text } of allSteps) {
         const schedule = (s.schedule ?? { type: 'none' }) as authApi.AiGoalStepSchedule;
-        const body: any = { text, order: idx };
+        const description = String(s.description ?? '').trim();
+        const body: any = { text, order: idx, description: description || null };
 
         if (schedule.type === 'once') {
           const d = parseYmd(schedule.due);
@@ -732,7 +741,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
 
       toast('Saved');
       onSaved?.();
-      resetGenerated();
+      resetGenerated(true);
       onClose();
     } catch (e: any) {
       toast(String(e?.message ?? 'Save failed'));
@@ -883,30 +892,51 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
                     <View style={{ gap: 10 }}>
                       {displaySteps.map((s, idx) => (
                         <View key={s.id} style={styles.stepItemRow}>
-                          <Text style={styles.stepNum}>{idx + 1}.</Text>
-                          <View style={styles.stepTextCol}>
-                            <Text style={styles.stepItemText}>{s.text}</Text>
+                          <View style={styles.stepHead}>
+                            <Text style={styles.stepLabel}>Step {idx + 1}</Text>
+                            <Pressable onPress={() => removeStep(s.id)} hitSlop={10} style={styles.stepRemove}>
+                              <Text style={styles.stepRemoveText}>🗑</Text>
+                            </Pressable>
                           </View>
-                          <View style={styles.stepScheduleCol}>
-                            <TextInput
-                              value={scheduleToShortText(s.schedule)}
-                              onChangeText={t => {
-                                setSteps(prev =>
-                                  prev.map(p => {
-                                    if (p.id !== s.id) return p;
-                                    return { ...p, schedule: parseScheduleShortText(t) };
-                                  })
-                                );
-                              }}
-                              placeholder="daily | weekly:Mon | monthly:15 | yearly:01-15 | once:2027-01-01"
-                              placeholderTextColor={colors.muted}
-                              style={[styles.input, styles.stepScheduleInput]}
-                            />
-                            <Text style={styles.mutedSmall}>Optional. Leave empty to ignore.</Text>
-                          </View>
-                          <Pressable onPress={() => removeStep(s.id)} hitSlop={10} style={styles.stepRemove}>
-                            <Text style={styles.stepRemoveText}>🗑</Text>
-                          </Pressable>
+                          <Text style={styles.stepLabel}>Title</Text>
+                          <TextInput
+                            value={s.text}
+                            onChangeText={t => {
+                              setSteps(prev => prev.map(p => (p.id === s.id ? { ...p, text: t } : p)));
+                            }}
+                            placeholder="What will you do?"
+                            placeholderTextColor={colors.muted}
+                            multiline
+                            style={styles.input}
+                          />
+                          <Text style={styles.stepLabel}>Description</Text>
+                          <TextInput
+                            value={s.description ?? ''}
+                            onChangeText={t => {
+                              setSteps(prev => prev.map(p => (p.id === s.id ? { ...p, description: t } : p)));
+                            }}
+                            placeholder="Optional detail"
+                            placeholderTextColor={colors.muted}
+                            multiline
+                            style={styles.input}
+                          />
+                          <Text style={styles.stepLabel}>Schedule</Text>
+                          <TextInput
+                            value={scheduleToShortText(s.schedule)}
+                            onChangeText={t => {
+                              setSteps(prev =>
+                                prev.map(p => {
+                                  if (p.id !== s.id) return p;
+                                  return { ...p, schedule: parseScheduleShortText(t) };
+                                })
+                              );
+                            }}
+                            placeholder="daily | weekly:Mon | monthly:15 | yearly:01-15 | once:2027-01-01"
+                            placeholderTextColor={colors.muted}
+                            autoCapitalize="none"
+                            autoCorrect={false}
+                            style={styles.input}
+                          />
                         </View>
                       ))}
                     </View>
@@ -1103,14 +1133,17 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   stepItemRow: {
-    flexDirection: 'row',
-    gap: 8,
-    alignItems: 'flex-start',
+    gap: 6,
     borderWidth: 1,
     borderColor: colors.line,
     backgroundColor: colors.surface2,
     padding: 10,
     borderRadius: 14,
+  },
+  stepHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   stepNum: {
     color: colors.muted,

@@ -158,6 +158,7 @@ export type AiGoalStepSchedule =
 
 export type AiGoalStep = {
   text: string;
+  description?: string;
   schedule: AiGoalStepSchedule;
 };
 
@@ -511,6 +512,7 @@ export async function createGoalStep(
   goalId: string,
   body: {
     text: string;
+    description?: string | null;
     order?: number;
     dueAt?: string | null;
     repeat?: string | null;
@@ -526,6 +528,7 @@ export type GoalStepItem = {
   id: string;
   goalId: string;
   text: string;
+  description: string | null;
   order: number;
   dueAt: string | null;
   repeat: string | null;
@@ -540,7 +543,7 @@ export async function listGoalSteps(accessToken: string, goalId: string): Promis
 export async function updateGoalStep(
   accessToken: string,
   params: { goalId: string; stepId: string },
-  body: { text?: string; order?: number; dueAt?: string | null; repeat?: string | null; repeatDay?: number | null; repeatMonth?: number | null }
+  body: { text?: string; description?: string | null; order?: number; dueAt?: string | null; repeat?: string | null; repeatDay?: number | null; repeatMonth?: number | null }
 ): Promise<{ step: GoalStepItem }>
 {
   return putJsonAuth<{ step: GoalStepItem }>(

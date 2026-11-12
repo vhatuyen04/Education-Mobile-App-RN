@@ -19,6 +19,7 @@ type RouteParams = { id: string };
 type UiStep = {
   id: string;
   text: string;
+  description: string;
   scheduleText: string;
 };
 
@@ -194,7 +195,7 @@ function normalizeOnceSchedulesInDraft(steps: UiStep[], deadlineYmd: string): Ui
     picks.push(pick);
   }
 
-  const next = parsed.map((s: any) => ({ id: s.id, text: s.text, scheduleText: s.scheduleText } as UiStep));
+  const next = parsed.map((s: any) => ({ id: s.id, text: s.text, description: s.description ?? '', scheduleText: s.scheduleText } as UiStep));
   for (let k = 0; k < invalidOnceIdx.length; k += 1) {
     const idx = invalidOnceIdx[k];
     const ymd = formatYmd(picks[k] ?? dl0);
@@ -234,6 +235,7 @@ export function AiGoalRecommendationScreen() {
     const baseSteps = (rec.suggestion?.steps ?? []).map(s => ({
       id: makeId(),
       text: String(s.text ?? ''),
+      description: String(s.description ?? ''),
       scheduleText: scheduleToShortText(s.schedule),
     }));
     const dl = String(rec.suggestion?.deadline ?? '').trim();
@@ -251,6 +253,7 @@ export function AiGoalRecommendationScreen() {
     const nextSteps: authApi.AiGoalStep[] = nextStepsDraft
       .map(s => ({
         text: s.text.trim(),
+        description: s.description.trim() || undefined,
         schedule: parseScheduleShortText(s.scheduleText),
       }))
       .filter(s => s.text);
@@ -294,7 +297,11 @@ export function AiGoalRecommendationScreen() {
         ...rec.suggestion,
         deadline: deadlineDraft.trim(),
         steps: normalized
-          .map(s => ({ text: s.text.trim(), schedule: parseScheduleShortText(s.scheduleText) as any }))
+          .map(s => ({
+            text: s.text.trim(),
+            description: s.description.trim() || undefined,
+            schedule: parseScheduleShortText(s.scheduleText) as any,
+          }))
           .filter(s => s.text),
       },
     };
@@ -331,7 +338,8 @@ export function AiGoalRecommendationScreen() {
         const text = String(s.text ?? '').trim();
         if (!text) continue;
 
-        const body: any = { text, order: i };
+        const description = String(s.description ?? '').trim();
+        const body: any = { text, order: i, description: description || null };
         if (s.schedule?.type === 'once') {
           const d = parseDeadlineToISOEndOfDay(s.schedule.due);
           body.dueAt = d;
@@ -422,18 +430,32 @@ export function AiGoalRecommendationScreen() {
             <View key={s.id} style={styles.stepEditRow}>
               <Text style={styles.stepNum}>{idx + 1}.</Text>
               <View style={{ flex: 1, gap: 8 }}>
+                <Text style={styles.label}>Title</Text>
                 <TextInput
                   value={s.text}
                   onChangeText={t => setStepsDraft(prev => prev.map(p => (p.id === s.id ? { ...p, text: t } : p)))}
-                  placeholder="Step"
+                  placeholder="What will you do?"
                   placeholderTextColor={colors.muted}
+                  multiline
                   style={styles.input}
                 />
+                <Text style={styles.label}>Description</Text>
+                <TextInput
+                  value={s.description}
+                  onChangeText={t => setStepsDraft(prev => prev.map(p => (p.id === s.id ? { ...p, description: t } : p)))}
+                  placeholder="Optional detail"
+                  placeholderTextColor={colors.muted}
+                  multiline
+                  style={styles.input}
+                />
+                <Text style={styles.label}>Schedule</Text>
                 <TextInput
                   value={s.scheduleText}
                   onChangeText={t => setStepsDraft(prev => prev.map(p => (p.id === s.id ? { ...p, scheduleText: t } : p)))}
-                  placeholder="daily | weekly:1 | monthly:15 | yearly:01-15 | once:2027-01-01"
+                  placeholder="daily | weekly:Mon | monthly:15 | yearly:01-15 | once:2027-01-01"
                   placeholderTextColor={colors.muted}
+                  autoCapitalize="none"
+                  autoCorrect={false}
                   style={styles.inputSmall}
                 />
               </View>
@@ -444,7 +466,7 @@ export function AiGoalRecommendationScreen() {
           ))}
 
           <View style={{ height: 10 }} />
-          <Button title={'+ Add step'} full onPress={() => setStepsDraft(prev => [...prev, { id: makeId(), text: 'New step', scheduleText: '' }])} />
+          <Button title={'+ Add step'} full onPress={() => setStepsDraft(prev => [...prev, { id: makeId(), text: 'New step', description: '', scheduleText: '' }])} />
         </Card>
 
         <View style={{ gap: 10 }}>

@@ -133,8 +133,9 @@ model SmartGoalProofAttempt {
 model GoalStep {
   id        String   @id @default(uuid())
   goalId    String
-  text      String
-  order     Int      @default(0)
+  text        String
+  description String?
+  order       Int      @default(0)
   dueAt     DateTime?
   repeat    String?
   repeatDay Int?

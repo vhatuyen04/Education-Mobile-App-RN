@@ -19,6 +19,7 @@ import { isAppGoal, unmarkAppGoal } from '../motivation/appGoals';
 import { getFailedReason, type FailedReason } from '../motivation/failedGoals';
 import { appendScorePoint } from '../motivation/scoreHistory';
 import type { RootStackParamList } from '../navigation/types';
+import { parseScheduleShortText, scheduleToShortText } from '../utils/stepSchedule';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 type R = RouteProp<RootStackParamList, 'GoalDetail'>;
@@ -50,104 +51,9 @@ type UiStep = {
   id: string;
   serverId?: string;
   text: string;
+  description: string;
   scheduleText: string;
 };
-
-function formatWeekday(d: number | null | undefined) {
-  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  if (d === null || d === undefined) return '';
-  const idx = Number(d);
-  if (!Number.isFinite(idx) || idx < 0 || idx > 6) return '';
-  return days[idx];
-}
-
-function scheduleToShortText(step: authApi.GoalStepItem): string {
-  if (step.dueAt) {
-    const d = new Date(step.dueAt);
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `once:${y}-${m}-${day}`;
-  }
-  const repeat = (step.repeat ?? '').trim().toLowerCase();
-  if (!repeat) return '';
-  if (repeat === 'daily') return 'daily';
-  if (repeat === 'weekly') return step.repeatDay !== null && step.repeatDay !== undefined ? `weekly:${formatWeekday(step.repeatDay) || String(step.repeatDay)}` : 'weekly';
-  if (repeat === 'monthly') return step.repeatDay !== null && step.repeatDay !== undefined ? `monthly:${String(step.repeatDay)}` : 'monthly';
-  if (repeat === 'yearly') {
-    if (step.repeatMonth && step.repeatDay) {
-      return `yearly:${String(step.repeatMonth).padStart(2, '0')}-${String(step.repeatDay).padStart(2, '0')}`;
-    }
-    return 'yearly';
-  }
-  return `repeat:${step.repeat}`;
-}
-
-function parseWeekdayToken(token: string): number | null {
-  const t = token.trim().toLowerCase();
-  const map: Record<string, number> = { sun: 0, mon: 1, tue: 2, tues: 2, wed: 3, thu: 4, thur: 4, thurs: 4, fri: 5, sat: 6 };
-  if (t in map) return map[t];
-  const n = Number(t);
-  if (Number.isFinite(n) && n >= 0 && n <= 6) return n;
-  return null;
-}
-
-function parseScheduleShortText(input: string): {
-  dueAt?: string | null;
-  repeat?: string | null;
-  repeatDay?: number | null;
-  repeatMonth?: number | null;
-} {
-  const raw = String(input ?? '').trim();
-  if (!raw) return { dueAt: null, repeat: null, repeatDay: null, repeatMonth: null };
-  const lower = raw.toLowerCase();
-
-  if (lower.startsWith('once:')) {
-    const due = raw.slice(5).trim();
-    const m = due.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (!m) return { dueAt: null, repeat: null, repeatDay: null, repeatMonth: null };
-    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 23, 59, 59, 999);
-    return { dueAt: d.toISOString(), repeat: null, repeatDay: null, repeatMonth: null };
-  }
-
-  if (lower === 'daily') return { dueAt: null, repeat: 'daily', repeatDay: null, repeatMonth: null };
-
-  if (lower === 'weekly') return { dueAt: null, repeat: 'weekly', repeatDay: null, repeatMonth: null };
-  if (lower.startsWith('weekly:')) {
-    const tok = raw.slice(7).trim();
-    const dow = parseWeekdayToken(tok);
-    return { dueAt: null, repeat: 'weekly', repeatDay: dow, repeatMonth: null };
-  }
-
-  if (lower === 'monthly') return { dueAt: null, repeat: 'monthly', repeatDay: null, repeatMonth: null };
-  if (lower.startsWith('monthly:')) {
-    const tok = raw.slice(8).trim();
-    const day = Number(tok);
-    return { dueAt: null, repeat: 'monthly', repeatDay: Number.isFinite(day) ? day : null, repeatMonth: null };
-  }
-
-  if (lower === 'yearly') return { dueAt: null, repeat: 'yearly', repeatDay: null, repeatMonth: null };
-  if (lower.startsWith('yearly:')) {
-    const tok = raw.slice(7).trim();
-    const m = tok.match(/^(\d{1,2})\s*[-/.,]\s*(\d{1,2})$/);
-    if (!m) return { dueAt: null, repeat: 'yearly', repeatDay: null, repeatMonth: null };
-    const month = Number(m[1]);
-    const day = Number(m[2]);
-    return {
-      dueAt: null,
-      repeat: 'yearly',
-      repeatMonth: Number.isFinite(month) ? month : null,
-      repeatDay: Number.isFinite(day) ? day : null,
-    };
-  }
-
-  if (lower.startsWith('repeat:')) {
-    const repeat = raw.slice(7).trim();
-    return { dueAt: null, repeat: repeat || null, repeatDay: null, repeatMonth: null };
-  }
-
-  return { dueAt: null, repeat: raw, repeatDay: null, repeatMonth: null };
-}
 
 export function GoalDetailScreen() {
   const nav = useNavigation<Nav>();
@@ -244,9 +150,10 @@ export function GoalDetailScreen() {
         id: makeId(),
         serverId: s.id,
         text: s.text,
+        description: s.description ?? '',
         scheduleText: scheduleToShortText(s),
       }));
-      setSteps(uiSteps.length ? uiSteps : [{ id: makeId(), text: 'New step', scheduleText: '' }]);
+      setSteps(uiSteps.length ? uiSteps : [{ id: makeId(), text: 'New step', description: '', scheduleText: '' }]);
     } catch (e: any) {
       toast(String(e?.message ?? 'Failed to load'));
     }
@@ -260,7 +167,7 @@ export function GoalDetailScreen() {
 
   function addStep() {
     if (completed) return;
-    setSteps(prev => [...prev, { id: makeId(), text: 'New step', scheduleText: '' }]);
+    setSteps(prev => [...prev, { id: makeId(), text: 'New step', description: '', scheduleText: '' }]);
   }
 
   function removeStep(id: string) {
@@ -271,6 +178,11 @@ export function GoalDetailScreen() {
   function setStepText(id: string, text: string) {
     if (completed) return;
     setSteps(prev => prev.map(s => (s.id === id ? { ...s, text } : s)));
+  }
+
+  function setStepDescription(id: string, description: string) {
+    if (completed) return;
+    setSteps(prev => prev.map(s => (s.id === id ? { ...s, description } : s)));
   }
 
   function setStepScheduleText(id: string, scheduleText: string) {
@@ -388,15 +300,16 @@ export function GoalDetailScreen() {
         const text = s.text.trim();
         if (!text) continue;
         const schedule = parseScheduleShortText(s.scheduleText);
+        const description = s.description.trim() ? s.description.trim() : null;
 
         if (s.serverId && existingById.has(s.serverId)) {
           await authApi.updateGoalStep(
             token,
             { goalId: effectiveGoalId!, stepId: s.serverId },
-            { text, order: i, ...schedule }
+            { text, description, order: i, ...schedule }
           );
         } else {
-          const created = await authApi.createGoalStep(token, effectiveGoalId!, { text, order: i, ...schedule });
+          const created = await authApi.createGoalStep(token, effectiveGoalId!, { text, description, order: i, ...schedule });
           s.serverId = created.step.id;
         }
       }
@@ -575,13 +488,26 @@ export function GoalDetailScreen() {
             <View style={{ gap: 10 }}>
               {steps.map((s, idx) => (
                 <View key={s.id} style={styles.stepRow}>
-                  <View style={{ flex: 1 }}>
+                  <View style={styles.stepMain}>
                     <Text style={styles.stepLabel}>Step {idx + 1}</Text>
+                    <Text style={[styles.stepLabel, { marginTop: 6 }]}>Title</Text>
                     <TextInput
                       value={s.text}
                       onChangeText={t2 => setStepText(s.id, t2)}
                       editable={!completed}
                       placeholder=""
+                      placeholderTextColor={colors.muted}
+                      multiline
+                      textAlignVertical="top"
+                      style={styles.stepInput}
+                    />
+
+                    <Text style={[styles.stepLabel, { marginTop: 6 }]}>Description</Text>
+                    <TextInput
+                      value={s.description}
+                      onChangeText={t2 => setStepDescription(s.id, t2)}
+                      editable={!completed}
+                      placeholder="Optional"
                       placeholderTextColor={colors.muted}
                       multiline
                       textAlignVertical="top"
@@ -798,6 +724,10 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface2,
     padding: 10,
     borderRadius: 14,
+  },
+  stepMain: {
+    flex: 1,
+    minWidth: 0,
   },
   stepLabel: {
     color: colors.muted,

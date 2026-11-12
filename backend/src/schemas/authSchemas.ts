@@ -89,6 +89,7 @@ export const AiGoalSuggestSchema = z.object({
 
 export const CreateGoalStepSchema = z.object({
   text: z.string().min(1),
+  description: z.string().optional().nullable(),
   order: z.coerce.number().int().min(0).optional(),
   dueAt: z.string().datetime().optional().nullable(),
   repeat: z.string().min(1).optional().nullable(),
@@ -98,6 +99,7 @@ export const CreateGoalStepSchema = z.object({
 
 export const UpdateGoalStepSchema = z.object({
   text: z.string().min(1).optional(),
+  description: z.string().optional().nullable(),
   order: z.coerce.number().int().min(0).optional(),
   dueAt: z.string().datetime().optional().nullable(),
   repeat: z.string().min(1).optional().nullable(),
