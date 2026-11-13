@@ -117,6 +117,7 @@ model SmartGoalProofAttempt {
   proofKey        String?
   proofUrl        String?
   aiFeedback      String?
+  reviewedBy      String?
   awardedPoints   Int?               @default(0)
   awardedXp       Int?               @default(0)
   createdAt       DateTime           @default(now())

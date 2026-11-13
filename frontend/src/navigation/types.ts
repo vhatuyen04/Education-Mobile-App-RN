@@ -8,7 +8,7 @@ export type RootStackParamList = {
   NotificationList: undefined;
   NotificationSettings: undefined;
   AiGoalRecommendation: { id: string };
-  Progress: undefined;
+  Progress: { focusProofs?: boolean } | undefined;
   SmartGoalProof: { goalId: string; goalTitle: string; requirementText?: string | null };
   AdminProofReview: undefined;
 };

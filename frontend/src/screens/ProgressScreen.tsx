@@ -1,7 +1,7 @@
-import React, { useCallback, useMemo, useState } from 'react';
-import { Linking, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { Alert, Linking, ScrollView, StyleSheet, Text, View, type ScrollViewInstance } from 'react-native';
 import { Pressable } from 'react-native';
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 
 import { Screen } from '../components/Screen';
 import { Card } from '../components/Card';
@@ -11,6 +11,7 @@ import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
 import { getFailedGoalsMap, type FailedReason } from '../motivation/failedGoals';
+import { countVisibleGoals } from '../motivation/goalSummary';
 import { Button } from '../components/Button';
 import { Badge } from '../components/Badge';
 
@@ -19,11 +20,6 @@ type Goal = authApi.GoalItem;
 function clamp01(v: number) {
   if (!Number.isFinite(v)) return 0;
   return Math.max(0, Math.min(1, v));
-}
-
-function fmtTime(ts: number) {
-  const d = new Date(ts);
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
 function fmtDate(ts: number) {
@@ -35,119 +31,66 @@ function TrendChart({ data }: { data: authApi.ScoreHistoryPoint[] }) {
   const normalized = useMemo(() => {
     const cleaned = (Array.isArray(data) ? data : [])
       .map(d => ({ ts: Number((d as any).ts ?? 0), score: Number((d as any).score ?? 0) }))
-      .filter(d => Number.isFinite(d.ts) && d.ts > 0 && Number.isFinite(d.score));
-    return cleaned.slice(-30);
+      .filter(d => Number.isFinite(d.ts) && d.ts > 0 && Number.isFinite(d.score))
+      .sort((a, b) => a.ts - b.ts);
+    return cleaned.slice(-24);
   }, [data]);
 
-  const scores = useMemo(() => normalized.map(d => d.score), [normalized]);
-  const max = useMemo(() => Math.max(1, ...scores, 1), [scores]);
-  const range = useMemo(() => max + Math.max(1, Math.ceil(max * 0.2)), [max]);
-
-  // Render area constants
   const W = 320;
-  const H = 140;
-  const padX = 10;
-  const padY = 12;
-
-  const coords = useMemo(() => {
-    if (normalized.length === 0) return [] as Array<{ x: number; y: number; ts: number; v: number }>;
+  const H = 148;
+  const padX = 18;
+  const padY = 18;
+  const max = Math.max(1, ...normalized.map(d => d.score));
+  const coords = normalized.map((d, i) => {
     const n = normalized.length;
-    const dx = n <= 1 ? 0 : (W - padX * 2) / (n - 1);
-    return normalized.map((d, i) => {
-      const x = n === 1 ? W / 2 : padX + dx * i;
-      const norm = clamp01(d.score / range);
-      const y = padY + (1 - norm) * (H - padY * 2);
-      return { x, y, ts: d.ts, v: d.score };
-    });
-  }, [H, W, normalized, range]);
-
-  const bottomY = H - padY;
-
-  const stepSegs = useMemo(() => {
-    const h: Array<{ left: number; top: number; width: number }> = [];
-    const v: Array<{ left: number; top: number; height: number }> = [];
-    if (coords.length === 0) return { h, v };
-
-    // Start from baseline (0) at the left, move to first point x, then rise to its y.
-    const first = coords[0];
-    h.push({ left: padX, top: bottomY - 1, width: Math.max(1, first.x - padX) });
-    v.push({ left: first.x - 1, top: Math.min(first.y, bottomY), height: Math.max(1, bottomY - first.y) });
-
-    // Then step through points: horizontal at previous y, then vertical to next y.
-    for (let i = 1; i < coords.length; i += 1) {
-      const prev = coords[i - 1];
-      const cur = coords[i];
-      h.push({ left: prev.x, top: prev.y - 1, width: Math.max(1, cur.x - prev.x) });
-      const top = Math.min(prev.y, cur.y);
-      const height = Math.abs(cur.y - prev.y);
-      v.push({ left: cur.x - 1, top, height: Math.max(1, height) });
-    }
-
-    // Flat line to the right edge at last y.
-    const last = coords[coords.length - 1];
-    h.push({ left: last.x, top: last.y - 1, width: Math.max(1, W - padX - last.x) });
-
-    return { h, v };
-  }, [W, bottomY, coords, padX]);
-
-  const lastLabel = coords[coords.length - 1] ?? null;
-  const firstLabel = coords[0] ?? null;
-  const isSingle = coords.length === 1;
-
-  const BADGE_W = 28;
-  const BADGE_H = 18;
-  const LABEL_H = 26;
+    const x = n === 1 ? W / 2 : padX + ((W - padX * 2) * i) / (n - 1);
+    const y = padY + (1 - clamp01(d.score / max)) * (H - padY * 2);
+    return { x, y, ts: d.ts, v: d.score };
+  });
+  const segments = coords.slice(1).map((cur, i) => {
+    const prev = coords[i];
+    const dx = cur.x - prev.x;
+    const dy = cur.y - prev.y;
+    const length = Math.max(1, Math.hypot(dx, dy));
+    return {
+      left: (prev.x + cur.x) / 2 - length / 2,
+      top: (prev.y + cur.y) / 2 - 1.5,
+      width: length,
+      angle: `${Math.atan2(dy, dx)}rad`,
+    };
+  });
+  const first = coords[0];
+  const last = coords[coords.length - 1];
 
   return (
-    <View style={{ width: W, height: H + LABEL_H }}>
-      <View style={[styles.chart, { width: W, height: H, position: 'absolute', left: 0, top: 0 }]}>
-        <View style={styles.chartGrid} />
-        <View style={[styles.chartGrid, { top: '33%' }]} />
-        <View style={[styles.chartGrid, { top: '66%' }]} />
-
-        {stepSegs.h.map((s, idx) => (
-          <View key={`h_${idx}`} style={[styles.hLine, { left: s.left, top: s.top, width: s.width }]} />
+    <View style={{ width: W }}>
+      <View style={[styles.chart, { width: W, height: H }]}>
+        <View style={[styles.chartGrid, { top: padY }]} />
+        <View style={[styles.chartGrid, { top: H / 2 }]} />
+        <View style={[styles.chartGrid, { top: H - padY }]} />
+        <Text style={[styles.axisScore, { top: padY - 8 }]}>{max}</Text>
+        <Text style={[styles.axisScore, { top: H - padY - 8 }]}>0</Text>
+        {segments.map((segment, idx) => (
+          <View
+            key={`seg_${idx}`}
+            style={[
+              styles.trendLine,
+              {
+                left: segment.left,
+                top: segment.top,
+                width: segment.width,
+                transform: [{ rotate: segment.angle }],
+              },
+            ]}
+          />
         ))}
-        {stepSegs.v.map((s, idx) => (
-          <View key={`v_${idx}`} style={[styles.vLine, { left: s.left, top: s.top, height: s.height }]} />
-        ))}
-
-        {coords.map((p, idx) => (
-          <View key={`pt_${idx}`}>
-            <View style={[styles.dot, { left: p.x - 4, top: p.y - 4 }]} />
-            <View
-              style={[
-                styles.pointBadge,
-                {
-                  left: Math.min(W - BADGE_W - 2, Math.max(2, p.x - BADGE_W / 2)),
-                  top: Math.min(H - BADGE_H - 2, Math.max(2, p.y - BADGE_H - 8)),
-                },
-              ]}
-            >
-              <Text style={styles.pointBadgeText}>{p.v}</Text>
-            </View>
-          </View>
-        ))}
+        {last ? <View style={[styles.dot, { left: last.x - 5, top: last.y - 5 }]} /> : null}
       </View>
-
-      {coords.map((p, idx) => (
-        <Text
-          key={`xl_${idx}`}
-          style={[
-            styles.pointTimeLabel,
-            {
-              left: Math.min(W - 60, Math.max(0, p.x - 30)),
-              top: H + 2,
-              width: 60,
-            },
-          ]}
-          numberOfLines={2}
-        >
-          {fmtDate(p.ts)}
-          {'\n'}
-          {fmtTime(p.ts)}
-        </Text>
-      ))}
+      <View style={styles.trendFooter}>
+        <Text style={styles.meta}>{first ? fmtDate(first.ts) : ''}</Text>
+        <Text style={styles.trendLatest}>{last ? `Latest ${last.v}` : ''}</Text>
+        <Text style={styles.meta}>{last && last !== first ? fmtDate(last.ts) : ''}</Text>
+      </View>
     </View>
   );
 }
@@ -171,6 +114,12 @@ function GoalBar({ label, value01, meta }: { label: string; value01: number; met
 
 export function ProgressScreen() {
   const nav = useNavigation<any>();
+  const route = useRoute<any>();
+  const scrollRef = useRef<ScrollViewInstance>(null);
+  const scrollY = useRef(0);
+  const proofSectionY = useRef(0);
+  const didFocusProofs = useRef(false);
+  const holdScroll = useRef(false);
   const { state } = useAuth();
 
   const [goals, setGoals] = useState<Goal[]>([]);
@@ -192,7 +141,7 @@ export function ProgressScreen() {
     setLoading(true);
     try {
       const [goalsResp, dash, fm, proofResp] = await Promise.all([
-        authApi.listGoals(token, { includeDeleted: true }),
+        authApi.listGoals(token, { includeDeleted: true, includeFailed: true }),
         authApi.getDashboard(token),
         getFailedGoalsMap(),
         authApi.listMySmartGoalProofAttempts(token),
@@ -220,6 +169,23 @@ export function ProgressScreen() {
       setLoading(false);
     }
   }, [state.accessToken]);
+
+  const scrollToProofsOnce = useCallback(() => {
+    if (!route.params?.focusProofs || didFocusProofs.current || proofSectionY.current <= 0) return;
+    didFocusProofs.current = true;
+    scrollRef.current?.scrollTo({ y: Math.max(0, proofSectionY.current - 8), animated: false });
+  }, [route.params?.focusProofs]);
+
+  const keepScrollPlace = useCallback(() => {
+    const y = scrollY.current;
+    holdScroll.current = true;
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({ y, animated: false });
+    });
+    setTimeout(() => {
+      scrollRef.current?.scrollTo({ y, animated: false });
+    }, 60);
+  }, []);
 
   const openProof = useCallback(
     async (attempt: { id: string; goalId: string }) => {
@@ -283,25 +249,73 @@ export function ProgressScreen() {
     }, [refresh])
   );
 
-  const counts = useMemo(() => {
-    const total = goals.filter(g => !g.deletedAt).length;
-    const completed = goals.filter(g => g.completed).length;
-    const failed = goals.filter(g => {
-      if (g.completed) return false;
-      if (g.failedAt) return true;
-      const reason = failedMap[g.id];
-      if (reason) return true;
-      if (!g.dueAt) return false;
-      const t = new Date(g.dueAt).getTime();
-      return Number.isFinite(t) && t > 0 && t < Date.now();
-    }).length;
-    const active = total - completed - failed;
-    return { total, completed, active, failed };
-  }, [failedMap, goals]);
+  function deleteProof(goalId: string, attemptId: string) {
+    const token = state.accessToken;
+    if (!token) return;
+    Alert.alert('Delete proof', 'Remove this uploaded proof from your history?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            try {
+              await authApi.deleteSmartGoalProofAttempt(token, goalId, attemptId);
+              setProofs(prev => prev.filter(item => item.id !== attemptId));
+              keepScrollPlace();
+            } catch (e: any) {
+              toast(String(e?.message ?? 'Failed to delete'));
+            }
+          })();
+        },
+      },
+    ]);
+  }
+
+  function clearGoalProofs(goalId: string, goalName: string) {
+    const token = state.accessToken;
+    if (!token) return;
+    Alert.alert('Clear goal proofs', `Remove every uploaded proof for ${goalName}?`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Clear',
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            try {
+              await authApi.deleteSmartGoalProofsForGoal(token, goalId);
+              setProofs(prev => prev.filter(item => item.goalId !== goalId));
+              keepScrollPlace();
+            } catch (e: any) {
+              toast(String(e?.message ?? 'Failed to clear'));
+            }
+          })();
+        },
+      },
+    ]);
+  }
+
+  const counts = useMemo(() => countVisibleGoals(goals, failedMap), [failedMap, goals]);
 
   return (
     <Screen style={{ padding: 0 }}>
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView
+        ref={scrollRef}
+        contentContainerStyle={styles.content}
+        scrollEventThrottle={16}
+        onScroll={event => {
+          scrollY.current = event.nativeEvent.contentOffset.y;
+        }}
+        onContentSizeChange={() => {
+          if (route.params?.focusProofs && !didFocusProofs.current) {
+            scrollToProofsOnce();
+            return;
+          }
+          if (!holdScroll.current) return;
+          holdScroll.current = false;
+          scrollRef.current?.scrollTo({ y: scrollY.current, animated: false });
+        }}
+      >
         <View style={styles.topRow}>
           <View style={{ flex: 1 }}>
             <Text style={styles.hTitle}>Progress</Text>
@@ -356,14 +370,23 @@ export function ProgressScreen() {
           <Text style={styles.meta}>Failed goals: {counts.failed}</Text>
         </Card>
 
-        <Card>
+        <View
+          onLayout={event => {
+            proofSectionY.current = event.nativeEvent.layout.y;
+            scrollToProofsOnce();
+          }}
+          style={{ gap: 12 }}
+        >
           <View style={styles.cardTitleRow}>
             <Text style={styles.cardTitle}>Proof uploaded</Text>
             <Text style={styles.meta}>{proofsByGoal.length}</Text>
           </View>
-          <View style={{ height: 10 }} />
 
-          {proofsByGoal.length === 0 ? <Text style={styles.meta}>No proofs uploaded yet.</Text> : null}
+          {proofsByGoal.length === 0 ? (
+            <Card>
+              <Text style={styles.meta}>No proofs uploaded yet.</Text>
+            </Card>
+          ) : null}
 
           {proofsByGoal.map(g => {
             const goalName = goalTitleById[g.goalId] ?? 'Goal';
@@ -372,20 +395,26 @@ export function ProgressScreen() {
             const canToggle = g.attempts.length > 1;
 
             return (
-              <View key={g.goalId} style={{ marginTop: 12 }}>
+              <Card key={g.goalId} style={styles.goalProofCard}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-                  <Text style={styles.completedItem} numberOfLines={1}>
+                  <Text style={styles.goalProofTitle} numberOfLines={2}>
                     {goalName}
                   </Text>
-
-                  {canToggle ? (
-                    <Button
-                      title={expanded ? 'Hide' : `Show more (${g.attempts.length - 1})`}
-                      small
-                      onPress={() => setExpandedGoals(prev => ({ ...prev, [g.goalId]: !expanded }))}
-                    />
-                  ) : null}
+                  <Button title="Clear goal" small variant="danger" onPress={() => clearGoalProofs(g.goalId, goalName)} />
                 </View>
+
+                {canToggle ? (
+                  <View style={{ marginTop: 8, alignItems: 'flex-start' }}>
+                    <Button
+                      title={expanded ? 'Show less' : `Show more (${g.attempts.length - 1})`}
+                      small
+                      onPress={() => {
+                        keepScrollPlace();
+                        setExpandedGoals(prev => ({ ...prev, [g.goalId]: !expanded }));
+                      }}
+                    />
+                  </View>
+                ) : null}
 
                 {visible.map(p => {
                   const statusLabel =
@@ -398,7 +427,7 @@ export function ProgressScreen() {
                           : 'Pending upload';
 
                   return (
-                    <View key={p.id} style={{ marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: colors.line }}>
+                    <View key={p.id} style={styles.proofRow}>
                       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
                         <Text style={styles.meta} numberOfLines={1}>
                           Proof: {String(p.id).slice(0, 8)}
@@ -407,21 +436,22 @@ export function ProgressScreen() {
                       </View>
 
                       {p.aiFeedback ? <Text style={styles.meta}>Comment: {p.aiFeedback}</Text> : <Text style={styles.meta}>Comment: —</Text>}
+                      <Text style={styles.meta}>
+                        Verified by: {p.reviewedBy === 'AI' ? 'AI' : p.reviewedBy === 'admin' ? 'Admin' : '—'}
+                      </Text>
 
-                      {p.proofUrl ? (
-                        <View style={{ marginTop: 8, alignItems: 'flex-start' }}>
-                          <Button title="View" small onPress={() => void openProof({ id: p.id, goalId: g.goalId })} />
-                        </View>
-                      ) : (
-                        <Text style={styles.meta}>No video uploaded.</Text>
-                      )}
+                      <View style={{ marginTop: 8, flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+                        {p.proofUrl ? <Button title="View" small onPress={() => void openProof({ id: p.id, goalId: g.goalId })} /> : null}
+                        <Button title="Delete" small variant="danger" onPress={() => deleteProof(g.goalId, p.id)} />
+                      </View>
+                      {p.proofUrl ? null : <Text style={styles.meta}>No video uploaded.</Text>}
                     </View>
                   );
                 })}
-              </View>
+              </Card>
             );
           })}
-        </Card>
+        </View>
       </ScrollView>
     </Screen>
   );
@@ -479,6 +509,23 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '900',
   },
+  goalProofCard: {
+    borderLeftWidth: 4,
+    borderLeftColor: colors.primary,
+    backgroundColor: colors.surface2,
+  },
+  goalProofTitle: {
+    flex: 1,
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  proofRow: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: colors.line,
+  },
   meta: {
     color: colors.muted,
     fontSize: 12,
@@ -499,6 +546,30 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.line,
     backgroundColor: colors.surface2,
+  },
+  trendLine: {
+    position: 'absolute',
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: '#f0c56b',
+  },
+  trendFooter: {
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  trendLatest: {
+    color: colors.text,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  axisScore: {
+    position: 'absolute',
+    left: 4,
+    color: colors.muted,
+    fontSize: 10,
+    fontWeight: '800',
   },
   chartGrid: {
     position: 'absolute',

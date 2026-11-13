@@ -20,6 +20,7 @@ import { classifyCreatedGoal, rewardsForDifficultyScore } from '../goals/classif
 import { acceptAiSuggestion, signAiSuggestion } from '../goals/suggestionToken.js';
 import { GoalLifecycleError, withLockedGoal } from '../goals/goalCriticalSection.js';
 import { mockReviewAccess } from '../goals/mockReviewAccess.js';
+import { proofDecisionNotice } from '../goals/proofDecisionNotice.js';
 import {
   activeGoalFilter,
   approvalShouldComplete,
@@ -318,22 +319,40 @@ function endOfLocalDay(d: Date) {
   return x;
 }
 
-async function createProofDecisionNotification(params: { userId: string; goalId: string; attemptId: string; status: 'APPROVED' | 'REJECTED' }) {
-  const { userId, goalId, attemptId, status } = params;
+async function createProofDecisionNotification(params: {
+  userId: string;
+  goalId: string;
+  attemptId: string;
+  status: 'APPROVED' | 'REJECTED';
+  reviewer: 'admin' | 'AI';
+  reason?: string | null;
+}) {
+  const { userId, goalId, attemptId, status, reviewer, reason } = params;
   const goal = await prismaAny.goal.findFirst({ where: { id: goalId }, select: { id: true, title: true } });
   const goalTitle = String(goal?.title ?? 'Goal');
-  const title = status === 'APPROVED' ? 'Proof approved' : 'Proof rejected';
-  const body = `${goalTitle} was ${status === 'APPROVED' ? 'approved' : 'rejected'}.`;
+  const notice = proofDecisionNotice({ goalTitle, status, reviewer, reason });
   await prismaAny.userNotification.create({
     data: {
       userId,
       type: 'proof_decision',
-      title,
-      body,
-      data: { goalId, goalTitle, attemptId, status },
+      title: notice.title,
+      body: notice.body,
+      data: { goalId, goalTitle, attemptId, status, reviewer: notice.reviewer, reason: notice.reason },
     },
     select: { id: true },
   });
+}
+
+async function deleteStoredProofObjects(keys: Array<string | null | undefined>) {
+  const s3c = getS3ClientOrNull();
+  if (!s3c) return;
+  for (const key of keys) {
+    if (!key) continue;
+    try {
+      await s3c.s3.send(new DeleteObjectCommand({ Bucket: s3c.bucket, Key: key }));
+    } catch {
+    }
+  }
 }
 
 function daysInMonth(year: number, monthIndex0: number) {
@@ -740,9 +759,10 @@ authRouter.get('/admin/proof-attempts', async (req: Request, res: Response) => {
   const allowed = new Set(['PENDING_UPLOAD', 'PENDING_REVIEW', 'APPROVED', 'REJECTED']);
   if (!allowed.has(status)) return res.status(400).json({ error: 'Invalid query' });
 
+  const hiddenIds = status === 'APPROVED' || status === 'REJECTED' ? await readHiddenAdminProofIds() : new Set<string>();
   const attemptsRaw = await prismaAny.smartGoalProofAttempt.findMany({
-    where: { status },
-    orderBy: [{ createdAt: 'desc' }],
+    where: { status, ...(hiddenIds.size > 0 ? { id: { notIn: [...hiddenIds] } } : {}) },
+    orderBy: [{ updatedAt: 'desc' }],
     select: {
       id: true,
       userId: true,
@@ -878,6 +898,7 @@ authRouter.get('/me/proof-attempts', async (req: Request, res: Response) => {
       requirementText: true,
       proofUrl: true,
       aiFeedback: true,
+      reviewedBy: true,
       awardedPoints: true,
       awardedXp: true,
       createdAt: true,
@@ -933,14 +954,21 @@ authRouter.post('/admin/proof-attempts/:attemptId/decision', async (req: Request
   const nextStatus = proofStatusForDecision(decision as 'APPROVE' | 'REJECT');
   const claimedAttempt = await prismaAny.smartGoalProofAttempt.updateMany({
     where: { id: attemptId, status: 'PENDING_REVIEW' },
-    data: { status: nextStatus, aiFeedback: feedback },
+    data: { status: nextStatus, aiFeedback: feedback, reviewedBy: 'admin' },
   });
   if (claimedAttempt.count !== 1) {
     return res.status(400).json({ error: 'Attempt is not pending review' });
   }
 
   try {
-    await createProofDecisionNotification({ userId: attempt.userId, goalId: attempt.goalId, attemptId, status: nextStatus });
+    await createProofDecisionNotification({
+      userId: attempt.userId,
+      goalId: attempt.goalId,
+      attemptId,
+      status: nextStatus,
+      reviewer: 'admin',
+      reason: feedback,
+    });
   } catch {
   }
 
@@ -1023,9 +1051,19 @@ authRouter.post('/admin/proof-attempts/:attemptId/ai-review', async (req: Reques
   }
 
   try {
-    const attempt = await prismaAny.smartGoalProofAttempt.findFirst({ where: { id: attemptId }, select: { id: true, userId: true, goalId: true, status: true } });
+    const attempt = await prismaAny.smartGoalProofAttempt.findFirst({
+      where: { id: attemptId },
+      select: { id: true, userId: true, goalId: true, status: true, aiFeedback: true },
+    });
     if (attempt?.userId && attempt?.goalId && (attempt.status === 'APPROVED' || attempt.status === 'REJECTED')) {
-      await createProofDecisionNotification({ userId: attempt.userId, goalId: attempt.goalId, attemptId, status: attempt.status });
+      await createProofDecisionNotification({
+        userId: attempt.userId,
+        goalId: attempt.goalId,
+        attemptId,
+        status: attempt.status,
+        reviewer: 'AI',
+        reason: attempt.aiFeedback,
+      });
     }
   } catch {
   }
@@ -1162,6 +1200,26 @@ function extractFirstJsonObject(s: string): string {
   return s;
 }
 
+const HIDDEN_ADMIN_PROOF_KEY = 'admin_hidden_proof_attempt_ids';
+
+async function readHiddenAdminProofIds(): Promise<Set<string>> {
+  const raw = await getAppSetting(HIDDEN_ADMIN_PROOF_KEY);
+  if (!raw) return new Set();
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.map(id => String(id)).filter(Boolean));
+  } catch {
+    return new Set();
+  }
+}
+
+async function hideProofFromAdminList(attemptId: string): Promise<void> {
+  const ids = await readHiddenAdminProofIds();
+  ids.add(attemptId);
+  await setAppSetting(HIDDEN_ADMIN_PROOF_KEY, JSON.stringify([...ids]));
+}
+
 async function getAppSetting(key: string): Promise<string | null> {
   const row = await prismaAny.appSetting.findUnique({ where: { key }, select: { value: true } });
   return row?.value ?? null;
@@ -1233,7 +1291,7 @@ async function runAiReviewForAttemptId(attemptId: string): Promise<{ ok: true; s
     const nextStatus = proofStatusForDecision(decision.decision === 'APPROVE' ? 'APPROVE' : 'REJECT');
     const claimedAttempt = await prismaAny.smartGoalProofAttempt.updateMany({
       where: { id: attemptId, status: 'PENDING_REVIEW' },
-      data: { status: nextStatus, aiFeedback: decision.feedback ?? null },
+      data: { status: nextStatus, aiFeedback: decision.feedback ?? null, reviewedBy: 'AI' },
     });
     if (claimedAttempt.count !== 1) return { ok: false, error: 'Attempt is not pending review' };
 
@@ -2025,7 +2083,18 @@ authRouter.post('/goals/:id/proof-attempts/:attemptId/submit', async (req: Reque
         const run = await runAiReviewForAttemptId(attemptId);
         if (run.ok) {
           try {
-            await createProofDecisionNotification({ userId, goalId, attemptId, status: run.status });
+            const reviewed = await prismaAny.smartGoalProofAttempt.findFirst({
+              where: { id: attemptId },
+              select: { aiFeedback: true },
+            });
+            await createProofDecisionNotification({
+              userId,
+              goalId,
+              attemptId,
+              status: run.status,
+              reviewer: 'AI',
+              reason: reviewed?.aiFeedback ?? null,
+            });
           } catch {
           }
           return;
@@ -2068,20 +2137,51 @@ authRouter.delete('/goals/:id/proof-attempts/:attemptId', async (req: Request, r
     select: { id: true, status: true, proofKey: true },
   });
   if (!attempt) return res.status(404).json({ error: 'Not found' });
-  if (attempt.status !== 'PENDING_UPLOAD') {
-    return res.status(400).json({ error: 'Only PENDING_UPLOAD attempts can be deleted' });
-  }
 
-  const s3c = getS3ClientOrNull();
-  if (s3c && attempt.proofKey) {
-    try {
-      await s3c.s3.send(new DeleteObjectCommand({ Bucket: s3c.bucket, Key: attempt.proofKey }));
-    } catch {
-      // ignore
-    }
-  }
-
+  await deleteStoredProofObjects([attempt.proofKey]);
   await prismaAny.smartGoalProofAttempt.delete({ where: { id: attemptId }, select: { id: true } });
+  return res.json({ ok: true });
+});
+
+authRouter.delete('/goals/:id/proof-attempts', async (req: Request, res: Response) => {
+  const token = getAccessTokenFromReq(req);
+  if (!token) return res.status(401).json({ error: 'Missing access token' });
+
+  let userId: string;
+  try {
+    userId = verifyAccessToken(token).sub;
+  } catch {
+    return res.status(401).json({ error: 'Invalid access token' });
+  }
+
+  const goalId = String(req.params.id);
+  const goal = await prismaAny.goal.findFirst({ where: { id: goalId, userId }, select: { id: true } });
+  if (!goal) return res.status(404).json({ error: 'Not found' });
+
+  const attempts = await prismaAny.smartGoalProofAttempt.findMany({
+    where: { userId, goalId },
+    select: { id: true, proofKey: true },
+  });
+  await deleteStoredProofObjects(attempts.map((attempt: { proofKey: string | null }) => attempt.proofKey));
+  await prismaAny.smartGoalProofAttempt.deleteMany({ where: { userId, goalId } });
+  return res.json({ ok: true, deleted: attempts.length });
+});
+
+authRouter.post('/admin/proof-attempts/:attemptId/hide', async (req: Request, res: Response) => {
+  const admin = await requireAdminFromReq(req);
+  if (!admin) return res.status(403).json({ error: 'Forbidden' });
+
+  const attemptId = String(req.params.attemptId);
+  const attempt = await prismaAny.smartGoalProofAttempt.findFirst({
+    where: { id: attemptId },
+    select: { id: true, status: true },
+  });
+  if (!attempt) return res.status(404).json({ error: 'Not found' });
+  if (attempt.status !== 'APPROVED' && attempt.status !== 'REJECTED') {
+    return res.status(400).json({ error: 'Only verified proofs can be hidden' });
+  }
+
+  await hideProofFromAdminList(attemptId);
   return res.json({ ok: true });
 });
 
@@ -2221,7 +2321,7 @@ authRouter.post('/goals/:id/proof-attempts/:attemptId/mock-review', async (req: 
   const nextStatus = proofStatusForDecision(decision as 'APPROVE' | 'REJECT');
   const claimedAttempt = await prismaAny.smartGoalProofAttempt.updateMany({
     where: { id: attemptId, status: 'PENDING_REVIEW' },
-    data: { status: nextStatus, aiFeedback: feedback },
+    data: { status: nextStatus, aiFeedback: feedback, reviewedBy: 'admin' },
   });
   if (claimedAttempt.count !== 1) {
     return res.status(400).json({ error: 'Attempt is not pending review' });

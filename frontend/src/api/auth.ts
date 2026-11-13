@@ -273,6 +273,7 @@ export type SmartGoalProofAttempt = {
   requirementText: string | null;
   proofUrl: string | null;
   aiFeedback: string | null;
+  reviewedBy?: string | null;
   awardedPoints?: number | null;
   awardedXp?: number | null;
   createdAt: string;
@@ -324,6 +325,10 @@ export async function submitSmartGoalProof(
 
 export async function deleteSmartGoalProofAttempt(accessToken: string, goalId: string, attemptId: string): Promise<{ ok: true }> {
   return deleteJsonAuth(`/auth/goals/${goalId}/proof-attempts/${encodeURIComponent(attemptId)}`, accessToken);
+}
+
+export async function deleteSmartGoalProofsForGoal(accessToken: string, goalId: string): Promise<{ ok: true; deleted: number }> {
+  return deleteJsonAuth(`/auth/goals/${goalId}/proof-attempts`, accessToken);
 }
 
 export async function getSmartGoalProofAttempt(
@@ -408,6 +413,10 @@ export async function adminDecideProofAttempt(
   body: { decision: 'APPROVE' | 'REJECT'; feedback?: string | null }
 ): Promise<{ attempt: AdminSmartGoalProofAttempt } | { attempt: any }> {
   return postJsonAuth(`/auth/admin/proof-attempts/${encodeURIComponent(attemptId)}/decision`, body, accessToken);
+}
+
+export async function adminHideProofAttempt(accessToken: string, attemptId: string): Promise<{ ok: true }> {
+  return postJsonAuth(`/auth/admin/proof-attempts/${encodeURIComponent(attemptId)}/hide`, {}, accessToken);
 }
 
 export async function adminAiReviewProofAttempt(

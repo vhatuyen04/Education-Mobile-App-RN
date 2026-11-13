@@ -306,6 +306,12 @@ export function SmartGoalProofScreen() {
           {status === 'REJECTED' ? (
             <Text style={[styles.body, { marginTop: 10 }]}>Verification rejected. Your goal is still active. No XP was awarded.</Text>
           ) : null}
+
+          <View style={{ height: 12 }} />
+          <Button
+            title="View history uploaded proof"
+            onPress={() => nav.navigate('Progress', { focusProofs: true })}
+          />
         </Card>
       </ScrollView>
     </Screen>
