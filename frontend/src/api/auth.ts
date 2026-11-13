@@ -167,6 +167,7 @@ export type AiGoalSuggestion = {
   difficultyReason: string;
   pointsAwarded: number;
   xpAwarded: number;
+  suggestionToken?: string;
   steps: AiGoalStep[];
 };
 
@@ -511,6 +512,7 @@ export async function createGoal(
     difficultyReason?: string;
     pointsAwarded?: number;
     xpAwarded?: number;
+    suggestionToken?: string;
   }
 ): Promise<{ goal: GoalItem }> {
   return postJsonAuth<{ goal: GoalItem }>('/auth/goals', body, accessToken);

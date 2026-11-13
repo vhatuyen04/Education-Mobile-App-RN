@@ -47,6 +47,7 @@ export const CreateGoalSchema = z.object({
   difficultyReason: z.string().min(1).max(1000).optional(),
   pointsAwarded: z.number().int().min(0).max(1000).optional(),
   xpAwarded: z.number().int().min(0).max(100000).optional(),
+  suggestionToken: z.string().min(1).optional(),
 });
 
 export const UpdateGoalSchema = z.object({

@@ -328,6 +328,7 @@ export function AiGoalRecommendationScreen() {
         difficultyReason: (rec.suggestion as any).difficultyReason,
         pointsAwarded: (rec.suggestion as any).pointsAwarded,
         xpAwarded: (rec.suggestion as any).xpAwarded,
+        suggestionToken: rec.suggestion.suggestionToken,
       });
 
       const goalId = created.goal.id;

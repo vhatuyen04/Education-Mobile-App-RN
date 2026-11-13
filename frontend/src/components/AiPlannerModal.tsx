@@ -456,6 +456,10 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
   const [goalField, setGoalField] = useState<'Sport' | 'Academy' | 'Entertainment'>('Academy');
   const [goalDeadline, setGoalDeadline] = useState('');
   const [goalRequirement, setGoalRequirement] = useState('');
+  const [goalDifficultyScore, setGoalDifficultyScore] = useState<number | null>(null);
+  const [goalDifficultyConfidence, setGoalDifficultyConfidence] = useState<number | null>(null);
+  const [goalDifficultyReason, setGoalDifficultyReason] = useState<string | null>(null);
+  const [goalSuggestionToken, setGoalSuggestionToken] = useState<string | null>(null);
   const [goalPointsAwarded, setGoalPointsAwarded] = useState<number | null>(null);
   const [goalXpAwarded, setGoalXpAwarded] = useState<number | null>(null);
   const [steps, setSteps] = useState<PlannerStep[]>([]);
@@ -484,6 +488,10 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
     setGoalField('Academy');
     setGoalDeadline(clearPlan ? '' : deadline);
     setGoalRequirement('');
+    setGoalDifficultyScore(null);
+    setGoalDifficultyConfidence(null);
+    setGoalDifficultyReason(null);
+    setGoalSuggestionToken(null);
     setGoalPointsAwarded(null);
     setGoalXpAwarded(null);
     setSteps([]);
@@ -650,6 +658,10 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
       setGoalField(resp.suggestion.field);
       setGoalDeadline(resp.suggestion.deadline || resolvedDeadline);
       setGoalRequirement(resp.suggestion.requirement || '');
+      setGoalDifficultyScore(typeof resp.suggestion.difficultyScore === 'number' ? resp.suggestion.difficultyScore : null);
+      setGoalDifficultyConfidence(typeof resp.suggestion.difficultyConfidence === 'number' ? resp.suggestion.difficultyConfidence : null);
+      setGoalDifficultyReason(resp.suggestion.difficultyReason || null);
+      setGoalSuggestionToken(resp.suggestion.suggestionToken || null);
       setGoalPointsAwarded(typeof (resp.suggestion as any).pointsAwarded === 'number' ? (resp.suggestion as any).pointsAwarded : null);
       setGoalXpAwarded(typeof (resp.suggestion as any).xpAwarded === 'number' ? (resp.suggestion as any).xpAwarded : null);
       const effectiveDeadline = resp.suggestion.deadline || resolvedDeadline;
@@ -708,8 +720,12 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
         requirement: goalRequirement.trim() ? goalRequirement.trim() : null,
         rankField: goalField,
         dueAt: dueIso,
+        difficultyScore: goalDifficultyScore ?? undefined,
+        difficultyConfidence: goalDifficultyConfidence ?? undefined,
+        difficultyReason: goalDifficultyReason ?? undefined,
         pointsAwarded: goalPointsAwarded ?? undefined,
         xpAwarded: goalXpAwarded ?? undefined,
+        suggestionToken: goalSuggestionToken ?? undefined,
       });
 
       const goalId = created.goal.id;
