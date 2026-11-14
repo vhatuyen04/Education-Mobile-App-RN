@@ -52,3 +52,6 @@ Desktop.ini
 # generated native folders
 /ios
 /android
+
+/AGENTS.md
+docs/

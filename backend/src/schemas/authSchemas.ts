@@ -15,6 +15,10 @@ export const LogoutSchema = z.object({
   refreshToken: z.string().min(1),
 });
 
+export const RefreshSchema = z.object({
+  refreshToken: z.string().min(1),
+});
+
 export const UpdateMeSchema = z.object({
   name: z.string().min(1),
 });
@@ -43,6 +47,7 @@ export const CreateGoalSchema = z.object({
   difficultyReason: z.string().min(1).max(1000).optional(),
   pointsAwarded: z.number().int().min(0).max(1000).optional(),
   xpAwarded: z.number().int().min(0).max(100000).optional(),
+  suggestionToken: z.string().min(1).optional(),
 });
 
 export const UpdateGoalSchema = z.object({
@@ -89,6 +94,7 @@ export const AiGoalSuggestSchema = z.object({
 
 export const CreateGoalStepSchema = z.object({
   text: z.string().min(1),
+  description: z.string().optional().nullable(),
   order: z.coerce.number().int().min(0).optional(),
   dueAt: z.string().datetime().optional().nullable(),
   repeat: z.string().min(1).optional().nullable(),
@@ -98,6 +104,7 @@ export const CreateGoalStepSchema = z.object({
 
 export const UpdateGoalStepSchema = z.object({
   text: z.string().min(1).optional(),
+  description: z.string().optional().nullable(),
   order: z.coerce.number().int().min(0).optional(),
   dueAt: z.string().datetime().optional().nullable(),
   repeat: z.string().min(1).optional().nullable(),

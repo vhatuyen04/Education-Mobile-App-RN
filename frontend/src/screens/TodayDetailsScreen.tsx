@@ -12,6 +12,7 @@ import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
 import { getFailedGoalsMap, type FailedReason } from '../motivation/failedGoals';
+import { autoScheduleRemindersForSignedInUser } from '../notifications/scheduler';
 
 type ItemType = 'event' | 'goal' | 'step';
 
@@ -181,6 +182,7 @@ export function TodayDetailsScreen() {
       toast('Deleted');
       closeConfirm();
       await refresh();
+      void autoScheduleRemindersForSignedInUser({ minIntervalMs: 0 });
     } catch (e: any) {
       toast(String(e?.message ?? 'Delete failed'));
     }
@@ -202,6 +204,7 @@ export function TodayDetailsScreen() {
         done: !item.doneToday,
       });
       await refresh();
+      void autoScheduleRemindersForSignedInUser({ minIntervalMs: 0 });
       toast(!item.doneToday ? 'SmartGoal: Nice work. Step done.' : 'SmartGoal: Step marked as not done.');
     } catch (e: any) {
       toast(String(e?.message ?? 'Failed'));

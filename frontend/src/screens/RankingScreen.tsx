@@ -202,7 +202,7 @@ export function RankingScreen() {
           void refresh();
         }}
         ListEmptyComponent={
-          loading ? null : (
+          loading ? undefined : (
             <View style={styles.content}>
               <Card>
                 <Text style={styles.meta}>No data yet.</Text>

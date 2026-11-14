@@ -10,6 +10,7 @@ import { Button } from '../components/Button';
 import { Pill } from '../components/Pill';
 import { colors } from '../theme/colors';
 import { toast } from '../utils/toast';
+import { autoScheduleRemindersForSignedInUser } from '../notifications/scheduler';
 import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
 
@@ -550,97 +551,8 @@ export function NotificationSettingsScreen() {
   }, []);
 
   const scheduleRuleNotifications = useCallback(async () => {
-    const token = state.accessToken;
-    if (!token) return;
-
-    const ownerUserId = String(state.user?.id ?? '').trim();
-
-    const dash = await authApi.getDashboard(token);
-
-    // (1) Event reminder: schedule all upcoming events today
-    const evMs = compoundToMs(eventBefore);
-    const evAnn = beforeToAnnouncement(eventBefore);
-    const upcomingEvents = (dash.todayEvents ?? [])
-      .filter(e => e && (e as any).startAt)
-      .map(e => ({
-        id: String((e as any).id ?? ''),
-        title: String((e as any).title ?? ''),
-        start: new Date(String((e as any).startAt)),
-      }))
-      .filter(e => e.id && e.title && e.start instanceof Date && !Number.isNaN(e.start.getTime()))
-      .filter(e => e.start.getTime() > Date.now())
-      .sort((a, b) => a.start.getTime() - b.start.getTime())
-      .slice(0, 25);
-
-    if (upcomingEvents.length) {
-      await scheduleManyAt(
-        KEY_EVENT_ID,
-        upcomingEvents.map(ev => {
-          const when = new Date(ev.start.getTime() - evMs);
-          return {
-            when,
-            content: {
-              title: 'Upcoming event',
-              body: `${evAnn}: ${ev.title}`,
-              data: { ownerUserId, kind: 'event', eventId: ev.id, scheduledForMs: when.getTime() },
-            },
-          };
-        })
-      );
-    } else {
-      await cancelAnyIfExists(KEY_EVENT_ID);
-    }
-
-    // (2) Goal reminder (relative to nextGoal.dueAt)
-    if (dash.nextGoal?.dueAt) {
-      const goal = dash.nextGoal;
-      const due = new Date(dash.nextGoal.dueAt);
-      if (!Number.isNaN(due.getTime())) {
-        const ann = beforeToAnnouncement(goalBefore);
-        await scheduleManyAt(KEY_GOAL_DUE_ID, [
-          {
-            when: new Date(due.getTime() - compoundToMs(goalBefore)),
-            content: { title: 'Goal reminder', body: `${ann}: ${goal.title}` },
-          },
-        ]);
-      } else {
-        await cancelAnyIfExists(KEY_GOAL_DUE_ID);
-      }
-    } else {
-      await cancelAnyIfExists(KEY_GOAL_DUE_ID);
-    }
-
-    // (3) Step deadline reminder: 3 hours before the earliest due step (not doneToday)
-    const dueSteps = (dash.todaySteps ?? [])
-      .filter(s => !s.doneToday)
-      .map(s => {
-        const due = s.dueAt
-          ? new Date(String(s.dueAt))
-          : nextOccurrenceFromRepeat({ repeat: s.repeat, repeatDay: s.repeatDay, repeatMonth: s.repeatMonth }) ||
-            new Date(new Date().setHours(23, 59, 59, 999));
-        return { ...s, due };
-      })
-      .filter(s => s.due instanceof Date && !Number.isNaN((s.due as Date).getTime()))
-      .sort((a, b) => (a.due as Date).getTime() - (b.due as Date).getTime());
-
-    const nextStep = dueSteps[0] ?? null;
-    if (nextStep) {
-      const dueMs = (nextStep.due as Date).getTime();
-      const ms = compoundToMs(stepBefore);
-      const ann = beforeToAnnouncement(stepBefore);
-      await scheduleManyAt(KEY_STEP_DUE_ID, [
-        {
-          when: new Date(dueMs - ms),
-          content: {
-            title: 'Deadline soon',
-            body: `${ann}: ${nextStep.text}`,
-          },
-        },
-      ]);
-    } else {
-      await cancelAnyIfExists(KEY_STEP_DUE_ID);
-    }
-  }, [eventBefore, goalBefore, state.accessToken, stepBefore]);
+    await autoScheduleRemindersForSignedInUser({ minIntervalMs: 0 });
+  }, []);
 
   useEffect(() => {
     if (!enabled) return;
@@ -680,6 +592,7 @@ export function NotificationSettingsScreen() {
         } else {
           await save(false);
           await cancelRuleNotifications();
+          await autoScheduleRemindersForSignedInUser({ minIntervalMs: 0 });
           toast('Notifications disabled.');
         }
       } catch (e: any) {

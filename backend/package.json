@@ -33,6 +33,7 @@
     "start": "node dist/server.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:studio": "prisma studio"
+    "prisma:studio": "prisma studio",
+    "test": "tsx --test ./test/authSession.test.ts ./test/refreshGate.test.ts ./test/goalLifecycle.test.ts ./test/goalClassification.test.ts ./test/goalGuards.test.ts ./test/proofDecisionNotice.test.ts ./test/proofApproval.test.ts ./test/customCompletion.test.ts ./test/suggestionUse.test.ts ./test/proofSampling.test.ts ./test/recomputeScores.test.ts"
   }
 }

@@ -10,6 +10,7 @@ import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
 import { getFailedGoalsMap, type FailedReason } from '../motivation/failedGoals';
+import { classifyVisibleGoal, countVisibleGoals } from '../motivation/goalSummary';
 
 type Goal = authApi.GoalItem;
 
@@ -18,12 +19,6 @@ function displayGoalTitle(raw: string) {
   const idx = first.toLowerCase().indexOf('steps:');
   const cleaned = (idx >= 0 ? first.slice(0, idx) : first).trim();
   return cleaned || 'Untitled goal';
-}
-
-function isExpiredDueAt(dueAt: string | null | undefined) {
-  if (!dueAt) return false;
-  const t = new Date(dueAt).getTime();
-  return Number.isFinite(t) && t > 0 && t < Date.now();
 }
 
 export function GoalsDetailsScreen() {
@@ -55,14 +50,7 @@ export function GoalsDetailsScreen() {
     }, [refresh])
   );
 
-  const summary = useMemo(() => {
-    const total = goals.filter(g => !g.deletedAt).length;
-    const completed = goals.filter(g => g.completed).length;
-    const failed = goals.filter(g => g.failedAt).length;
-    const active = total - completed - failed;
-
-    return { total, completed, failed, active };
-  }, [failedMap, goals]);
+  const summary = useMemo(() => countVisibleGoals(goals, failedMap), [failedMap, goals]);
 
   const rows = useMemo(() => {
     const existing = goals.filter(g => !g.deletedAt);
@@ -79,10 +67,12 @@ export function GoalsDetailsScreen() {
   }, [goals]);
 
   function statusForGoal(g: Goal) {
-    if (g.completed) return { label: 'Completed', reason: null as string | null };
-    if (g.failedAt) return { label: 'Failed', reason: g.failedReason === 'GAVE_UP' ? 'Gave up' : 'Expired' };
-    const r = failedMap[g.id] ?? (isExpiredDueAt(g.dueAt) ? 'expired' : null);
-    if (r) return { label: 'Failed', reason: r === 'gave_up' ? 'Gave up' : 'Expired' };
+    const status = classifyVisibleGoal(g, failedMap, g.id);
+    if (status === 'completed') return { label: 'Completed', reason: null as string | null };
+    if (status === 'failed') {
+      const gaveUp = g.failedReason === 'GAVE_UP' || failedMap[g.id] === 'gave_up';
+      return { label: 'Failed', reason: gaveUp ? 'Gave up' : 'Expired' };
+    }
     return { label: 'Active', reason: null as string | null };
   }
 

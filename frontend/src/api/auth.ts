@@ -1,4 +1,6 @@
 import { API_BASE_URL } from '../config/api';
+import { createSessionGate, type SessionSnapshot } from '../auth/refreshGate';
+import { createSessionCoordinator } from '../auth/sessionCoordinator';
 
 export type AuthUser = {
   id: string;
@@ -16,6 +18,65 @@ export type AuthResponse = {
   user: AuthUser;
 } & AuthTokens;
 
+export type { SessionSnapshot };
+
+let persistSession: ((next: SessionSnapshot | null) => Promise<void>) | null = null;
+
+const coordinator = createSessionCoordinator({
+  persist: async next => {
+    await persistSession?.(next);
+  },
+});
+
+export function configureSessionPersistence(persist: (next: SessionSnapshot | null) => Promise<void>) {
+  persistSession = persist;
+}
+
+export function currentSessionGeneration() {
+  return coordinator.currentGeneration();
+}
+
+export function currentRefreshToken() {
+  return coordinator.getSession()?.refreshToken ?? null;
+}
+
+export function adoptSession(next: SessionSnapshot | null, seenGeneration?: number) {
+  return coordinator.adoptSession(next, seenGeneration);
+}
+
+export function subscribeSession(listener: (next: SessionSnapshot | null) => void) {
+  return coordinator.subscribe(listener);
+}
+
+export async function replaceSession(next: SessionSnapshot) {
+  await coordinator.replaceSession(next);
+}
+
+export async function dropSession() {
+  await coordinator.dropSession();
+}
+
+const gate = createSessionGate({
+  getSession: () => coordinator.getSession(),
+  getGeneration: () => coordinator.currentGeneration(),
+  setSession: (next, generation) => coordinator.replaceSession(next, generation),
+  clearSession: () => coordinator.dropSession(),
+  refresh: async refreshToken => {
+    const resp = await postJson<AuthResponse>('/auth/refresh', { refreshToken });
+    return { user: resp.user, accessToken: resp.accessToken, refreshToken: resp.refreshToken };
+  },
+});
+
+async function readBody(res: Response): Promise<any> {
+  const text = await res.text();
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
 async function postJson<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${API_BASE_URL}${path}`, {
     method: 'POST',
@@ -23,8 +84,7 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
 
-  const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
+  const data = await readBody(res);
 
   if (!res.ok) {
     const message = data?.error ?? `Request failed (${res.status})`;
@@ -32,86 +92,45 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   }
 
   return data as T;
+}
+
+async function authorized<T>(
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+  path: string,
+  body: unknown,
+  _accessToken: string
+): Promise<T> {
+  return gate.withAuthRetry(async accessToken => {
+    const res = await fetch(`${API_BASE_URL}${path}`, {
+      method,
+      headers: {
+        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        Authorization: `Bearer ${accessToken}`,
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    const data = await readBody(res);
+    if (!res.ok) {
+      throw new Error(data?.error ?? `Request failed (${res.status})`);
+    }
+    return data as T;
+  });
 }
 
 async function deleteJsonAuth<T>(path: string, accessToken: string): Promise<T> {
-  const res = await fetch(`${API_BASE_URL}${path}`, {
-    method: 'DELETE',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-    },
-  });
-
-  const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
-
-  if (!res.ok) {
-    const message = data?.error ?? `Request failed (${res.status})`;
-    throw new Error(message);
-  }
-
-  return data as T;
+  return authorized<T>('DELETE', path, undefined, accessToken);
 }
 
 async function postJsonAuth<T>(path: string, body: unknown, accessToken: string): Promise<T> {
-  const res = await fetch(`${API_BASE_URL}${path}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify(body),
-  });
-
-  const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
-
-  if (!res.ok) {
-    const message = data?.error ?? `Request failed (${res.status})`;
-    throw new Error(message);
-  }
-
-  return data as T;
+  return authorized<T>('POST', path, body, accessToken);
 }
 
 async function getJsonAuth<T>(path: string, accessToken: string): Promise<T> {
-  const res = await fetch(`${API_BASE_URL}${path}`, {
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-    },
-  });
-
-  const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
-
-  if (!res.ok) {
-    const message = data?.error ?? `Request failed (${res.status})`;
-    throw new Error(message);
-  }
-
-  return data as T;
+  return authorized<T>('GET', path, undefined, accessToken);
 }
 
 async function putJsonAuth<T>(path: string, body: unknown, accessToken: string): Promise<T> {
-  const res = await fetch(`${API_BASE_URL}${path}`, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify(body),
-  });
-
-  const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
-
-  if (!res.ok) {
-    const message = data?.error ?? `Request failed (${res.status})`;
-    throw new Error(message);
-  }
-
-  return data as T;
+  return authorized<T>('PUT', path, body, accessToken);
 }
 
 export async function register(email: string, password: string, name?: string): Promise<AuthResponse> {
@@ -148,6 +167,7 @@ export type AiGoalSuggestion = {
   difficultyReason: string;
   pointsAwarded: number;
   xpAwarded: number;
+  suggestionToken?: string;
   steps: AiGoalStep[];
 };
 
@@ -158,6 +178,7 @@ export type AiGoalStepSchedule =
 
 export type AiGoalStep = {
   text: string;
+  description?: string;
   schedule: AiGoalStepSchedule;
 };
 
@@ -252,6 +273,7 @@ export type SmartGoalProofAttempt = {
   requirementText: string | null;
   proofUrl: string | null;
   aiFeedback: string | null;
+  reviewedBy?: string | null;
   awardedPoints?: number | null;
   awardedXp?: number | null;
   createdAt: string;
@@ -303,6 +325,10 @@ export async function submitSmartGoalProof(
 
 export async function deleteSmartGoalProofAttempt(accessToken: string, goalId: string, attemptId: string): Promise<{ ok: true }> {
   return deleteJsonAuth(`/auth/goals/${goalId}/proof-attempts/${encodeURIComponent(attemptId)}`, accessToken);
+}
+
+export async function deleteSmartGoalProofsForGoal(accessToken: string, goalId: string): Promise<{ ok: true; deleted: number }> {
+  return deleteJsonAuth(`/auth/goals/${goalId}/proof-attempts`, accessToken);
 }
 
 export async function getSmartGoalProofAttempt(
@@ -387,6 +413,10 @@ export async function adminDecideProofAttempt(
   body: { decision: 'APPROVE' | 'REJECT'; feedback?: string | null }
 ): Promise<{ attempt: AdminSmartGoalProofAttempt } | { attempt: any }> {
   return postJsonAuth(`/auth/admin/proof-attempts/${encodeURIComponent(attemptId)}/decision`, body, accessToken);
+}
+
+export async function adminHideProofAttempt(accessToken: string, attemptId: string): Promise<{ ok: true }> {
+  return postJsonAuth(`/auth/admin/proof-attempts/${encodeURIComponent(attemptId)}/hide`, {}, accessToken);
 }
 
 export async function adminAiReviewProofAttempt(
@@ -491,19 +521,10 @@ export async function createGoal(
     difficultyReason?: string;
     pointsAwarded?: number;
     xpAwarded?: number;
+    suggestionToken?: string;
   }
 ): Promise<{ goal: GoalItem }> {
   return postJsonAuth<{ goal: GoalItem }>('/auth/goals', body, accessToken);
-}
-
-export async function recomputeScores(
-  accessToken: string
-): Promise<{ ok: true; sportScore: number; academyScore: number; entertainmentScore: number; score: number }> {
-  return postJsonAuth<{ ok: true; sportScore: number; academyScore: number; entertainmentScore: number; score: number }>(
-    '/auth/recompute-scores',
-    {},
-    accessToken
-  );
 }
 
 export async function createGoalStep(
@@ -511,6 +532,7 @@ export async function createGoalStep(
   goalId: string,
   body: {
     text: string;
+    description?: string | null;
     order?: number;
     dueAt?: string | null;
     repeat?: string | null;
@@ -526,6 +548,7 @@ export type GoalStepItem = {
   id: string;
   goalId: string;
   text: string;
+  description: string | null;
   order: number;
   dueAt: string | null;
   repeat: string | null;
@@ -540,7 +563,7 @@ export async function listGoalSteps(accessToken: string, goalId: string): Promis
 export async function updateGoalStep(
   accessToken: string,
   params: { goalId: string; stepId: string },
-  body: { text?: string; order?: number; dueAt?: string | null; repeat?: string | null; repeatDay?: number | null; repeatMonth?: number | null }
+  body: { text?: string; description?: string | null; order?: number; dueAt?: string | null; repeat?: string | null; repeatDay?: number | null; repeatMonth?: number | null }
 ): Promise<{ step: GoalStepItem }>
 {
   return putJsonAuth<{ step: GoalStepItem }>(

@@ -11,6 +11,7 @@ import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
 import { markAppGoal } from '../motivation/appGoals';
+import { previewRewardsForDeadline } from '../motivation/deadlineDifficulty';
 
 type Props = {
   visible: boolean;
@@ -84,7 +85,11 @@ function isMeaningfulStepText(t: unknown) {
   return /[a-z]/i.test(s);
 }
 
-function sanitizePlannerSteps(input: Array<Step & { schedule?: authApi.AiGoalStepSchedule }>) {
+type PlannerStep = Step & { schedule?: authApi.AiGoalStepSchedule; scheduleText?: string; description?: string };
+
+const SCHEDULE_FORMATS = 'One full value:\ndaily\nweekly:Mon\nmonthly:DD\nyearly:MM-DD\nonce:YYYY-MM-DD';
+
+function sanitizePlannerSteps(input: PlannerStep[]) {
   const out = (Array.isArray(input) ? input : [])
     .map(s => {
       const text = normStepText(s.text);
@@ -112,7 +117,7 @@ function sanitizePlannerSteps(input: Array<Step & { schedule?: authApi.AiGoalSte
 
       return { ...s, text, schedule };
     })
-    .filter(Boolean) as Array<Step & { schedule?: authApi.AiGoalStepSchedule }>;
+    .filter(Boolean) as PlannerStep[];
 
   return out.filter(s => isMeaningfulStepText(s.text));
 }
@@ -454,12 +459,26 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
   const [goalField, setGoalField] = useState<'Sport' | 'Academy' | 'Entertainment'>('Academy');
   const [goalDeadline, setGoalDeadline] = useState('');
   const [goalRequirement, setGoalRequirement] = useState('');
+  const [goalDifficultyScore, setGoalDifficultyScore] = useState<number | null>(null);
+  const [goalDifficultyConfidence, setGoalDifficultyConfidence] = useState<number | null>(null);
+  const [goalDifficultyReason, setGoalDifficultyReason] = useState<string | null>(null);
+  const [goalSuggestionToken, setGoalSuggestionToken] = useState<string | null>(null);
   const [goalPointsAwarded, setGoalPointsAwarded] = useState<number | null>(null);
   const [goalXpAwarded, setGoalXpAwarded] = useState<number | null>(null);
-  const [steps, setSteps] = useState<Array<Step & { schedule?: authApi.AiGoalStepSchedule }>>([]);
+  const [steps, setSteps] = useState<PlannerStep[]>([]);
 
   const displaySteps = useMemo(() => sanitizePlannerSteps(steps), [steps]);
   const stepCount = displaySteps.length;
+  const shownRewards = useMemo(() => {
+    if (typeof goalDifficultyScore !== 'number' || typeof goalPointsAwarded !== 'number' || typeof goalXpAwarded !== 'number') return null;
+    return previewRewardsForDeadline({
+      difficultyScore: goalDifficultyScore,
+      pointsAwarded: goalPointsAwarded,
+      xpAwarded: goalXpAwarded,
+      suggestedDeadline: goalDeadline,
+      chosenDeadline: deadline.trim() || goalDeadline,
+    });
+  }, [deadline, goalDeadline, goalDifficultyScore, goalPointsAwarded, goalXpAwarded]);
 
   const templates = useMemo(
     () => [
@@ -471,12 +490,21 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
     []
   );
 
-  function resetGenerated() {
+  function resetGenerated(clearPlan = false) {
+    if (clearPlan) {
+      setPlanText('');
+      setDeadline('');
+      setIntensity('Normal');
+    }
     setGenerated(false);
     setGoalTitle('');
     setGoalField('Academy');
-    setGoalDeadline(deadline);
+    setGoalDeadline(clearPlan ? '' : deadline);
     setGoalRequirement('');
+    setGoalDifficultyScore(null);
+    setGoalDifficultyConfidence(null);
+    setGoalDifficultyReason(null);
+    setGoalSuggestionToken(null);
     setGoalPointsAwarded(null);
     setGoalXpAwarded(null);
     setSteps([]);
@@ -484,10 +512,9 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
     setDirty(false);
   }
 
-  const closeAndReset = useCallback(() => {
-    resetGenerated();
+  const closeModal = useCallback(() => {
     onClose();
-  }, [onClose, resetGenerated]);
+  }, [onClose]);
 
   async function resolveDeadlineForPlan(override?: string): Promise<string | null> {
     const input = String(override ?? deadline ?? '').trim();
@@ -554,7 +581,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
   }
 
   function addStep() {
-    setSteps(prev => [...prev, { id: makeId(), text: 'New step', schedule: { type: 'none' } }]);
+    setSteps(prev => [...prev, { id: makeId(), text: 'New step', description: '', scheduleText: '', schedule: { type: 'none' } }]);
   }
 
   function removeStep(id: string) {
@@ -641,16 +668,26 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
 
       setGoalTitle(resp.suggestion.title || defaultGoalTitle(planText));
       setGoalField(resp.suggestion.field);
-      setGoalDeadline(resp.suggestion.deadline || resolvedDeadline);
+      const effectiveDeadline = resp.suggestion.deadline || resolvedDeadline;
+      setDeadline(effectiveDeadline);
+      setGoalDeadline(effectiveDeadline);
       setGoalRequirement(resp.suggestion.requirement || '');
+      setGoalDifficultyScore(typeof resp.suggestion.difficultyScore === 'number' ? resp.suggestion.difficultyScore : null);
+      setGoalDifficultyConfidence(typeof resp.suggestion.difficultyConfidence === 'number' ? resp.suggestion.difficultyConfidence : null);
+      setGoalDifficultyReason(resp.suggestion.difficultyReason || null);
+      setGoalSuggestionToken(resp.suggestion.suggestionToken || null);
       setGoalPointsAwarded(typeof (resp.suggestion as any).pointsAwarded === 'number' ? (resp.suggestion as any).pointsAwarded : null);
       setGoalXpAwarded(typeof (resp.suggestion as any).xpAwarded === 'number' ? (resp.suggestion as any).xpAwarded : null);
-      const effectiveDeadline = resp.suggestion.deadline || resolvedDeadline;
-      const mapped = resp.suggestion.steps.map(s => ({
-        id: makeId(),
-        text: s.text,
-        schedule: normalizeAiStepSchedule(s.schedule, effectiveDeadline),
-      }));
+      const mapped = resp.suggestion.steps.map(s => {
+        const schedule = normalizeAiStepSchedule(s.schedule, effectiveDeadline);
+        return {
+          id: makeId(),
+          text: s.text,
+          description: String(s.description ?? '').trim(),
+          schedule,
+          scheduleText: scheduleToShortText(schedule),
+        };
+      });
       const sanitized = sanitizePlannerSteps(mapped);
       setSteps(sanitized);
       setGenerated(true);
@@ -685,7 +722,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
     if (loading) return;
     setLoading(true);
     try {
-      const resolvedDeadline = await resolveDeadlineForPlan(goalDeadline || deadline);
+      const resolvedDeadline = await resolveDeadlineForPlan(deadline.trim() || goalDeadline);
       if (!resolvedDeadline) return;
 
       const dueIso = parseDeadlineToISOEndOfDay(resolvedDeadline, { mustBeFuture: true });
@@ -700,8 +737,12 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
         requirement: goalRequirement.trim() ? goalRequirement.trim() : null,
         rankField: goalField,
         dueAt: dueIso,
+        difficultyScore: goalDifficultyScore ?? undefined,
+        difficultyConfidence: goalDifficultyConfidence ?? undefined,
+        difficultyReason: goalDifficultyReason ?? undefined,
         pointsAwarded: goalPointsAwarded ?? undefined,
         xpAwarded: goalXpAwarded ?? undefined,
+        suggestionToken: goalSuggestionToken ?? undefined,
       });
 
       const goalId = created.goal.id;
@@ -713,7 +754,8 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
 
       for (const { s, idx, text } of allSteps) {
         const schedule = (s.schedule ?? { type: 'none' }) as authApi.AiGoalStepSchedule;
-        const body: any = { text, order: idx };
+        const description = String(s.description ?? '').trim();
+        const body: any = { text, order: idx, description: description || null };
 
         if (schedule.type === 'once') {
           const d = parseYmd(schedule.due);
@@ -732,7 +774,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
 
       toast('Saved');
       onSaved?.();
-      resetGenerated();
+      resetGenerated(true);
       onClose();
     } catch (e: any) {
       toast(String(e?.message ?? 'Save failed'));
@@ -742,14 +784,14 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
   }
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={closeAndReset}>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={closeModal}>
       <View style={styles.backdrop}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={closeAndReset} />
+        <Pressable style={StyleSheet.absoluteFill} onPress={closeModal} />
 
         <View style={styles.sheet}>
           <View style={styles.sheetHead}>
             <Text style={styles.sheetTitle}>SmartGoal Planner</Text>
-            <Pressable onPress={closeAndReset} hitSlop={10}>
+            <Pressable onPress={closeModal} hitSlop={10}>
               <Text style={styles.close}>✕</Text>
             </Pressable>
           </View>
@@ -760,6 +802,9 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
             keyboardShouldPersistTaps="handled"
           >
             <Text style={styles.mutedSmall}>Describe your plan. SmartGoal will suggest 1 goal and a checklist. Requirement is determined completely by the SmartGoal app.</Text>
+            <Text style={[styles.mutedSmall, { marginTop: 8 }]}>
+              Write in English. Use a number for time: in 3 weeks, for 10 days, within 2 months, or by 2027-01-01. Words such as “a week” are not read. The Deadline field uses YYYY-MM-DD.
+            </Text>
 
             <View style={styles.field}>
               <Text style={styles.label}>Your plan</Text>
@@ -823,6 +868,8 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
 
             <View style={{ height: 10 }} />
             <Button title={generated ? 'Regenerate' : 'Generate suggestions'} variant="primary" full onPress={generate} />
+            <View style={{ height: 8 }} />
+            <Button title="Clear" full onPress={() => resetGenerated(true)} />
 
             {loading ? <Text style={[styles.mutedSmall, { marginTop: 10 }]}>Thinking…</Text> : null}
 
@@ -867,9 +914,9 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
 
                   <View style={{ flexDirection: 'row', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
                     <Pill>Field: {goalField}</Pill>
-                    <Pill>Deadline: {goalDeadline || deadline || '—'}</Pill>
-                    {typeof goalPointsAwarded === 'number' ? <Pill>Points: {goalPointsAwarded}</Pill> : null}
-                    {typeof goalXpAwarded === 'number' ? <Pill>XP: {goalXpAwarded}</Pill> : null}
+                    <Pill>Deadline: {deadline.trim() || goalDeadline || '—'}</Pill>
+                    {shownRewards ? <Pill>Points: {shownRewards.pointsAwarded}</Pill> : null}
+                    {shownRewards ? <Pill>XP: {shownRewards.xpAwarded}</Pill> : null}
                   </View>
                 </Card>
 
@@ -883,30 +930,52 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
                     <View style={{ gap: 10 }}>
                       {displaySteps.map((s, idx) => (
                         <View key={s.id} style={styles.stepItemRow}>
-                          <Text style={styles.stepNum}>{idx + 1}.</Text>
-                          <View style={styles.stepTextCol}>
-                            <Text style={styles.stepItemText}>{s.text}</Text>
+                          <View style={styles.stepHead}>
+                            <Text style={styles.stepLabel}>Step {idx + 1}</Text>
+                            <Pressable onPress={() => removeStep(s.id)} hitSlop={10} style={styles.stepRemove}>
+                              <Text style={styles.stepRemoveText}>🗑</Text>
+                            </Pressable>
                           </View>
-                          <View style={styles.stepScheduleCol}>
-                            <TextInput
-                              value={scheduleToShortText(s.schedule)}
-                              onChangeText={t => {
-                                setSteps(prev =>
-                                  prev.map(p => {
-                                    if (p.id !== s.id) return p;
-                                    return { ...p, schedule: parseScheduleShortText(t) };
-                                  })
-                                );
-                              }}
-                              placeholder="daily | weekly:Mon | monthly:15 | yearly:01-15 | once:2027-01-01"
-                              placeholderTextColor={colors.muted}
-                              style={[styles.input, styles.stepScheduleInput]}
-                            />
-                            <Text style={styles.mutedSmall}>Optional. Leave empty to ignore.</Text>
-                          </View>
-                          <Pressable onPress={() => removeStep(s.id)} hitSlop={10} style={styles.stepRemove}>
-                            <Text style={styles.stepRemoveText}>🗑</Text>
-                          </Pressable>
+                          <Text style={styles.stepLabel}>Title</Text>
+                          <TextInput
+                            value={s.text}
+                            onChangeText={t => {
+                              setSteps(prev => prev.map(p => (p.id === s.id ? { ...p, text: t } : p)));
+                            }}
+                            placeholder="What will you do?"
+                            placeholderTextColor={colors.muted}
+                            multiline
+                            style={styles.input}
+                          />
+                          <Text style={styles.stepLabel}>Description</Text>
+                          <TextInput
+                            value={s.description ?? ''}
+                            onChangeText={t => {
+                              setSteps(prev => prev.map(p => (p.id === s.id ? { ...p, description: t } : p)));
+                            }}
+                            placeholder="Optional detail"
+                            placeholderTextColor={colors.muted}
+                            multiline
+                            style={styles.input}
+                          />
+                          <Text style={styles.stepLabel}>Schedule</Text>
+                          <TextInput
+                            value={s.scheduleText ?? scheduleToShortText(s.schedule)}
+                            onChangeText={t => {
+                              setSteps(prev =>
+                                prev.map(p => {
+                                  if (p.id !== s.id) return p;
+                                  return { ...p, scheduleText: t, schedule: parseScheduleShortText(t) };
+                                })
+                              );
+                            }}
+                            placeholder="once:YYYY-MM-DD"
+                            placeholderTextColor={colors.muted}
+                            autoCapitalize="none"
+                            autoCorrect={false}
+                            style={styles.input}
+                          />
+                          <Text style={styles.mutedSmall}>{SCHEDULE_FORMATS}</Text>
                         </View>
                       ))}
                     </View>
@@ -1103,14 +1172,17 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   stepItemRow: {
-    flexDirection: 'row',
-    gap: 8,
-    alignItems: 'flex-start',
+    gap: 6,
     borderWidth: 1,
     borderColor: colors.line,
     backgroundColor: colors.surface2,
     padding: 10,
     borderRadius: 14,
+  },
+  stepHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   stepNum: {
     color: colors.muted,

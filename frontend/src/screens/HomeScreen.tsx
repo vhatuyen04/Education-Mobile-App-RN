@@ -1,7 +1,6 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { Screen } from '../components/Screen';
 import { Card } from '../components/Card';
@@ -16,11 +15,12 @@ import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
 import type { RootStackParamList } from '../navigation/types';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { appendInbox, clearInbox, getInbox, pruneAiRecoInboxItems, removeInboxItem } from '../notifications/inbox';
+import { appendInbox, clearInbox, countUnseenInbox, getInbox, markBellSeen, pruneAiRecoInboxItems, removeInboxItem, subscribeInboxChanged } from '../notifications/inbox';
+import { syncServerNotifications } from '../notifications/serverSync';
 import * as Notifications from 'expo-notifications';
 import { listRecommendations, upsertRecommendation } from '../ai/recommendations';
 import { getFailedGoalsMap, type FailedReason } from '../motivation/failedGoals';
-import { autoScheduleRemindersFromDashboard } from '../notifications/scheduler';
+import { autoScheduleRemindersForSignedInUser } from '../notifications/scheduler';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -31,7 +31,16 @@ export function HomeScreen() {
 
   const [notifOpen, setNotifOpen] = useState(false);
   const [notifLoading, setNotifLoading] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const notifOpenRef = useRef(false);
   const [notifItems, setNotifItems] = useState<Array<{ id: string; title: string; body: string; receivedAt: number; data?: any }>>([]);
+
+  const refreshUnseen = useCallback(async () => {
+    if (notifOpenRef.current) return;
+    const n = await countUnseenInbox();
+    if (notifOpenRef.current) return;
+    setUnreadCount(n);
+  }, []);
 
   const loadInbox = useCallback(async () => {
     setNotifLoading(true);
@@ -41,33 +50,7 @@ export function HomeScreen() {
 
       const token = state.accessToken;
       if (token) {
-        try {
-          const userId = String(state.user?.id ?? '');
-          const key = `notif_last_sync_v1_${userId || 'anon'}`;
-          const raw = await AsyncStorage.getItem(key);
-          const sinceMs = raw ? Number(raw) : null;
-          const resp = await authApi.listMyNotifications(token, {
-            sinceMs: sinceMs && Number.isFinite(sinceMs) && sinceMs > 0 ? sinceMs : undefined,
-          });
-          const list = resp.notifications ?? [];
-          for (const n of list) {
-            const receivedAt = n.createdAt ? new Date(n.createdAt).getTime() : Date.now();
-            const titleRaw = String(n.title ?? '').trim();
-            const bodyRaw = String(n.body ?? '').trim();
-            if (!titleRaw && !bodyRaw) continue;
-            if (titleRaw === 'Notification' && !bodyRaw) continue;
-            await appendInbox({
-              id: `srv_${n.id}`,
-              receivedAt,
-              title: titleRaw || 'Reminder',
-              body: bodyRaw,
-              data: n.data ?? null,
-            });
-          }
-          await AsyncStorage.setItem(key, String(Date.now()));
-        } catch (e: any) {
-          toast(String(e?.message ?? 'Failed to sync notifications'));
-        }
+        await syncServerNotifications(token, String(state.user?.id ?? ''));
       }
 
       try {
@@ -78,6 +61,7 @@ export function HomeScreen() {
           const bodyRaw = String((p as any)?.request?.content?.body ?? (p as any)?.content?.body ?? '').trim();
           const data = ((p as any)?.request?.content?.data ?? (p as any)?.content?.data ?? null) as any;
           if (!id) continue;
+          if (data?.serverSync) continue;
           if (!titleRaw && !bodyRaw) continue;
           if (titleRaw === 'Notification' && !bodyRaw) continue;
 
@@ -133,7 +117,7 @@ export function HomeScreen() {
       setDash(resp);
       setFailedMap(fm);
 
-      void autoScheduleRemindersFromDashboard(resp);
+      void autoScheduleRemindersForSignedInUser({ minIntervalMs: 0 });
     } catch (e: any) {
       toast(String(e?.message ?? 'Failed to load'));
     } finally {
@@ -243,8 +227,15 @@ export function HomeScreen() {
   useFocusEffect(
     useCallback(() => {
       void refresh();
-    }, [refresh])
+      void refreshUnseen();
+    }, [refresh, refreshUnseen])
   );
+
+  useEffect(() => {
+    return subscribeInboxChanged(() => {
+      void refreshUnseen();
+    });
+  }, [refreshUnseen]);
 
   const score = dash?.score ?? 0;
   const tasksPlanned = dash?.tasksPlanned ?? 0;
@@ -384,12 +375,23 @@ export function HomeScreen() {
 
           <Pressable
             onPress={() => {
+              notifOpenRef.current = true;
+              setUnreadCount(0);
               setNotifOpen(true);
-              void loadInbox();
+              void (async () => {
+                await loadInbox();
+                await markBellSeen();
+                setUnreadCount(0);
+              })();
             }}
             style={({ pressed }) => [styles.iconBtn, pressed ? { opacity: 0.85 } : null]}
           >
             <Text style={styles.iconText}>🔔</Text>
+            {unreadCount > 0 ? (
+              <View style={styles.bellBadge}>
+                <Text style={styles.bellBadgeText}>{unreadCount > 99 ? '99+' : String(unreadCount)}</Text>
+              </View>
+            ) : null}
           </Pressable>
         </View>
 
@@ -536,7 +538,16 @@ export function HomeScreen() {
 
       <AiPlannerModal visible={aiOpen} onClose={() => setAiOpen(false)} onSaved={refresh} />
 
-      <Modal visible={notifOpen} animationType="slide" transparent onRequestClose={() => setNotifOpen(false)}>
+      <Modal
+        visible={notifOpen}
+        animationType="slide"
+        transparent
+        onRequestClose={() => {
+          notifOpenRef.current = false;
+          setNotifOpen(false);
+          void refreshUnseen();
+        }}
+      >
         <View style={styles.notifOverlay}>
           <View style={styles.notifModal}>
             <View style={styles.notifHeader}>
@@ -551,7 +562,15 @@ export function HomeScreen() {
                     setNotifItems([]);
                   }}
                 />
-                <Button title="Close" small onPress={() => setNotifOpen(false)} />
+                <Button
+                  title="Close"
+                  small
+                  onPress={() => {
+                    notifOpenRef.current = false;
+                    setNotifOpen(false);
+                    void refreshUnseen();
+                  }}
+                />
               </View>
             </View>
 
@@ -564,6 +583,7 @@ export function HomeScreen() {
                   onPress={() => {
                     const d: any = n.data;
                     if (d?.type === 'ai_goal_reco' && d?.recoId) {
+                      notifOpenRef.current = false;
                       setNotifOpen(false);
                       (nav as any).navigate('AiGoalRecommendation', { id: String(d.recoId) });
                     }
@@ -637,17 +657,33 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   iconBtn: {
-    width: 40,
-    height: 40,
+    minWidth: 40,
+    minHeight: 40,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
     borderRadius: 14,
     borderWidth: 1,
     borderColor: colors.line,
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
+    justifyContent: 'center',
   },
   iconText: {
     fontSize: 22,
+  },
+  bellBadge: {
+    marginTop: 2,
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 5,
+    borderRadius: 9,
+    backgroundColor: colors.danger,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bellBadgeText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '900',
   },
   cardTitleRow: {
     flexDirection: 'row',

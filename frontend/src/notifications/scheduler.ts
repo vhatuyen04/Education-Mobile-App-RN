@@ -4,6 +4,7 @@ import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 
 import * as authApi from '../api/auth';
+import { appendInbox, rememberUnseen, getInbox } from './inbox';
 
 type CompoundBefore = { days?: number; hours?: number; minutes?: number };
 
@@ -16,6 +17,7 @@ const KEY_EVENT_ID = 'notif_event_id';
 const KEY_GOAL_DUE_ID = 'notif_goal_due_id';
 const KEY_STEP_DUE_ID = 'notif_step_due_id';
 const KEY_LAST_AUTO_SCHEDULE_MS = 'notif_last_auto_schedule_ms_v1';
+const KEY_PENDING = 'notif_pending_reminders_v1';
 
 const DEFAULT_EVENT_BEFORE: CompoundBefore = { minutes: 30 };
 const DEFAULT_GOAL_BEFORE: CompoundBefore = { days: 1 };
@@ -25,7 +27,7 @@ function clampBefore(v: CompoundBefore): CompoundBefore {
   const days = Math.max(0, Math.floor(Number(v?.days ?? 0)));
   const hours = Math.max(0, Math.floor(Number(v?.hours ?? 0)));
   const minutes = Math.max(0, Math.floor(Number(v?.minutes ?? 0)));
-  if (!days && !hours && !minutes) return { minutes: 1 };
+  if (!days && !hours && !minutes) return { minutes: 0 };
   return { ...(days ? { days } : null), ...(hours ? { hours } : null), ...(minutes ? { minutes } : null) } as any;
 }
 
@@ -38,7 +40,8 @@ function beforeToAnnouncement(v: CompoundBefore) {
   const x = clampBefore(v);
   if (x.days) return `${x.days} day${x.days === 1 ? '' : 's'} before`;
   if (x.hours) return `${x.hours} hour${x.hours === 1 ? '' : 's'} before`;
-  return `${x.minutes ?? 0} minute${(x.minutes ?? 0) === 1 ? '' : 's'} before`;
+  if (x.minutes) return `${x.minutes} minute${x.minutes === 1 ? '' : 's'} before`;
+  return 'At the scheduled time';
 }
 
 async function cancelAnyIfExists(key: string) {
@@ -72,54 +75,105 @@ async function cancelAnyIfExists(key: string) {
   await AsyncStorage.removeItem(key);
 }
 
-async function scheduleAt(key: string, when: Date, content: Notifications.NotificationContentInput) {
-  await cancelAnyIfExists(key);
-  const t = when.getTime();
-  if (!Number.isFinite(t)) return;
-  const nowMs = Date.now();
-  const minTs = nowMs + 5_000;
-  const safeWhen = t < minTs ? new Date(minTs) : when;
-  const nextContent: Notifications.NotificationContentInput = {
-    ...(content as any),
+type PendingReminder = {
+  id: string;
+  fireAt: number;
+  title: string;
+  body: string;
+  data: Record<string, any>;
+  osId?: string | null;
+};
+
+const HORIZON_MS = 21 * 24 * 60 * 60 * 1000;
+const LOOKBACK_MS = 12 * 60 * 60 * 1000;
+
+function reminderContent(item: PendingReminder): Notifications.NotificationContentInput {
+  return {
+    title: item.title,
+    body: item.body,
+    data: item.data,
     ...(Platform.OS === 'android' ? { channelId: 'default' } : null),
-  } as any;
-  const id = await Notifications.scheduleNotificationAsync({
-    content: nextContent,
-    trigger: { type: 'date', date: safeWhen } as any,
-  });
-  await AsyncStorage.setItem(key, id);
+  } as Notifications.NotificationContentInput;
 }
 
-async function scheduleManyAt(
-  key: string,
-  items: Array<{ when: Date; content: Notifications.NotificationContentInput }>
-) {
-  const nowMs = Date.now();
-  const minTs = nowMs + 5_000;
-  const valid = items
-    .filter(x => x.when instanceof Date && !Number.isNaN(x.when.getTime()))
-    .map(x => ({ ...x, when: x.when.getTime() < minTs ? new Date(minTs) : x.when }));
-
-  await cancelAnyIfExists(key);
-
-  if (!valid.length) {
-    await AsyncStorage.removeItem(key);
-    return;
+async function readPending(): Promise<PendingReminder[]> {
+  try {
+    const raw = await AsyncStorage.getItem(KEY_PENDING);
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item: any) => item && typeof item.id === 'string' && Number.isFinite(Number(item.fireAt)));
+  } catch {
+    return [];
   }
+}
 
-  const ids: string[] = [];
-  for (const it of valid) {
-    const nextContent: Notifications.NotificationContentInput = {
-      ...(it.content as any),
-      ...(Platform.OS === 'android' ? { channelId: 'default' } : null),
-    } as any;
-    const id = await Notifications.scheduleNotificationAsync({
-      content: nextContent,
-      trigger: { type: 'date', date: it.when } as any,
+async function writePending(items: PendingReminder[]) {
+  await AsyncStorage.setItem(KEY_PENDING, JSON.stringify(items));
+}
+
+async function ensureAndroidChannel() {
+  if (Platform.OS !== 'android') return;
+  try {
+    await Notifications.setNotificationChannelAsync('default', {
+      name: 'Default',
+      importance: Notifications.AndroidImportance.HIGH,
+      vibrationPattern: [0, 250, 250, 250],
     });
-    ids.push(id);
+  } catch {
   }
-  await AsyncStorage.setItem(key, JSON.stringify(ids));
+}
+
+async function notificationPermissionGranted() {
+  try {
+    let perm = await Notifications.getPermissionsAsync();
+    if (!perm.granted && perm.canAskAgain) perm = await Notifications.requestPermissionsAsync();
+    return !!perm.granted;
+  } catch {
+    return false;
+  }
+}
+
+export async function flushDueReminders() {
+  const now = Date.now();
+  const pending = await readPending();
+  if (!pending.length) return;
+  const inbox = await getInbox();
+  const seen = new Set(inbox.map(item => item.id));
+
+  const keep: PendingReminder[] = [];
+  for (const item of pending) {
+    if (item.fireAt > now) {
+      keep.push(item);
+      continue;
+    }
+    if (item.fireAt < now - LOOKBACK_MS) {
+      if (item.osId) {
+        try {
+          await Notifications.cancelScheduledNotificationAsync(item.osId);
+        } catch {
+        }
+      }
+      continue;
+    }
+    if (!seen.has(item.id)) {
+      const inserted = await appendInbox({
+        id: item.id,
+        receivedAt: item.fireAt,
+        title: item.title,
+        body: item.body,
+        data: item.data,
+      });
+      if (inserted) await rememberUnseen(item.id);
+      seen.add(item.id);
+    }
+    if (item.osId) {
+      try {
+        await Notifications.cancelScheduledNotificationAsync(item.osId);
+      } catch {
+      }
+    }
+  }
+  await writePending(keep);
 }
 
 function nextOccurrenceFromRepeat(params: { repeat?: string | null; repeatDay?: number | null; repeatMonth?: number | null }): Date | null {
@@ -184,11 +238,83 @@ async function readBefore(key: string, fallback: CompoundBefore): Promise<Compou
   }
 }
 
+function withinWindow(fireAt: number, now: number) {
+  return fireAt >= now - LOOKBACK_MS && fireAt <= now + HORIZON_MS;
+}
+
+function makeReminder(params: {
+  kind: 'event' | 'goal' | 'step';
+  entityId: string;
+  fireAt: number;
+  title: string;
+  body: string;
+  ownerUserId: string;
+  extra?: Record<string, any>;
+}): PendingReminder {
+  const id = `rem_${params.kind}_${params.entityId}_${params.fireAt}`;
+  return {
+    id,
+    fireAt: params.fireAt,
+    title: params.title,
+    body: params.body,
+    data: {
+      inboxId: id,
+      ownerUserId: params.ownerUserId,
+      kind: params.kind,
+      scheduledForMs: params.fireAt,
+      ...params.extra,
+    },
+  };
+}
+
+async function scheduleReminderList(items: PendingReminder[]) {
+  const previous = await readPending();
+  for (const item of previous) {
+    if (!item.osId) continue;
+    try {
+      await Notifications.cancelScheduledNotificationAsync(item.osId);
+    } catch {
+    }
+  }
+  await cancelAnyIfExists(KEY_EVENT_ID);
+  await cancelAnyIfExists(KEY_GOAL_DUE_ID);
+  await cancelAnyIfExists(KEY_STEP_DUE_ID);
+
+  if (!items.length) {
+    await writePending([]);
+    return;
+  }
+
+  const allowed = await notificationPermissionGranted();
+  if (allowed) await ensureAndroidChannel();
+  const now = Date.now();
+  const next: PendingReminder[] = [];
+  for (const item of items) {
+    if (!withinWindow(item.fireAt, now)) continue;
+    let osId: string | null = null;
+    if (allowed && item.fireAt > now) {
+      try {
+        osId = await Notifications.scheduleNotificationAsync({
+          content: reminderContent(item),
+          trigger: { type: 'date', date: new Date(item.fireAt) } as any,
+        });
+      } catch {
+        osId = null;
+      }
+    }
+    next.push({ ...item, osId });
+  }
+  await writePending(next);
+  await flushDueReminders();
+}
+
 export async function autoScheduleRemindersFromDashboard(dash: authApi.DashboardResponse | null | undefined) {
   try {
     const enabled = await AsyncStorage.getItem(KEY_ENABLED);
-    if (enabled !== '1') return;
-
+    if (enabled !== '1') {
+      await scheduleReminderList([]);
+      return;
+    }
     let ownerUserId = '';
     try {
       const rawUser = await SecureStore.getItemAsync('auth_user');
@@ -197,105 +323,66 @@ export async function autoScheduleRemindersFromDashboard(dash: authApi.Dashboard
     } catch {
       ownerUserId = '';
     }
-
     const [eventBefore, goalBefore, stepBefore] = await Promise.all([
       readBefore(KEY_EVENT_BEFORE, DEFAULT_EVENT_BEFORE),
       readBefore(KEY_GOAL_BEFORE, DEFAULT_GOAL_BEFORE),
       readBefore(KEY_STEP_BEFORE, DEFAULT_STEP_BEFORE),
     ]);
-
-    if (!dash) return;
-
-    const allEventCandidates: Array<{ id: string; title: string; startAt: string }> = [];
-    for (const e of (dash.todayEvents ?? []) as any[]) {
-      if (!e) continue;
-      const id = String((e as any).id ?? '');
-      const title = String((e as any).title ?? '');
-      const startAt = String((e as any).startAt ?? '');
-      if (id && title && startAt) allEventCandidates.push({ id, title, startAt });
+    const reminders: PendingReminder[] = [];
+    const eventSeen = new Set<string>();
+    const eventAnn = beforeToAnnouncement(eventBefore);
+    const events = [...(dash?.todayEvents ?? [])];
+    if (dash?.nextEvent) events.push(dash.nextEvent as any);
+    for (const event of events) {
+      const id = String(event?.id ?? '');
+      const title = String(event?.title ?? '');
+      const start = new Date(String(event?.startAt ?? ''));
+      if (!id || !title || eventSeen.has(id) || Number.isNaN(start.getTime())) continue;
+      eventSeen.add(id);
+      const fireAt = start.getTime() - compoundToMs(eventBefore);
+      reminders.push(makeReminder({
+        kind: 'event',
+        entityId: id,
+        fireAt,
+        title: 'Upcoming event',
+        body: `${eventAnn}: ${title}`,
+        ownerUserId,
+        extra: { eventId: id },
+      }));
     }
-    if ((dash as any)?.nextEvent) {
-      const ne: any = (dash as any).nextEvent;
-      const id = String(ne?.id ?? '');
-      const title = String(ne?.title ?? '');
-      const startAt = String(ne?.startAt ?? '');
-      if (id && title && startAt) allEventCandidates.push({ id, title, startAt });
-    }
-
-    const seen = new Set<string>();
-    const upcomingEvents = allEventCandidates
-      .filter(e => {
-        if (seen.has(e.id)) return false;
-        seen.add(e.id);
-        return true;
-      })
-      .map(e => ({ id: e.id, title: e.title, start: new Date(String(e.startAt)) }))
-      .filter(e => e.id && e.title && e.start instanceof Date && !Number.isNaN(e.start.getTime()))
-      .filter(e => e.start.getTime() > Date.now())
-      .sort((a, b) => a.start.getTime() - b.start.getTime())
-      .slice(0, 25);
-
-    if (upcomingEvents.length) {
-      const ann = beforeToAnnouncement(eventBefore);
-      const ms = compoundToMs(eventBefore);
-      await scheduleManyAt(
-        KEY_EVENT_ID,
-        upcomingEvents.map(ev => {
-          const when = new Date(ev.start.getTime() - ms);
-          return {
-            when,
-            content: {
-              title: 'Upcoming event',
-              body: `${ann}: ${ev.title}`,
-              data: { ownerUserId, kind: 'event', eventId: ev.id, scheduledForMs: when.getTime() },
-            },
-          };
-        })
-      );
-    } else {
-      await cancelAnyIfExists(KEY_EVENT_ID);
-    }
-
-    if (dash.nextGoal?.dueAt) {
+    if (dash?.nextGoal?.dueAt) {
       const due = new Date(dash.nextGoal.dueAt);
       if (!Number.isNaN(due.getTime())) {
-        const when = new Date(due.getTime() - compoundToMs(goalBefore));
-        await scheduleAt(KEY_GOAL_DUE_ID, when, {
+        const fireAt = due.getTime() - compoundToMs(goalBefore);
+        reminders.push(makeReminder({
+          kind: 'goal',
+          entityId: dash.nextGoal.id,
+          fireAt,
           title: 'Goal reminder',
           body: `${beforeToAnnouncement(goalBefore)}: ${dash.nextGoal.title}`,
-          data: { ownerUserId, kind: 'goal', goalId: dash.nextGoal.id, scheduledForMs: when.getTime() },
-        });
-      } else {
-        await cancelAnyIfExists(KEY_GOAL_DUE_ID);
+          ownerUserId,
+          extra: { goalId: dash.nextGoal.id },
+        }));
       }
-    } else {
-      await cancelAnyIfExists(KEY_GOAL_DUE_ID);
     }
-
-    const dueSteps = (dash.todaySteps ?? [])
-      .filter(s => !s.doneToday)
-      .map(s => {
-        const due = s.dueAt
-          ? new Date(String(s.dueAt))
-          : nextOccurrenceFromRepeat({ repeat: s.repeat, repeatDay: s.repeatDay, repeatMonth: s.repeatMonth }) ||
-            new Date(new Date().setHours(23, 59, 59, 999));
-        return { ...s, due };
-      })
-      .filter(s => s.due instanceof Date && !Number.isNaN((s.due as Date).getTime()))
-      .sort((a, b) => (a.due as Date).getTime() - (b.due as Date).getTime());
-
-    const nextStep = dueSteps[0] ?? null;
-    if (nextStep) {
-      const dueMs = (nextStep.due as Date).getTime();
-      const when = new Date(dueMs - compoundToMs(stepBefore));
-      await scheduleAt(KEY_STEP_DUE_ID, when, {
-        title: 'Deadline soon',
-        body: `${beforeToAnnouncement(stepBefore)}: ${String((nextStep as any).text ?? '')}`,
-        data: { ownerUserId, kind: 'step', stepId: (nextStep as any).id, goalId: (nextStep as any).goalId, scheduledForMs: when.getTime() },
-      });
-    } else {
-      await cancelAnyIfExists(KEY_STEP_DUE_ID);
+    for (const step of dash?.todaySteps ?? []) {
+      if (step.doneToday) continue;
+      const due = step.dueAt
+        ? new Date(String(step.dueAt))
+        : nextOccurrenceFromRepeat({ repeat: step.repeat, repeatDay: step.repeatDay, repeatMonth: step.repeatMonth });
+      if (!due || Number.isNaN(due.getTime())) continue;
+      const fireAt = due.getTime() - compoundToMs(stepBefore);
+      reminders.push(makeReminder({
+        kind: 'step',
+        entityId: step.id,
+        fireAt,
+        title: 'Step reminder',
+        body: `${beforeToAnnouncement(stepBefore)}: ${step.text}`,
+        ownerUserId,
+        extra: { stepId: step.id, goalId: step.goalId },
+      }));
     }
+    await scheduleReminderList(reminders.slice(0, 60));
   } catch {
   }
 }
@@ -310,8 +397,77 @@ export async function autoScheduleRemindersForSignedInUser(opts?: { minIntervalM
 
     const token = await SecureStore.getItemAsync('auth_access_token');
     if (!token) return;
+    const enabled = await AsyncStorage.getItem(KEY_ENABLED);
+    if (enabled !== '1') {
+      await autoScheduleRemindersFromDashboard(null);
+      return;
+    }
     const dash = await authApi.getDashboard(token);
-    await autoScheduleRemindersFromDashboard(dash);
+    const horizon = new Date(now + HORIZON_MS);
+    const [eventResp, goalResp] = await Promise.all([
+      authApi.listEvents(token, { from: new Date(now).toISOString(), to: horizon.toISOString() }).catch(() => ({ events: [] as authApi.EventItem[] })),
+      authApi.listGoals(token).catch(() => ({ goals: [] as authApi.GoalItem[] })),
+    ]);
+    const activeGoals = (goalResp.goals ?? [])
+      .filter(goal => !goal.completed && !goal.failedAt && !goal.deletedAt)
+      .slice(0, 20);
+    const doneStepIds = new Set((dash.todaySteps ?? []).filter(step => step.doneToday).map(step => step.id));
+    const stepGroups = await Promise.all(
+      activeGoals.map(goal => authApi.listGoalSteps(token, goal.id).then(resp => ({ goal, steps: resp.steps ?? [] })).catch(() => ({ goal, steps: [] as authApi.GoalStepItem[] })))
+    );
+    const merged: authApi.DashboardResponse = {
+      ...dash,
+      todayEvents: eventResp.events?.length ? eventResp.events : dash.todayEvents,
+      nextEvent: dash.nextEvent,
+      todaySteps: stepGroups.flatMap(({ goal, steps }) =>
+        steps.map(step => {
+          const rawDue = step.dueAt ? new Date(step.dueAt) : null;
+          const repeatDue = !rawDue || rawDue.getTime() <= Date.now()
+            ? nextOccurrenceFromRepeat({ repeat: step.repeat, repeatDay: step.repeatDay, repeatMonth: step.repeatMonth })
+            : null;
+          const due = repeatDue ?? rawDue;
+          return {
+            id: step.id,
+            goalId: goal.id,
+            goalTitle: goal.title,
+            text: step.text,
+            dueAt: due ? due.toISOString() : null,
+            repeat: (step.repeat ?? null) as any,
+            repeatDay: step.repeatDay ?? null,
+            repeatMonth: step.repeatMonth ?? null,
+            doneToday: doneStepIds.has(step.id),
+          };
+        })
+      ),
+    };
+    const extraGoals = activeGoals.filter(goal => goal.id !== dash.nextGoal?.id && !!goal.dueAt);
+    await autoScheduleRemindersFromDashboard(merged);
+    if (extraGoals.length) {
+      const pending = await readPending();
+      let ownerUserId = '';
+      try {
+        const rawUser = await SecureStore.getItemAsync('auth_user');
+        const user = rawUser ? JSON.parse(rawUser) : null;
+        ownerUserId = String(user?.id ?? '').trim();
+      } catch {
+        ownerUserId = '';
+      }
+      const goalBefore = await readBefore(KEY_GOAL_BEFORE, DEFAULT_GOAL_BEFORE);
+      const additions = extraGoals.map(goal => {
+        const due = new Date(String(goal.dueAt));
+        return makeReminder({
+          kind: 'goal',
+          entityId: goal.id,
+          fireAt: due.getTime() - compoundToMs(goalBefore),
+          title: 'Goal reminder',
+          body: `${beforeToAnnouncement(goalBefore)}: ${goal.title}`,
+          ownerUserId,
+          extra: { goalId: goal.id },
+        });
+      });
+      const combined = [...pending, ...additions].filter((item, index, all) => all.findIndex(other => other.id === item.id) === index).slice(0, 60);
+      await scheduleReminderList(combined);
+    }
     await AsyncStorage.setItem(KEY_LAST_AUTO_SCHEDULE_MS, String(now));
   } catch {
   }

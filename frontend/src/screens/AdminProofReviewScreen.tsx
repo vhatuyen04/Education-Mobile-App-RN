@@ -25,8 +25,7 @@ export function AdminProofReviewScreen() {
   const [autoAiEnabled, setAutoAiEnabled] = useState(false);
   const [autoAiSettingBusy, setAutoAiSettingBusy] = useState(false);
   const [aiBusyIds, setAiBusyIds] = useState<Record<string, boolean>>({});
-  const [hiddenVerifiedIds, setHiddenVerifiedIds] = useState<Record<string, boolean>>({});
-
+  const [sessionHiddenIds, setSessionHiddenIds] = useState<Record<string, boolean>>({});
   const isAdmin = state.user?.role === 'ADMIN';
 
   const refresh = useCallback(async () => {
@@ -41,8 +40,13 @@ export function AdminProofReviewScreen() {
         authApi.adminListProofAttempts(token, { status: 'APPROVED' }),
         authApi.adminListProofAttempts(token, { status: 'REJECTED' }),
       ]);
-      setReviewingAttempts(pendingResp.attempts ?? []);
-      setVerifiedAttempts([...(approvedResp.attempts ?? []), ...(rejectedResp.attempts ?? [])]);
+      const byNewestVerification = (a: Attempt, b: Attempt) => {
+        const aTime = new Date(a.updatedAt ?? a.createdAt ?? 0).getTime();
+        const bTime = new Date(b.updatedAt ?? b.createdAt ?? 0).getTime();
+        return bTime - aTime;
+      };
+      setReviewingAttempts([...(pendingResp.attempts ?? [])].sort(byNewestVerification));
+      setVerifiedAttempts([...(approvedResp.attempts ?? []), ...(rejectedResp.attempts ?? [])].sort(byNewestVerification));
     } catch (e: any) {
       toast(String(e?.message ?? 'Failed to load'));
     } finally {
@@ -82,10 +86,15 @@ export function AdminProofReviewScreen() {
 
   async function decide(a: Attempt, decision: 'APPROVE' | 'REJECT') {
     if (!token) return;
+    const feedback = (feedbackDraft[a.id] ?? '').trim();
+    if (decision === 'REJECT' && feedback.length < 3) {
+      toast('A rejection reason is required');
+      return;
+    }
     try {
       await authApi.adminDecideProofAttempt(token, a.id, {
         decision,
-        feedback: (feedbackDraft[a.id] ?? '').trim() || null,
+        feedback: feedback || null,
       });
       toast(decision === 'APPROVE' ? 'Approved' : 'Rejected');
       await refresh();
@@ -130,9 +139,23 @@ export function AdminProofReviewScreen() {
     }
   }
 
+  function hideVerified(a: Attempt) {
+    setSessionHiddenIds(prev => ({ ...prev, [a.id]: true }));
+  }
+
+  async function dismissVerified(a: Attempt) {
+    if (!token) return;
+    try {
+      await authApi.adminHideProofAttempt(token, a.id);
+      setVerifiedAttempts(prev => prev.filter(item => item.id !== a.id));
+    } catch (e: any) {
+      toast(String(e?.message ?? 'Failed to remove from this list'));
+    }
+  }
+
   const visibleVerifiedAttempts = useMemo(
-    () => verifiedAttempts.filter(a => !hiddenVerifiedIds[a.id]),
-    [verifiedAttempts, hiddenVerifiedIds]
+    () => verifiedAttempts.filter(a => !sessionHiddenIds[a.id]),
+    [verifiedAttempts, sessionHiddenIds]
   );
 
   useFocusEffect(
@@ -255,7 +278,7 @@ export function AdminProofReviewScreen() {
             <Badge>{loading ? 'Loading…' : String(visibleVerifiedAttempts.length)}</Badge>
           </View>
           <View style={{ height: 10 }} />
-          <Text style={styles.meta}>Approved and rejected proofs are shown here. You can hide them to keep the list clean.</Text>
+          <Text style={styles.meta}>Hide clears a proof until this screen reloads. Delete keeps it off this list. Neither one removes the user's proof.</Text>
         </Card>
 
         {visibleVerifiedAttempts.map(a => (
@@ -281,7 +304,8 @@ export function AdminProofReviewScreen() {
             <View style={{ height: 10 }} />
             <View style={{ flexDirection: 'row', gap: 10, flexWrap: 'wrap' }}>
               <Button title="View video" small onPress={() => void viewAttempt(a)} />
-              <Button title="Hide" onPress={() => setHiddenVerifiedIds(prev => ({ ...prev, [a.id]: true }))} />
+              <Button title="Hide" onPress={() => hideVerified(a)} />
+              <Button title="Delete" onPress={() => void dismissVerified(a)} />
             </View>
           </Card>
         ))}

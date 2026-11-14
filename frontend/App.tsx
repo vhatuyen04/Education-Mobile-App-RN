@@ -9,10 +9,11 @@ import * as Notifications from 'expo-notifications';
 import * as SecureStore from 'expo-secure-store';
 
 import { RootStack } from './src/navigation/RootStack';
-import { AuthProvider } from './src/auth/AuthContext';
+import { AuthProvider, useAuth } from './src/auth/AuthContext';
 import { SettingsProvider } from './src/settings/SettingsContext';
-import { appendInbox } from './src/notifications/inbox';
-import { autoScheduleRemindersForSignedInUser } from './src/notifications/scheduler';
+import { appendInbox, rememberUnseen } from './src/notifications/inbox';
+import { autoScheduleRemindersForSignedInUser, flushDueReminders } from './src/notifications/scheduler';
+import { syncServerNotifications } from './src/notifications/serverSync';
 import { getRecommendation } from './src/ai/recommendations';
 
 export default function App() {
@@ -22,7 +23,7 @@ export default function App() {
         shouldShowAlert: true,
         shouldShowBanner: true,
         shouldShowList: true,
-        shouldPlaySound: false,
+        shouldPlaySound: true,
         shouldSetBadge: false,
       }),
     });
@@ -33,6 +34,7 @@ export default function App() {
       const bodyRaw = String(n.request.content?.body ?? '').trim();
       const data = (n.request.content as any)?.data ?? null;
       void (async () => {
+        if ((data as any)?.serverSync) return;
         if (!titleRaw && !bodyRaw) return;
         if (titleRaw === 'Notification' && !bodyRaw) return;
         if ((data as any)?.type === 'ai_goal_reco') {
@@ -63,13 +65,16 @@ export default function App() {
           : (n as any)?.date instanceof Date
             ? (n as any).date.getTime()
             : Date.now();
-        await appendInbox({
-          id: reqId ? `expo_${reqId}` : undefined,
+        const dataInboxId = String((data as any)?.inboxId ?? '').trim();
+        const inboxId = dataInboxId || (reqId ? `expo_${reqId}` : `${ts}-${Math.random().toString(16).slice(2)}`);
+        const inserted = await appendInbox({
+          id: inboxId,
           receivedAt: ts,
           title,
           body,
           data,
         });
+        if (inserted) await rememberUnseen(inboxId);
       })();
     });
 
@@ -80,6 +85,7 @@ export default function App() {
       const bodyRaw = String(content?.body ?? '').trim();
       const data = (content as any)?.data ?? null;
       void (async () => {
+        if ((data as any)?.serverSync) return;
         if (!titleRaw && !bodyRaw) return;
         if (titleRaw === 'Notification' && !bodyRaw) return;
         if ((data as any)?.type === 'ai_goal_reco') {
@@ -110,13 +116,16 @@ export default function App() {
           : (r as any)?.notification?.date instanceof Date
             ? (r as any).notification.date.getTime()
             : Date.now();
-        await appendInbox({
-          id: reqId ? `expo_${reqId}` : undefined,
+        const dataInboxId = String((data as any)?.inboxId ?? '').trim();
+        const inboxId = dataInboxId || (reqId ? `expo_${reqId}` : `${ts}-${Math.random().toString(16).slice(2)}`);
+        const inserted = await appendInbox({
+          id: inboxId,
           receivedAt: ts,
           title,
           body,
           data,
         });
+        if (inserted) await rememberUnseen(inboxId);
       })();
     });
 
@@ -128,18 +137,24 @@ export default function App() {
       }).catch(() => {});
     }
 
+    void flushDueReminders();
     void autoScheduleRemindersForSignedInUser();
 
     const subApp = AppState.addEventListener('change', s => {
       if (s === 'active') {
+        void flushDueReminders();
         void autoScheduleRemindersForSignedInUser();
       }
     });
+    const reminderTimer = setInterval(() => {
+      void flushDueReminders();
+    }, 30_000);
 
     return () => {
       subRecv.remove();
       subResp.remove();
       subApp.remove();
+      clearInterval(reminderTimer);
     };
   }, []);
 
@@ -147,6 +162,7 @@ export default function App() {
     <SafeAreaProvider>
       <AuthProvider>
         <SettingsProvider>
+          <ServerNotificationBridge />
           <NavigationContainer>
             <StatusBar style="light" />
             <RootStack />
@@ -155,4 +171,30 @@ export default function App() {
       </AuthProvider>
     </SafeAreaProvider>
   );
+}
+
+function ServerNotificationBridge() {
+  const { state } = useAuth();
+  const token = state.accessToken;
+  const userId = String(state.user?.id ?? '');
+
+  useEffect(() => {
+    if (state.isRestoring || !token) return;
+    const tick = () => {
+      void syncServerNotifications(token, userId);
+    };
+    tick();
+    const timer = setInterval(() => {
+      if (AppState.currentState === 'active') tick();
+    }, 15000);
+    const sub = AppState.addEventListener('change', next => {
+      if (next === 'active') tick();
+    });
+    return () => {
+      clearInterval(timer);
+      sub.remove();
+    };
+  }, [state.isRestoring, token, userId]);
+
+  return null;
 }

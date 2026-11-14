@@ -117,6 +117,7 @@ model SmartGoalProofAttempt {
   proofKey        String?
   proofUrl        String?
   aiFeedback      String?
+  reviewedBy      String?
   awardedPoints   Int?               @default(0)
   awardedXp       Int?               @default(0)
   createdAt       DateTime           @default(now())
@@ -133,8 +134,9 @@ model SmartGoalProofAttempt {
 model GoalStep {
   id        String   @id @default(uuid())
   goalId    String
-  text      String
-  order     Int      @default(0)
+  text        String
+  description String?
+  order       Int      @default(0)
   dueAt     DateTime?
   repeat    String?
   repeatDay Int?
@@ -171,6 +173,14 @@ model AppSetting {
   value     String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model UsedAiSuggestion {
+  jti       String   @id
+  userId    String
+  createdAt DateTime @default(now())
+
+  @@index([userId])
 }
 
 model UserNotification {

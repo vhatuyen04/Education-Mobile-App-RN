@@ -13,7 +13,7 @@ import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
 import type { RootStackParamList } from '../navigation/types';
-import { messageForCustomGoalCompleted } from '../motivation/messages';
+import { customGoalCompletionMessage } from '../motivation/completionMessage';
 import { isAppGoal, markAppGoal, unmarkAppGoal } from '../motivation/appGoals';
 import { appendScorePoint } from '../motivation/scoreHistory';
 import { appendInbox } from '../notifications/inbox';
@@ -54,10 +54,7 @@ export function GoalsScreen() {
     open: boolean;
     goal?: Goal;
     action?: 'delete' | 'complete' | 'quit';
-    xpLoss?: number;
   }>({ open: false });
-
-  const SMARTGOAL_QUIT_XP_LOSS = 50;
 
   function displayGoalTitle(raw: string) {
     const first = String(raw ?? '').split(/\r?\n/)[0] ?? '';
@@ -147,9 +144,8 @@ export function GoalsScreen() {
     setConfirm({ open: true, goal: g, action: 'complete' });
   }
 
-  async function requestQuit(g: Goal) {
-    const app = await isAppGoal(g.id);
-    setConfirm({ open: true, goal: g, action: 'quit', xpLoss: app ? SMARTGOAL_QUIT_XP_LOSS : 0 });
+  function requestQuit(g: Goal) {
+    setConfirm({ open: true, goal: g, action: 'quit' });
   }
 
   useFocusEffect(
@@ -188,8 +184,7 @@ export function GoalsScreen() {
       }
       await authApi.updateGoal(token, g.id, { completed: true });
 
-      const msg = messageForCustomGoalCompleted();
-      toast(msg);
+      toast(customGoalCompletionMessage());
 
       await refresh();
     } catch (e: any) {
@@ -200,7 +195,7 @@ export function GoalsScreen() {
   }
 
   function requestDelete(g: Goal) {
-    setConfirm({ open: true, goal: g, action: 'delete', xpLoss: 0 });
+    setConfirm({ open: true, goal: g, action: 'delete' });
   }
 
   function closeConfirm() {
@@ -431,10 +426,7 @@ export function GoalsScreen() {
             {confirm.action === 'complete' ? (
               <Text style={styles.confirmText}>Are you sure you completed this goal?</Text>
             ) : confirm.action === 'quit' ? (
-              <Text style={styles.confirmText}>
-                Are you sure you want to quit this goal?
-                {confirm.xpLoss ? ` You will lose ${confirm.xpLoss} XP.` : ''}
-              </Text>
+              <Text style={styles.confirmText}>Are you sure you want to quit this goal?</Text>
             ) : (
               <Text style={styles.confirmText}>
                 Do you want to remove this goal from the screen?
