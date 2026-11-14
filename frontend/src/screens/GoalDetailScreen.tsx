@@ -520,10 +520,13 @@ export function GoalDetailScreen() {
                       value={s.scheduleText}
                       onChangeText={t2 => setStepScheduleText(s.id, t2)}
                       editable={!completed}
-                      placeholder="daily | weekly:Mon | monthly:15 | yearly:01-15 | once:2027-01-01"
+                      placeholder="once:YYYY-MM-DD"
                       placeholderTextColor={colors.muted}
+                      autoCapitalize="none"
+                      autoCorrect={false}
                       style={styles.stepScheduleInput}
                     />
+                    <Text style={styles.meta}>{'One full value:\ndaily\nweekly:Mon\nmonthly:DD\nyearly:MM-DD\nonce:YYYY-MM-DD'}</Text>
                   </View>
 
                   {!completed ? (

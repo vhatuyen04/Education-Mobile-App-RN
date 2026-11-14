@@ -85,7 +85,9 @@ function isMeaningfulStepText(t: unknown) {
   return /[a-z]/i.test(s);
 }
 
-type PlannerStep = Step & { schedule?: authApi.AiGoalStepSchedule; description?: string };
+type PlannerStep = Step & { schedule?: authApi.AiGoalStepSchedule; scheduleText?: string; description?: string };
+
+const SCHEDULE_FORMATS = 'One full value:\ndaily\nweekly:Mon\nmonthly:DD\nyearly:MM-DD\nonce:YYYY-MM-DD';
 
 function sanitizePlannerSteps(input: PlannerStep[]) {
   const out = (Array.isArray(input) ? input : [])
@@ -510,10 +512,9 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
     setDirty(false);
   }
 
-  const closeAndReset = useCallback(() => {
-    resetGenerated();
+  const closeModal = useCallback(() => {
     onClose();
-  }, [onClose, resetGenerated]);
+  }, [onClose]);
 
   async function resolveDeadlineForPlan(override?: string): Promise<string | null> {
     const input = String(override ?? deadline ?? '').trim();
@@ -580,7 +581,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
   }
 
   function addStep() {
-    setSteps(prev => [...prev, { id: makeId(), text: 'New step', description: '', schedule: { type: 'none' } }]);
+    setSteps(prev => [...prev, { id: makeId(), text: 'New step', description: '', scheduleText: '', schedule: { type: 'none' } }]);
   }
 
   function removeStep(id: string) {
@@ -677,12 +678,16 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
       setGoalSuggestionToken(resp.suggestion.suggestionToken || null);
       setGoalPointsAwarded(typeof (resp.suggestion as any).pointsAwarded === 'number' ? (resp.suggestion as any).pointsAwarded : null);
       setGoalXpAwarded(typeof (resp.suggestion as any).xpAwarded === 'number' ? (resp.suggestion as any).xpAwarded : null);
-      const mapped = resp.suggestion.steps.map(s => ({
-        id: makeId(),
-        text: s.text,
-        description: String(s.description ?? '').trim(),
-        schedule: normalizeAiStepSchedule(s.schedule, effectiveDeadline),
-      }));
+      const mapped = resp.suggestion.steps.map(s => {
+        const schedule = normalizeAiStepSchedule(s.schedule, effectiveDeadline);
+        return {
+          id: makeId(),
+          text: s.text,
+          description: String(s.description ?? '').trim(),
+          schedule,
+          scheduleText: scheduleToShortText(schedule),
+        };
+      });
       const sanitized = sanitizePlannerSteps(mapped);
       setSteps(sanitized);
       setGenerated(true);
@@ -779,14 +784,14 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
   }
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={closeAndReset}>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={closeModal}>
       <View style={styles.backdrop}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={closeAndReset} />
+        <Pressable style={StyleSheet.absoluteFill} onPress={closeModal} />
 
         <View style={styles.sheet}>
           <View style={styles.sheetHead}>
             <Text style={styles.sheetTitle}>SmartGoal Planner</Text>
-            <Pressable onPress={closeAndReset} hitSlop={10}>
+            <Pressable onPress={closeModal} hitSlop={10}>
               <Text style={styles.close}>✕</Text>
             </Pressable>
           </View>
@@ -797,6 +802,9 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
             keyboardShouldPersistTaps="handled"
           >
             <Text style={styles.mutedSmall}>Describe your plan. SmartGoal will suggest 1 goal and a checklist. Requirement is determined completely by the SmartGoal app.</Text>
+            <Text style={[styles.mutedSmall, { marginTop: 8 }]}>
+              Write in English. Use a number for time: in 3 weeks, for 10 days, within 2 months, or by 2027-01-01. Words such as “a week” are not read. The Deadline field uses YYYY-MM-DD.
+            </Text>
 
             <View style={styles.field}>
               <Text style={styles.label}>Your plan</Text>
@@ -860,6 +868,8 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
 
             <View style={{ height: 10 }} />
             <Button title={generated ? 'Regenerate' : 'Generate suggestions'} variant="primary" full onPress={generate} />
+            <View style={{ height: 8 }} />
+            <Button title="Clear" full onPress={() => resetGenerated(true)} />
 
             {loading ? <Text style={[styles.mutedSmall, { marginTop: 10 }]}>Thinking…</Text> : null}
 
@@ -950,21 +960,22 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
                           />
                           <Text style={styles.stepLabel}>Schedule</Text>
                           <TextInput
-                            value={scheduleToShortText(s.schedule)}
+                            value={s.scheduleText ?? scheduleToShortText(s.schedule)}
                             onChangeText={t => {
                               setSteps(prev =>
                                 prev.map(p => {
                                   if (p.id !== s.id) return p;
-                                  return { ...p, schedule: parseScheduleShortText(t) };
+                                  return { ...p, scheduleText: t, schedule: parseScheduleShortText(t) };
                                 })
                               );
                             }}
-                            placeholder="daily | weekly:Mon | monthly:15 | yearly:01-15 | once:2027-01-01"
+                            placeholder="once:YYYY-MM-DD"
                             placeholderTextColor={colors.muted}
                             autoCapitalize="none"
                             autoCorrect={false}
                             style={styles.input}
                           />
+                          <Text style={styles.mutedSmall}>{SCHEDULE_FORMATS}</Text>
                         </View>
                       ))}
                     </View>
