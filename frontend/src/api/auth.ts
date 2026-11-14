@@ -527,16 +527,6 @@ export async function createGoal(
   return postJsonAuth<{ goal: GoalItem }>('/auth/goals', body, accessToken);
 }
 
-export async function recomputeScores(
-  accessToken: string
-): Promise<{ ok: true; sportScore: number; academyScore: number; entertainmentScore: number; score: number }> {
-  return postJsonAuth<{ ok: true; sportScore: number; academyScore: number; entertainmentScore: number; score: number }>(
-    '/auth/recompute-scores',
-    {},
-    accessToken
-  );
-}
-
 export async function createGoalStep(
   accessToken: string,
   goalId: string,

@@ -17,6 +17,7 @@ function trusted(partial: Partial<TrustedAiSuggestion> = {}): TrustedAiSuggestio
     xpAwarded: rewardsForDifficultyScore(40).xpAwarded,
     requirement: 'Practice daily',
     rankField: 'Academy',
+    title: 'Practice piano',
     ...partial,
   };
 }
@@ -59,6 +60,8 @@ test('suggestion tokens reject bad signatures, expiry, other users, modified rew
   assert.equal(acceptAiSuggestion(token, secret, 'user-2', suggestion).error, 'Suggestion does not match this user');
   assert.equal(acceptAiSuggestion(token, secret, 'user-1', { ...suggestion, pointsAwarded: 1000 }).error, 'Suggestion does not match the goal');
   assert.equal(acceptAiSuggestion(token, secret, 'user-1', { ...suggestion, difficultyScore: 100 }).error, 'Suggestion does not match the goal');
+  assert.equal(acceptAiSuggestion(token, secret, 'user-1', { ...suggestion, title: 'Different title' }).error, 'Suggestion does not match the goal');
+  assert.equal(acceptAiSuggestion(token, secret, 'user-1', suggestion).ok, true);
 
   const expired = jwt.sign({ purpose: AI_SUGGESTION_PURPOSE, sub: 'user-1', ...suggestion, exp: Math.floor(Date.now() / 1000) - 60 }, secret);
   assert.equal(acceptAiSuggestion(expired, secret, 'user-1', suggestion).error, 'Suggestion expired');

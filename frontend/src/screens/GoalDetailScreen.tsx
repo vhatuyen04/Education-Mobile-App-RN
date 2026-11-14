@@ -14,12 +14,13 @@ import { Button } from '../components/Button';
 import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
-import { messageForCustomGoalCompleted } from '../motivation/messages';
+import { customGoalCompletionMessage } from '../motivation/completionMessage';
 import { isAppGoal, unmarkAppGoal } from '../motivation/appGoals';
 import { getFailedReason, type FailedReason } from '../motivation/failedGoals';
 import { appendScorePoint } from '../motivation/scoreHistory';
 import type { RootStackParamList } from '../navigation/types';
 import { parseScheduleShortText, scheduleToShortText } from '../utils/stepSchedule';
+import { autoScheduleRemindersForSignedInUser } from '../notifications/scheduler';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 type R = RouteProp<RootStackParamList, 'GoalDetail'>;
@@ -319,6 +320,7 @@ export function GoalDetailScreen() {
       if (opts.finish && effectiveGoalId && !wasNew) {
         const app = await isAppGoal(effectiveGoalId);
         if (app) {
+          void autoScheduleRemindersForSignedInUser({ minIntervalMs: 0 });
           nav.navigate('SmartGoalProof', {
             goalId: effectiveGoalId,
             goalTitle: title ?? 'SmartGoal',
@@ -336,12 +338,11 @@ export function GoalDetailScreen() {
           // ignore
         }
 
-        const points = Number((updated as any)?.rewardsApplied?.points ?? 0);
-        const xp = Number((updated as any)?.rewardsApplied?.xp ?? 0);
-        toast(`SmartGoal: Goal completed. +${xp} XP. +${points} point${points === 1 ? '' : 's'}.`);
+        toast(customGoalCompletionMessage());
       } else {
         toast('Saved');
       }
+      void autoScheduleRemindersForSignedInUser({ minIntervalMs: 0 });
       nav.goBack();
     } catch (e: any) {
       toast(String(e?.message ?? 'Save failed'));

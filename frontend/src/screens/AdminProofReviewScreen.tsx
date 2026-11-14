@@ -86,10 +86,15 @@ export function AdminProofReviewScreen() {
 
   async function decide(a: Attempt, decision: 'APPROVE' | 'REJECT') {
     if (!token) return;
+    const feedback = (feedbackDraft[a.id] ?? '').trim();
+    if (decision === 'REJECT' && feedback.length < 3) {
+      toast('A rejection reason is required');
+      return;
+    }
     try {
       await authApi.adminDecideProofAttempt(token, a.id, {
         decision,
-        feedback: (feedbackDraft[a.id] ?? '').trim() || null,
+        feedback: feedback || null,
       });
       toast(decision === 'APPROVE' ? 'Approved' : 'Rejected');
       await refresh();

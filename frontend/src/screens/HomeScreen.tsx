@@ -20,7 +20,7 @@ import { syncServerNotifications } from '../notifications/serverSync';
 import * as Notifications from 'expo-notifications';
 import { listRecommendations, upsertRecommendation } from '../ai/recommendations';
 import { getFailedGoalsMap, type FailedReason } from '../motivation/failedGoals';
-import { autoScheduleRemindersFromDashboard } from '../notifications/scheduler';
+import { autoScheduleRemindersForSignedInUser } from '../notifications/scheduler';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -117,7 +117,7 @@ export function HomeScreen() {
       setDash(resp);
       setFailedMap(fm);
 
-      void autoScheduleRemindersFromDashboard(resp);
+      void autoScheduleRemindersForSignedInUser({ minIntervalMs: 0 });
     } catch (e: any) {
       toast(String(e?.message ?? 'Failed to load'));
     } finally {

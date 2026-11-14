@@ -12,6 +12,7 @@ import { Button } from '../components/Button';
 import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
+import { autoScheduleRemindersForSignedInUser } from '../notifications/scheduler';
 import type { RootStackParamList } from '../navigation/types';
 
 type EventItem = authApi.EventItem;
@@ -447,6 +448,7 @@ export function CalendarScreen() {
         { scope }
       );
       await refresh();
+      void autoScheduleRemindersForSignedInUser({ minIntervalMs: 0 });
       toast('Saved');
       closeEdit();
     } catch (e: any) {
@@ -480,6 +482,7 @@ export function CalendarScreen() {
       const scope = repeatMode !== 'Once' || e?.seriesId ? 'series' : 'single';
       await authApi.deleteEvent(token, confirm.eventId, { scope });
       await refresh();
+      void autoScheduleRemindersForSignedInUser({ minIntervalMs: 0 });
       toast('Deleted');
       closeConfirm();
       closeEdit();

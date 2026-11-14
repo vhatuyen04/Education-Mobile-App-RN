@@ -12,6 +12,7 @@ import { colors } from '../theme/colors';
 import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
+import { approvedGoalRewardMessage } from '../motivation/completionMessage';
 
 export function SmartGoalProofScreen() {
   const nav = useNavigation<any>();
@@ -206,9 +207,7 @@ export function SmartGoalProofScreen() {
         if (resp.attempt.status === 'APPROVED') {
           if (!awardedRef.current) {
             awardedRef.current = true;
-            const xp = Number((resp.attempt as any)?.awardedXp ?? 0);
-            const points = Number((resp.attempt as any)?.awardedPoints ?? 0);
-            toast(`SmartGoal: Goal completed. +${xp} XP. +${points} point${points === 1 ? '' : 's'}.`);
+            toast(approvedGoalRewardMessage(resp.attempt));
           }
           setPolling(false);
           nav.goBack();

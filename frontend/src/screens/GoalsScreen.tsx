@@ -13,7 +13,7 @@ import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
 import type { RootStackParamList } from '../navigation/types';
-import { messageForCustomGoalCompleted } from '../motivation/messages';
+import { customGoalCompletionMessage } from '../motivation/completionMessage';
 import { isAppGoal, markAppGoal, unmarkAppGoal } from '../motivation/appGoals';
 import { appendScorePoint } from '../motivation/scoreHistory';
 import { appendInbox } from '../notifications/inbox';
@@ -188,8 +188,7 @@ export function GoalsScreen() {
       }
       await authApi.updateGoal(token, g.id, { completed: true });
 
-      const msg = messageForCustomGoalCompleted();
-      toast(msg);
+      toast(customGoalCompletionMessage());
 
       await refresh();
     } catch (e: any) {

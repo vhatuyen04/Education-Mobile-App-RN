@@ -17,16 +17,44 @@ import ffmpegPath from 'ffmpeg-static';
 
 import { Prisma } from '@prisma/client';
 import { classifyCreatedGoal, rewardsForDifficultyScore } from '../goals/classifyGoal.js';
-import { acceptAiSuggestion, signAiSuggestion } from '../goals/suggestionToken.js';
+import { acceptAiSuggestion, claimSuggestionOnce, signAiSuggestion, SuggestionAlreadyUsed } from '../goals/suggestionToken.js';
+import { autoReviewFailureWrite, rejectionReason } from '../goals/proofFeedback.js';
+import {
+  MAX_PROOF_FRAMES,
+  MAX_PROOF_FRAME_BYTES,
+  limitFramesByBytes,
+  proofSampleFps,
+  readVideoDurationSeconds,
+  requiredRepCount,
+} from '../goals/proofSampling.js';
 import { GoalLifecycleError, withLockedGoal } from '../goals/goalCriticalSection.js';
 import { mockReviewAccess } from '../goals/mockReviewAccess.js';
 import { proofDecisionNotice } from '../goals/proofDecisionNotice.js';
 import {
+  applyProofDecision,
+  ProofDecisionConflict,
+  type LockedGoalReward,
+  type LockedProofAttempt,
+  type LockedUserStreak,
+  type ProofApprovalDb,
+  type ProofDecisionInput,
+  type ProofDecisionResult,
+} from '../goals/proofApproval.js';
+import { nextGoalStreak } from '../goals/streak.js';
+import {
+  AntiFarmStale,
+  antiFarmFingerprint,
+  needsFarmModel,
+  rewardsForSnapshot,
+  settleApprovalRewards,
+  type AntiFarmGoal,
+  type AntiFarmRecent,
+} from '../goals/antiFarm.js';
+import { applyCustomCompletion, rewardSubject, type CustomCompletionDb, type CustomCompletionPatch } from '../goals/customCompletion.js';
+import {
   activeGoalFilter,
-  approvalShouldComplete,
   denialForGoalEdit,
   proofResubmitDecision,
-  proofStatusForDecision,
   userCompletionDecision,
 } from '../goals/lifecycle.js';
 import { prisma } from '../utils/prisma.js';
@@ -90,97 +118,123 @@ async function lockOwnedGoal(tx: Prisma.TransactionClient, goalId: string, userI
   return rows[0] ?? null;
 }
 
-async function completeGoalForUser(params: { userId: string; goalId: string }) {
-  const { userId, goalId } = params;
-  const existing = await prismaAny.goal.findFirst({
-    where: { id: goalId, userId },
-    select: {
-      id: true,
-      completed: true,
-      failedAt: true,
-      rankField: true,
-      title: true,
-      description: true,
-      requirementSource: true,
-      difficultyScore: true,
-      pointsAwarded: true,
-      xpAwarded: true,
-    },
-  });
-  if (!existing) return { ok: false as const, error: 'Not found' };
-
-  const claimed = await prisma.$transaction(async (tx) => {
-    const locked = await lockOwnedGoal(tx, goalId, userId);
-    if (!locked) return 0;
-    if (!approvalShouldComplete('APPROVE', locked)) return 0;
-    const updated = await tx.goal.updateMany({
-      where: activeGoalFilter(goalId, userId),
-      data: { completed: true },
-    });
-    return updated.count;
-  });
-  if (claimed !== 1) return { ok: true as const, awardedPoints: 0, awardedXp: 0 };
-
-  const rewards = await computeSmartGoalRewardsForCompletion({
-    userId,
-    goal: {
-      id: existing.id,
-      title: existing.title,
-      description: existing.description,
-      rankField: existing.rankField,
-      requirementSource: existing.requirementSource,
-      difficultyScore: existing.difficultyScore,
-      pointsAwarded: existing.pointsAwarded,
-      xpAwarded: existing.xpAwarded,
-    },
-  });
-
-  const points = rewards.points;
-  const xp = rewards.xp;
-  if (xp > 0) {
-    await prismaAny.user.update({ where: { id: userId }, data: { xp: { increment: xp } }, select: { id: true } });
-  }
-  if (points > 0 && existing.rankField) {
-    const scoreField = scoreFieldForRankField(existing.rankField);
-    await prismaAny.user.update({ where: { id: userId }, data: { [scoreField]: { increment: points } }, select: { id: true } });
-    await refreshLeaderboardTop(existing.rankField);
-  }
-
-  await updateGoalStreakForUser(userId);
-
-  return { ok: true as const, awardedPoints: points, awardedXp: xp };
+function asRankField(value: unknown): 'Sport' | 'Academy' | 'Entertainment' | null {
+  if (value === 'Sport' || value === 'Academy' || value === 'Entertainment') return value;
+  return null;
 }
 
-async function computeSmartGoalRewardsForCompletion(params: {
-  userId: string;
-  goal: {
-    id: string;
-    title: string;
-    description: string | null;
-    rankField: string | null;
-    requirementSource: 'USER' | 'AI' | null;
-    difficultyScore: number | null;
-    pointsAwarded: number | null;
-    xpAwarded: number | null;
+function asRequirementSource(value: unknown): 'USER' | 'AI' | null {
+  if (value === 'USER' || value === 'AI') return value;
+  return null;
+}
+
+function proofDb(tx: Prisma.TransactionClient): ProofApprovalDb {
+  return {
+    async lockAttempt(attemptId: string): Promise<LockedProofAttempt | null> {
+      const rows = await tx.$queryRaw<Array<{ id: string; userId: string; goalId: string; status: string; awardedPoints: number | null; awardedXp: number | null }>>(
+        Prisma.sql`SELECT id, "userId", "goalId", status::text AS status, "awardedPoints", "awardedXp" FROM "SmartGoalProofAttempt" WHERE id = ${attemptId} FOR UPDATE`
+      );
+      const row = rows[0];
+      if (!row) return null;
+      const status = String(row.status);
+      if (status !== 'PENDING_UPLOAD' && status !== 'PENDING_REVIEW' && status !== 'APPROVED' && status !== 'REJECTED') return null;
+      return {
+        id: String(row.id),
+        userId: String(row.userId),
+        goalId: String(row.goalId),
+        status,
+        awardedPoints: Number(row.awardedPoints ?? 0),
+        awardedXp: Number(row.awardedXp ?? 0),
+      };
+    },
+    async lockGoal(goalId: string, userId: string): Promise<LockedGoalReward | null> {
+      const rows = await tx.$queryRaw<Array<Record<string, unknown>>>(
+        Prisma.sql`SELECT id, "userId", completed, "failedAt", "rankField"::text AS "rankField", title, description, "requirementSource"::text AS "requirementSource", "difficultyScore", "pointsAwarded", "xpAwarded" FROM "Goal" WHERE id = ${goalId} AND "userId" = ${userId} FOR UPDATE`
+      );
+      const row = rows[0];
+      if (!row) return null;
+      return {
+        id: String(row.id),
+        userId: String(row.userId),
+        completed: row.completed === true,
+        failedAt: row.failedAt instanceof Date ? row.failedAt : row.failedAt ? new Date(String(row.failedAt)) : null,
+        rankField: asRankField(row.rankField),
+        title: String(row.title ?? ''),
+        description: row.description == null ? null : String(row.description),
+        requirementSource: asRequirementSource(row.requirementSource),
+        difficultyScore: row.difficultyScore == null ? null : Number(row.difficultyScore),
+        pointsAwarded: row.pointsAwarded == null ? null : Number(row.pointsAwarded),
+        xpAwarded: row.xpAwarded == null ? null : Number(row.xpAwarded),
+      };
+    },
+    async lockUser(userId: string): Promise<LockedUserStreak | null> {
+      const rows = await tx.$queryRaw<Array<{ id: string; goalStreakDays: number | null; lastGoalCompletedAt: Date | null }>>(
+        Prisma.sql`SELECT id, "goalStreakDays", "lastGoalCompletedAt" FROM "User" WHERE id = ${userId} FOR UPDATE`
+      );
+      const row = rows[0];
+      if (!row) return null;
+      return {
+        id: String(row.id),
+        goalStreakDays: Number(row.goalStreakDays ?? 0),
+        lastGoalCompletedAt: row.lastGoalCompletedAt ? new Date(row.lastGoalCompletedAt) : null,
+      };
+    },
+    async updateAttempt(attemptId, data) {
+      const updated = await tx.smartGoalProofAttempt.updateMany({
+        where: { id: attemptId, status: 'PENDING_REVIEW' },
+        data,
+      });
+      return updated.count;
+    },
+    async markGoalCompleted(goalId, userId) {
+      const updated = await tx.goal.updateMany({
+        where: activeGoalFilter(goalId, userId),
+        data: { completed: true },
+      });
+      return updated.count;
+    },
+    async addUserRewards(userId, delta) {
+      const data: Record<string, { increment: number }> = {};
+      if (delta.xp > 0) data.xp = { increment: delta.xp };
+      if (delta.points > 0 && delta.scoreField) data[delta.scoreField] = { increment: delta.points };
+      if (!Object.keys(data).length) return;
+      await tx.user.update({ where: { id: userId }, data, select: { id: true } });
+    },
+    async saveStreak(userId, streak) {
+      await tx.user.update({ where: { id: userId }, data: streak, select: { id: true } });
+    },
   };
-}): Promise<{ points: number; xp: number }> {
-  const { userId, goal } = params;
+}
 
-  // Only SmartGoals can award points/xp.
-  // Primary signal is requirementSource='AI', but we also support legacy SmartGoals
-  // that were created with AI reward/scoring fields but without requirementSource set.
-  const looksLikeSmartGoal =
-    goal.requirementSource === 'AI' ||
-    goal.difficultyScore !== null ||
-    typeof goal.pointsAwarded === 'number' ||
-    typeof goal.xpAwarded === 'number';
-  if (!looksLikeSmartGoal) return { points: 0, xp: 0 };
-  if (!goal.rankField) return { points: 0, xp: 0 };
+function customCompletionDb(tx: Prisma.TransactionClient): CustomCompletionDb {
+  const locked = proofDb(tx);
+  return {
+    lockUser: userId => locked.lockUser(userId),
+    async lockGoal(goalId, userId) {
+      const goal = await locked.lockGoal(goalId, userId);
+      if (!goal) return null;
+      return { ...goal, userId };
+    },
+    listRecent: (ownerId, goal) => listRecentAntiFarmGoals(tx, ownerId, goal),
+    async updateGoal(goalId, userId, data) {
+      const updated = await tx.goal.updateMany({
+        where: activeGoalFilter(goalId, userId),
+        data,
+      });
+      return updated.count;
+    },
+    addUserRewards: (ownerId, delta) => locked.addUserRewards(ownerId, delta),
+    saveStreak: (ownerId, streak) => locked.saveStreak(ownerId, streak),
+  };
+}
 
-  const basePoints = Math.max(1, Math.floor(Number(goal.pointsAwarded ?? 1)));
-  const baseXp = Math.max(0, Math.floor(Number(goal.xpAwarded ?? 0)));
-
-  const recent = await prismaAny.goal.findMany({
+async function listRecentAntiFarmGoals(
+  db: { goal: { findMany: (args: any) => Promise<any[]> } },
+  userId: string,
+  goal: { id: string; rankField: string | null }
+): Promise<AntiFarmRecent[]> {
+  if (!goal.rankField) return [];
+  const rows = await db.goal.findMany({
     where: {
       userId,
       completed: true,
@@ -188,64 +242,110 @@ async function computeSmartGoalRewardsForCompletion(params: {
       rankField: goal.rankField,
       id: { not: goal.id },
     },
-    orderBy: { createdAt: 'desc' },
+    orderBy: [{ createdAt: 'desc' }],
     take: 20,
     select: { id: true, title: true, description: true, difficultyScore: true },
   });
+  return rows.map(row => ({
+    id: String(row.id),
+    title: String(row.title ?? ''),
+    description: row.description == null ? null : String(row.description),
+    difficultyScore: row.difficultyScore == null ? null : Number(row.difficultyScore),
+  }));
+}
 
-  if (!recent.length) return { points: basePoints, xp: baseXp };
+async function decideRewardsOutsideLock(goal: AntiFarmGoal, recent: AntiFarmRecent[]) {
+  const hasApiKey = !!process.env.OPENAI_API_KEY;
+  if (!needsFarmModel(goal, recent, hasApiKey)) {
+    return rewardsForSnapshot(goal, recent, null, hasApiKey ? 'model' : 'heuristic');
+  }
+  const decision = await runOpenAiSmartGoalFarmCheck({
+    apiKey: process.env.OPENAI_API_KEY as string,
+    newGoal: {
+      title: goal.title,
+      description: goal.description,
+      difficultyScore: goal.difficultyScore,
+      rankField: goal.rankField,
+    },
+    completedGoals: recent.map(item => ({
+      title: item.title,
+      description: item.description,
+      difficultyScore: item.difficultyScore,
+    })),
+  }).catch(() => null);
+  return rewardsForSnapshot(goal, recent, decision?.farm === true, 'model');
+}
 
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (apiKey) {
-    const decision = await runOpenAiSmartGoalFarmCheck({
-      apiKey,
-      newGoal: {
-        title: goal.title,
-        description: goal.description,
-        difficultyScore: goal.difficultyScore,
-        rankField: goal.rankField,
+async function runProofDecisionTx(
+  input: ProofDecisionInput,
+  rewardsFor: (tx: Prisma.TransactionClient, goal: LockedGoalReward) => Promise<{ points: number; xp: number }>,
+  now = new Date()
+): Promise<ProofDecisionResult> {
+  const result = await prisma.$transaction(
+    tx => applyProofDecision(proofDb(tx), input, goal => rewardsFor(tx, goal), now),
+    { maxWait: 5000, timeout: 20000 }
+  );
+  if (result.ok && result.completedGoal && result.awardedPoints > 0 && result.rankField) {
+    await refreshLeaderboardTop(result.rankField);
+  }
+  return result;
+}
+
+async function commitProofDecision(
+  input: ProofDecisionInput,
+  now = new Date()
+): Promise<ProofDecisionResult> {
+  try {
+    if (input.decision === 'REJECT') {
+      return await runProofDecisionTx(input, async () => ({ points: 0, xp: 0 }), now);
+    }
+    return await settleApprovalRewards({
+      maxAttempts: 3,
+      load: async () => {
+        const attempt = await prismaAny.smartGoalProofAttempt.findFirst({
+          where: { id: input.attemptId },
+          select: { id: true, userId: true, goalId: true, status: true },
+        });
+        if (!attempt || attempt.status !== 'PENDING_REVIEW') return null;
+        if (input.userId && attempt.userId !== input.userId) return null;
+        if (input.goalId && attempt.goalId !== input.goalId) return null;
+        const goal = await prismaAny.goal.findFirst({
+          where: { id: attempt.goalId, userId: attempt.userId },
+          select: {
+            id: true,
+            userId: true,
+            completed: true,
+            failedAt: true,
+            rankField: true,
+            title: true,
+            description: true,
+            requirementSource: true,
+            difficultyScore: true,
+            pointsAwarded: true,
+            xpAwarded: true,
+          },
+        });
+        if (!goal || goal.completed || goal.failedAt) return null;
+        const recent = await listRecentAntiFarmGoals(prismaAny, goal.userId, goal);
+        return { goal, recent };
       },
-      completedGoals: recent.map((g: any) => ({ title: g.title, description: g.description, difficultyScore: g.difficultyScore })),
-    }).catch(() => null);
-
-    if (decision?.farm === true) {
-      return { points: 0, xp: 0 };
-    }
-    return { points: basePoints, xp: baseXp };
+      decide: decideRewardsOutsideLock,
+      commit: (rewards, fingerprint) =>
+        runProofDecisionTx(input, async (tx, goal) => {
+          if (fingerprint === null) {
+            if (goal.completed || goal.failedAt) return { points: 0, xp: 0 };
+            throw new AntiFarmStale();
+          }
+          const recentNow = await listRecentAntiFarmGoals(tx, goal.userId, goal);
+          if (antiFarmFingerprint(goal, recentNow) !== fingerprint) throw new AntiFarmStale();
+          return rewards;
+        }, now),
+    });
+  } catch (error) {
+    if (error instanceof ProofDecisionConflict) return error.result;
+    if (error instanceof AntiFarmStale) return { ok: false, error: 'Reward check changed, try again' };
+    throw error;
   }
-
-  // Fallback heuristic when OpenAI isn't configured.
-  const norm = (s: string) =>
-    String(s || '')
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, ' ')
-      .trim();
-  const tokenSet = (s: string) => new Set(norm(s).split(' ').filter(Boolean));
-  const overlap = (x: Set<string>, y: Set<string>) => {
-    let inter = 0;
-    for (const t of x) if (y.has(t)) inter++;
-    const union = x.size + y.size - inter;
-    return union ? inter / union : 0;
-  };
-
-  const curTokens = tokenSet(goal.title);
-  const curDiff = typeof goal.difficultyScore === 'number' ? Number(goal.difficultyScore) : null;
-
-  for (const g of recent) {
-    const sim = overlap(curTokens, tokenSet(String(g.title ?? '')));
-    if (sim < 0.55) continue;
-
-    const prevDiff = typeof g.difficultyScore === 'number' ? Number(g.difficultyScore) : null;
-    // If we have difficulty scores, enforce "same or easier => 0".
-    if (curDiff !== null && prevDiff !== null && curDiff <= prevDiff) return { points: 0, xp: 0 };
-
-    // If missing scores, only block exact-match titles to avoid false positives.
-    if (curDiff === null || prevDiff === null) {
-      if (norm(goal.title) === norm(String(g.title ?? ''))) return { points: 0, xp: 0 };
-    }
-  }
-
-  return { points: basePoints, xp: baseXp };
 }
 
 async function runOpenAiSmartGoalFarmCheck(params: {
@@ -517,46 +617,21 @@ function computeLevelFromXp(xp: number) {
   return Math.max(1, lvl);
 }
 
-function ymdUtc(d: Date) {
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(d.getUTCDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-
-function addDaysUtc(ymdStr: string, deltaDays: number) {
-  const [yy, mm, dd] = ymdStr.split('-').map(v => Number(v));
-  const dt = new Date(Date.UTC(yy, (mm ?? 1) - 1, dd ?? 1));
-  dt.setUTCDate(dt.getUTCDate() + deltaDays);
-  return ymdUtc(dt);
-}
-
 async function updateGoalStreakForUser(userId: string, now = new Date()) {
-  const user = await prismaAny.user.findUnique({
-    where: { id: userId },
-    select: { id: true, goalStreakDays: true, lastGoalCompletedAt: true },
-  });
-  if (!user) return;
-
-  const today = ymdUtc(now);
-  const last = user.lastGoalCompletedAt ? ymdUtc(new Date(user.lastGoalCompletedAt)) : null;
-  const prevStreak = Number(user.goalStreakDays ?? 0);
-
-  let nextStreak = prevStreak;
-  if (!last) {
-    nextStreak = 1;
-  } else if (last === today) {
-    nextStreak = prevStreak;
-  } else if (addDaysUtc(last, 1) === today) {
-    nextStreak = Math.max(0, prevStreak) + 1;
-  } else {
-    nextStreak = 1;
-  }
-
-  await prismaAny.user.update({
-    where: { id: userId },
-    data: { goalStreakDays: nextStreak, lastGoalCompletedAt: now },
-    select: { id: true },
+  await prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<Array<{ goalStreakDays: number | null; lastGoalCompletedAt: Date | null }>>(
+      Prisma.sql`SELECT "goalStreakDays", "lastGoalCompletedAt" FROM "User" WHERE id = ${userId} FOR UPDATE`
+    );
+    const user = rows[0];
+    if (!user) return;
+    const next = nextGoalStreak(
+      {
+        goalStreakDays: Number(user.goalStreakDays ?? 0),
+        lastGoalCompletedAt: user.lastGoalCompletedAt ? new Date(user.lastGoalCompletedAt) : null,
+      },
+      now
+    );
+    await tx.user.update({ where: { id: userId }, data: next, select: { id: true } });
   });
 }
 
@@ -944,6 +1019,9 @@ authRouter.post('/admin/proof-attempts/:attemptId/decision', async (req: Request
   if (decision !== 'APPROVE' && decision !== 'REJECT') {
     return res.status(400).json({ error: 'Invalid payload' });
   }
+  const rejection = decision === 'REJECT' ? rejectionReason(feedback) : null;
+  if (rejection && !rejection.ok) return res.status(400).json({ error: rejection.error });
+  const savedFeedback = rejection && rejection.ok ? rejection.reason : feedback;
 
   const attempt = await prismaAny.smartGoalProofAttempt.findFirst({ where: { id: attemptId }, select: { id: true, status: true, userId: true, goalId: true } });
   if (!attempt) return res.status(404).json({ error: 'Not found' });
@@ -951,36 +1029,27 @@ authRouter.post('/admin/proof-attempts/:attemptId/decision', async (req: Request
     return res.status(400).json({ error: 'Attempt is not pending review' });
   }
 
-  const nextStatus = proofStatusForDecision(decision as 'APPROVE' | 'REJECT');
-  const claimedAttempt = await prismaAny.smartGoalProofAttempt.updateMany({
-    where: { id: attemptId, status: 'PENDING_REVIEW' },
-    data: { status: nextStatus, aiFeedback: feedback, reviewedBy: 'admin' },
+  const done = await commitProofDecision({
+    attemptId,
+    decision: decision as 'APPROVE' | 'REJECT',
+    feedback: savedFeedback,
+    reviewer: 'admin',
   });
-  if (claimedAttempt.count !== 1) {
-    return res.status(400).json({ error: 'Attempt is not pending review' });
+  if (!done.ok) {
+    const code = done.error === 'Not found' ? 404 : 400;
+    return res.status(code).json({ error: done.error });
   }
 
   try {
     await createProofDecisionNotification({
-      userId: attempt.userId,
-      goalId: attempt.goalId,
+      userId: done.userId,
+      goalId: done.goalId,
       attemptId,
-      status: nextStatus,
+      status: done.status,
       reviewer: 'admin',
-      reason: feedback,
+      reason: savedFeedback,
     });
   } catch {
-  }
-
-  if (decision === 'APPROVE') {
-    const done = await completeGoalForUser({ userId: attempt.userId, goalId: attempt.goalId });
-    if (!done.ok) return res.status(404).json({ error: done.error });
-
-    await prismaAny.smartGoalProofAttempt.update({
-      where: { id: attemptId },
-      data: { awardedPoints: Number(done.awardedPoints ?? 0), awardedXp: Number(done.awardedXp ?? 0) },
-      select: { id: true },
-    });
   }
 
   const updated = await prismaAny.smartGoalProofAttempt.findFirst({
@@ -1094,12 +1163,16 @@ authRouter.post('/admin/settings/auto-ai-review', async (req: Request, res: Resp
 
 async function extractVideoFrames(params: { videoPath: string; framesDir: string }): Promise<string[]> {
   const { videoPath, framesDir } = params;
+  if (!ffmpegPath) throw new Error('ffmpeg is not available');
+  const duration = await readVideoDurationSeconds(videoPath, String(ffmpegPath));
+  const frameCount = Math.min(MAX_PROOF_FRAMES, Math.max(1, Math.ceil(duration * 2)));
+  const fps = proofSampleFps(duration, frameCount);
 
   await new Promise<void>((resolve, reject) => {
     ffmpeg(videoPath)
-      .outputOptions(['-vf', 'fps=6,scale=768:-1'])
+      .outputOptions(['-vf', `fps=${fps},scale=768:-1`])
       .output(path.join(framesDir, 'frame-%03d.png'))
-      .frames(60)
+      .frames(frameCount)
       .on('end', () => resolve())
       .on('error', (err: any) => reject(err))
       .run();
@@ -1109,7 +1182,7 @@ async function extractVideoFrames(params: { videoPath: string; framesDir: string
   return files
     .filter(f => f.toLowerCase().endsWith('.png'))
     .sort()
-    .slice(0, 60)
+    .slice(0, frameCount)
     .map(f => path.join(framesDir, f));
 }
 
@@ -1121,31 +1194,19 @@ async function runOpenAiProofReview(params: {
 }): Promise<{ decision: 'APPROVE' | 'REJECT'; feedback: string | null }> {
   const { apiKey, requirementText, proofUrl, frameFiles } = params;
 
-  const requiredReps = (() => {
-    const t = String(requirementText ?? '').toLowerCase();
-    if (!t.trim()) return null;
-    const m = t.match(/\b(\d{1,4})\b[^\n]{0,40}\b(push\s*-?\s*up|pushup|sit\s*-?\s*up|situp|rep|reps)\b/);
-    if (m && m[1]) {
-      const n = Number(m[1]);
-      if (Number.isFinite(n) && n > 0) return Math.floor(n);
-    }
-    const anyNum = t.match(/\b(\d{1,4})\b/);
-    if (anyNum && anyNum[1]) {
-      const n = Number(anyNum[1]);
-      if (Number.isFinite(n) && n > 0) return Math.floor(n);
-    }
-    return null;
-  })();
+  const requiredReps = requiredRepCount(requirementText);
 
-  const images = await Promise.all(
-    frameFiles.map(async f => {
-      const buf = await fsp.readFile(f);
-      return { type: 'image_url', image_url: { url: `data:image/png;base64,${buf.toString('base64')}` } };
-    })
+  const frameBuffers = limitFramesByBytes(
+    await Promise.all(frameFiles.map(async file => fsp.readFile(file))),
+    MAX_PROOF_FRAME_BYTES
   );
+  const images = frameBuffers.map(buf => ({
+    type: 'image_url',
+    image_url: { url: `data:image/png;base64,${buf.toString('base64')}` },
+  }));
 
   const system =
-    'You are a proof verifier for a goal-tracking app. You must decide APPROVE or REJECT based only on the visible evidence in the frames. If evidence is unclear, incomplete, or not readable, you MUST REJECT. For repetition-based requirements (e.g., push-ups), you must (1) infer the required repetition count from the requirement text, (2) estimate how many reps are shown in the sequence of frames, and (3) APPROVE only if you are confident the estimated reps meet or exceed the required reps; otherwise REJECT.';
+    'You are a proof verifier for a goal-tracking app. You must decide APPROVE or REJECT based only on the visible evidence in the frames. The frames are a sparse sample spread across the whole video, not every moment, so they cannot guarantee an exact repetition count. If evidence is unclear, incomplete, or not readable, you MUST REJECT. For repetition-based requirements, APPROVE only when the visible sample is clearly enough to meet the required reps; otherwise REJECT. Do not treat distances, pages, dates, or chapter numbers as repetition counts.';
 
   const userText =
     `Requirement:\n${requirementText ?? '(none)'}\n\n` +
@@ -1288,25 +1349,15 @@ async function runAiReviewForAttemptId(attemptId: string): Promise<{ ok: true; s
       frameFiles,
     });
 
-    const nextStatus = proofStatusForDecision(decision.decision === 'APPROVE' ? 'APPROVE' : 'REJECT');
-    const claimedAttempt = await prismaAny.smartGoalProofAttempt.updateMany({
-      where: { id: attemptId, status: 'PENDING_REVIEW' },
-      data: { status: nextStatus, aiFeedback: decision.feedback ?? null, reviewedBy: 'AI' },
+    const done = await commitProofDecision({
+      attemptId,
+      decision: decision.decision === 'APPROVE' ? 'APPROVE' : 'REJECT',
+      feedback: decision.feedback ?? null,
+      reviewer: 'AI',
     });
-    if (claimedAttempt.count !== 1) return { ok: false, error: 'Attempt is not pending review' };
+    if (!done.ok) return { ok: false, error: done.error };
 
-    if (decision.decision === 'APPROVE') {
-      const done = await completeGoalForUser({ userId: attempt.userId, goalId: attempt.goalId });
-      if (!done.ok) return { ok: false, error: done.error };
-
-      await prismaAny.smartGoalProofAttempt.update({
-        where: { id: attemptId },
-        data: { awardedPoints: Number(done.awardedPoints ?? 0), awardedXp: Number(done.awardedXp ?? 0) },
-        select: { id: true },
-      });
-    }
-
-    return { ok: true, status: nextStatus };
+    return { ok: true, status: done.status };
   } catch (e: any) {
     return { ok: false, error: String(e?.message ?? 'AI review failed') };
   } finally {
@@ -1627,19 +1678,23 @@ Return a short description (1-3 short sentences) explaining why this goal is a g
       }
 
       const suggestion = (out.data as any).suggestion;
-      const suggestionToken = signAiSuggestion(
-        userId,
-        {
-          difficultyScore: score,
-          difficultyConfidence: Number(suggestion.difficultyConfidence),
-          difficultyReason: String(suggestion.difficultyReason ?? ''),
-          pointsAwarded: finalPoints,
-          xpAwarded: finalXp,
-          requirement: String(suggestion.requirement ?? ''),
-          rankField: suggestionRankField,
-        },
-        getConfig().jwtAccessSecret
-      );
+      const signedTitle = String(suggestion.title ?? '').trim();
+      const suggestionToken = signedTitle
+        ? signAiSuggestion(
+            userId,
+            {
+              title: signedTitle,
+              difficultyScore: score,
+              difficultyConfidence: Number(suggestion.difficultyConfidence),
+              difficultyReason: String(suggestion.difficultyReason ?? ''),
+              pointsAwarded: finalPoints,
+              xpAwarded: finalXp,
+              requirement: String(suggestion.requirement ?? ''),
+              rankField: suggestionRankField,
+            },
+            getConfig().jwtAccessSecret
+          )
+        : null;
       return res.json({
         ...out.data,
         suggestion: {
@@ -2071,11 +2126,16 @@ authRouter.post('/goals/:id/proof-attempts/:attemptId/submit', async (req: Reque
     const autoAi = await getAutoAiReviewEnabled();
     if (autoAi) {
       try {
-        updatedForClient = await prismaAny.smartGoalProofAttempt.update({
-          where: { id: attemptId },
+        const queued = await prismaAny.smartGoalProofAttempt.updateMany({
+          where: { id: attemptId, status: 'PENDING_REVIEW' },
           data: { aiFeedback: updated?.aiFeedback ? updated.aiFeedback : 'SmartGoal review queued…' },
-          select: { id: true, status: true, aiFeedback: true },
         });
+        if (queued.count === 1) {
+          updatedForClient = await prismaAny.smartGoalProofAttempt.findFirst({
+            where: { id: attemptId },
+            select: { id: true, status: true, aiFeedback: true },
+          });
+        }
       } catch {
       }
 
@@ -2101,13 +2161,8 @@ authRouter.post('/goals/:id/proof-attempts/:attemptId/submit', async (req: Reque
         }
 
         try {
-          const msg = String(run.error ?? 'AI review failed');
-          const clipped = msg.length > 500 ? msg.slice(0, 500) : msg;
-          await prismaAny.smartGoalProofAttempt.update({
-            where: { id: attemptId },
-            data: { aiFeedback: `Auto AI review failed: ${clipped}` },
-            select: { id: true },
-          });
+          const write = autoReviewFailureWrite(attemptId, String(run.error ?? 'AI review failed'));
+          await prismaAny.smartGoalProofAttempt.updateMany(write);
         } catch {
         }
       })();
@@ -2311,6 +2366,9 @@ authRouter.post('/goals/:id/proof-attempts/:attemptId/mock-review', async (req: 
   if (decision !== 'APPROVE' && decision !== 'REJECT') {
     return res.status(400).json({ error: 'Invalid payload' });
   }
+  const rejection = decision === 'REJECT' ? rejectionReason(feedback) : null;
+  if (rejection && !rejection.ok) return res.status(400).json({ error: rejection.error });
+  const savedFeedback = rejection && rejection.ok ? rejection.reason : feedback;
 
   const attempt = await prismaAny.smartGoalProofAttempt.findFirst({ where: { id: attemptId, userId, goalId }, select: { id: true, status: true } });
   if (!attempt) return res.status(404).json({ error: 'Not found' });
@@ -2318,18 +2376,17 @@ authRouter.post('/goals/:id/proof-attempts/:attemptId/mock-review', async (req: 
     return res.status(400).json({ error: 'Attempt is not pending review' });
   }
 
-  const nextStatus = proofStatusForDecision(decision as 'APPROVE' | 'REJECT');
-  const claimedAttempt = await prismaAny.smartGoalProofAttempt.updateMany({
-    where: { id: attemptId, status: 'PENDING_REVIEW' },
-    data: { status: nextStatus, aiFeedback: feedback, reviewedBy: 'admin' },
+  const done = await commitProofDecision({
+    attemptId,
+    decision: decision as 'APPROVE' | 'REJECT',
+    feedback: savedFeedback,
+    reviewer: 'admin',
+    userId,
+    goalId,
   });
-  if (claimedAttempt.count !== 1) {
-    return res.status(400).json({ error: 'Attempt is not pending review' });
-  }
-
-  if (decision === 'APPROVE') {
-    const done = await completeGoalForUser({ userId, goalId });
-    if (!done.ok) return res.status(404).json({ error: done.error });
+  if (!done.ok) {
+    const code = done.error === 'Not found' ? 404 : 400;
+    return res.status(code).json({ error: done.error });
   }
 
   const updated = await prismaAny.smartGoalProofAttempt.findFirst({
@@ -2608,46 +2665,63 @@ authRouter.post('/goals', async (req: Request, res: Response) => {
     pointsAwarded: number;
     xpAwarded: number;
   } | null = null;
+  let suggestionJti: string | null = null;
   if (parsed.data.suggestionToken) {
-    const accepted = acceptAiSuggestion(parsed.data.suggestionToken, getConfig().jwtAccessSecret, userId, parsed.data);
+    const accepted = acceptAiSuggestion(parsed.data.suggestionToken, getConfig().jwtAccessSecret, userId, { ...parsed.data, title });
     if (!accepted.ok) return res.status(400).json({ error: accepted.error });
     trusted = accepted.suggestion;
+    suggestionJti = accepted.suggestion.jti;
   }
   const classified = classifyCreatedGoal(trusted);
 
-  const goal = await prismaAny.goal.create({
-    data: {
-      userId,
-      title,
-      description: parsed.data.description ?? null,
-      requirement: parsed.data.requirement ?? null,
-      requirementSource: classified.requirementSource,
-      rankField: parsed.data.rankField ?? null,
-      progressPct: parsed.data.progressPct ?? 0,
-      dueAt: parsed.data.dueAt ? new Date(parsed.data.dueAt) : null,
-      difficultyScore: classified.difficultyScore,
-      difficultyConfidence: classified.difficultyConfidence,
-      difficultyReason: classified.difficultyReason,
-      pointsAwarded: classified.pointsAwarded,
-      xpAwarded: classified.xpAwarded,
-    },
-    select: {
-      id: true,
-      title: true,
-      description: true,
-      requirement: true,
-      requirementSource: true,
-      rankField: true,
-      progressPct: true,
-      dueAt: true,
-      completed: true,
-      difficultyScore: true,
-      difficultyConfidence: true,
-      difficultyReason: true,
-      pointsAwarded: true,
-      xpAwarded: true,
-    },
-  });
+  let goal;
+  try {
+    goal = await prisma.$transaction(async tx => {
+      if (suggestionJti) {
+        await claimSuggestionOnce(
+          (jti, ownerId) => tx.usedAiSuggestion.create({ data: { jti, userId: ownerId } }).then(() => undefined),
+          suggestionJti,
+          userId
+        );
+      }
+      return tx.goal.create({
+        data: {
+          userId,
+          title,
+          description: parsed.data.description ?? null,
+          requirement: parsed.data.requirement ?? null,
+          requirementSource: classified.requirementSource,
+          rankField: parsed.data.rankField ?? null,
+          progressPct: parsed.data.progressPct ?? 0,
+          dueAt: parsed.data.dueAt ? new Date(parsed.data.dueAt) : null,
+          difficultyScore: classified.difficultyScore,
+          difficultyConfidence: classified.difficultyConfidence,
+          difficultyReason: classified.difficultyReason,
+          pointsAwarded: classified.pointsAwarded,
+          xpAwarded: classified.xpAwarded,
+        },
+        select: {
+          id: true,
+          title: true,
+          description: true,
+          requirement: true,
+          requirementSource: true,
+          rankField: true,
+          progressPct: true,
+          dueAt: true,
+          completed: true,
+          difficultyScore: true,
+          difficultyConfidence: true,
+          difficultyReason: true,
+          pointsAwarded: true,
+          xpAwarded: true,
+        },
+      });
+    });
+  } catch (error) {
+    if (error instanceof SuggestionAlreadyUsed) return res.status(409).json({ error: 'Suggestion already used' });
+    throw error;
+  }
 
   return res.status(201).json({ goal });
 });
@@ -2823,73 +2897,67 @@ authRouter.put('/goals/:id', async (req: Request, res: Response) => {
     return res.json({ goal });
   }
 
-  let claimed: { count: number };
-  try {
-    claimed = await prisma.$transaction((tx) =>
-      withLockedGoal(
-        () => lockOwnedGoal(tx, id, userId),
-        () => tx.goal.updateMany({ where: activeGoalFilter(id, userId), data }),
-        'edit'
-      )
-    );
-  } catch (error) {
-    if (error instanceof GoalLifecycleError) return res.status(error.status).json({ error: error.message });
-    throw error;
-  }
-  if (claimed.count !== 1) return res.status(409).json({ error: 'Goal can no longer be edited' });
-
-  const willComplete = completion === 'complete';
-  let rewardsApplied: { points: number; xp: number } | null = null;
-  if (willComplete) {
-    const full = await prismaAny.goal.findFirst({
-      where: { id, userId },
-      select: {
-        id: true,
-        title: true,
-        description: true,
-        rankField: true,
-        requirementSource: true,
-        difficultyScore: true,
-        pointsAwarded: true,
-        xpAwarded: true,
-      },
-    });
-
-    if (full) {
-      const rewards = await computeSmartGoalRewardsForCompletion({
-        userId,
-        goal: {
-          id: full.id,
-          title: full.title,
-          description: full.description,
-          rankField: full.rankField,
-          requirementSource: full.requirementSource,
-          difficultyScore: full.difficultyScore,
-          pointsAwarded: full.pointsAwarded,
-          xpAwarded: full.xpAwarded,
+  if (completion === 'complete') {
+    const patch: CustomCompletionPatch = {};
+    if (data.title !== undefined) patch.title = data.title;
+    if (data.description !== undefined) patch.description = data.description;
+    if (data.requirement !== undefined) patch.requirement = data.requirement;
+    if (data.requirementSource !== undefined) patch.requirementSource = data.requirementSource;
+    if (data.rankField !== undefined) patch.rankField = data.rankField;
+    if (data.progressPct !== undefined) patch.progressPct = data.progressPct;
+    if (data.dueAt !== undefined) patch.dueAt = data.dueAt;
+    try {
+      const settled = await settleApprovalRewards({
+        maxAttempts: 3,
+        load: async () => {
+          const goal = await prismaAny.goal.findFirst({
+            where: { id, userId },
+            select: {
+              id: true,
+              title: true,
+              description: true,
+              requirementSource: true,
+              rankField: true,
+              difficultyScore: true,
+              pointsAwarded: true,
+              xpAwarded: true,
+              completed: true,
+              failedAt: true,
+            },
+          });
+          if (!goal || userCompletionDecision(goal, true) !== 'complete') return null;
+          const subject = rewardSubject(goal, patch);
+          const recent = await listRecentAntiFarmGoals(prismaAny, userId, subject);
+          return { goal: subject, recent };
         },
+        decide: decideRewardsOutsideLock,
+        commit: (rewards, fingerprint) =>
+          prisma.$transaction(
+            tx => applyCustomCompletion(customCompletionDb(tx), { userId, goalId: id, patch, rewards, fingerprint }),
+            { maxWait: 5000, timeout: 20000 }
+          ),
       });
-
-      const points = rewards.points;
-      const xp = rewards.xp;
-      rewardsApplied = { points, xp };
-      if (xp > 0) {
-        await prismaAny.user.update({ where: { id: userId }, data: { xp: { increment: xp } }, select: { id: true } });
-      }
-      if (points > 0 && full.rankField) {
-        const scoreField = scoreFieldForRankField(full.rankField);
-        await prismaAny.user.update({
-          where: { id: userId },
-          data: {
-            [scoreField]: { increment: points },
-          },
-          select: { id: true },
-        });
-        await refreshLeaderboardTop(full.rankField);
-      }
+      if (!settled.ok) return res.status(settled.status).json({ error: settled.error });
+      if (settled.awardedPoints > 0 && settled.rankField) await refreshLeaderboardTop(settled.rankField);
+    } catch (error) {
+      if (error instanceof AntiFarmStale) return res.status(409).json({ error: 'Reward check changed, try again' });
+      throw error;
     }
-
-    await updateGoalStreakForUser(userId);
+  } else {
+    let claimed: { count: number };
+    try {
+      claimed = await prisma.$transaction((tx) =>
+        withLockedGoal(
+          () => lockOwnedGoal(tx, id, userId),
+          () => tx.goal.updateMany({ where: activeGoalFilter(id, userId), data }),
+          'edit'
+        )
+      );
+    } catch (error) {
+      if (error instanceof GoalLifecycleError) return res.status(error.status).json({ error: error.message });
+      throw error;
+    }
+    if (claimed.count !== 1) return res.status(409).json({ error: 'Goal can no longer be edited' });
   }
   const goal = await prismaAny.goal.findFirst({
     where: { id, userId },
@@ -3022,52 +3090,6 @@ authRouter.get('/leaderboard', async (req: Request, res: Response) => {
   );
 
   return res.json({ leaderboards });
-});
-
-authRouter.post('/recompute-scores', async (req: Request, res: Response) => {
-  const token = getAccessTokenFromReq(req);
-  if (!token) {
-    return res.status(401).json({ error: 'Missing access token' });
-  }
-
-  let userId: string;
-  try {
-    userId = verifyAccessToken(token).sub;
-  } catch {
-    return res.status(401).json({ error: 'Invalid access token' });
-  }
-
-  const completed = await prismaAny.goal.findMany({
-    where: { userId, completed: true },
-    select: { description: true, rankField: true },
-    take: 500,
-  });
-
-  let sportScore = 0;
-  let academyScore = 0;
-  let entertainmentScore = 0;
-
-  for (const g of completed as any[]) {
-    if (!g.rankField) continue;
-    if (g.rankField === 'Sport') sportScore += 1;
-    else if (g.rankField === 'Entertainment') entertainmentScore += 1;
-    else academyScore += 1;
-  }
-
-  await prismaAny.user.update({
-    where: { id: userId },
-    data: {
-      sportScore,
-      academyScore,
-      entertainmentScore,
-    },
-    select: { id: true },
-  });
-
-  const fields: Array<'Sport' | 'Academy' | 'Entertainment'> = ['Sport', 'Academy', 'Entertainment'];
-  await Promise.all(fields.map(f => refreshLeaderboardTop(f)));
-
-  return res.json({ ok: true, sportScore, academyScore, entertainmentScore, score: sportScore + academyScore + entertainmentScore });
 });
 
 authRouter.get('/leaderboard/field', async (req: Request, res: Response) => {

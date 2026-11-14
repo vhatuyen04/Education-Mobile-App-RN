@@ -12,7 +12,7 @@ import { RootStack } from './src/navigation/RootStack';
 import { AuthProvider, useAuth } from './src/auth/AuthContext';
 import { SettingsProvider } from './src/settings/SettingsContext';
 import { appendInbox, rememberUnseen } from './src/notifications/inbox';
-import { autoScheduleRemindersForSignedInUser } from './src/notifications/scheduler';
+import { autoScheduleRemindersForSignedInUser, flushDueReminders } from './src/notifications/scheduler';
 import { syncServerNotifications } from './src/notifications/serverSync';
 import { getRecommendation } from './src/ai/recommendations';
 
@@ -65,7 +65,8 @@ export default function App() {
           : (n as any)?.date instanceof Date
             ? (n as any).date.getTime()
             : Date.now();
-        const inboxId = reqId ? `expo_${reqId}` : `${ts}-${Math.random().toString(16).slice(2)}`;
+        const dataInboxId = String((data as any)?.inboxId ?? '').trim();
+        const inboxId = dataInboxId || (reqId ? `expo_${reqId}` : `${ts}-${Math.random().toString(16).slice(2)}`);
         const inserted = await appendInbox({
           id: inboxId,
           receivedAt: ts,
@@ -115,7 +116,8 @@ export default function App() {
           : (r as any)?.notification?.date instanceof Date
             ? (r as any).notification.date.getTime()
             : Date.now();
-        const inboxId = reqId ? `expo_${reqId}` : `${ts}-${Math.random().toString(16).slice(2)}`;
+        const dataInboxId = String((data as any)?.inboxId ?? '').trim();
+        const inboxId = dataInboxId || (reqId ? `expo_${reqId}` : `${ts}-${Math.random().toString(16).slice(2)}`);
         const inserted = await appendInbox({
           id: inboxId,
           receivedAt: ts,
@@ -135,18 +137,24 @@ export default function App() {
       }).catch(() => {});
     }
 
+    void flushDueReminders();
     void autoScheduleRemindersForSignedInUser();
 
     const subApp = AppState.addEventListener('change', s => {
       if (s === 'active') {
+        void flushDueReminders();
         void autoScheduleRemindersForSignedInUser();
       }
     });
+    const reminderTimer = setInterval(() => {
+      void flushDueReminders();
+    }, 30_000);
 
     return () => {
       subRecv.remove();
       subResp.remove();
       subApp.remove();
+      clearInterval(reminderTimer);
     };
   }, []);
 
