@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import jwt from 'jsonwebtoken';
 
-import { classifyCreatedGoal, rewardsForDifficultyScore } from '../src/goals/classifyGoal.ts';
+import { classifyCreatedGoal, rewardsAfterDeadlineChange, rewardsForDifficultyScore } from '../src/goals/classifyGoal.ts';
 import { userCompletionDecision } from '../src/goals/lifecycle.ts';
 import { acceptAiSuggestion, AI_SUGGESTION_PURPOSE, signAiSuggestion, type TrustedAiSuggestion } from '../src/goals/suggestionToken.ts';
 
@@ -18,6 +18,7 @@ function trusted(partial: Partial<TrustedAiSuggestion> = {}): TrustedAiSuggestio
     requirement: 'Practice daily',
     rankField: 'Academy',
     title: 'Practice piano',
+    deadline: '2026-12-01',
     ...partial,
   };
 }
@@ -51,6 +52,55 @@ test('a forged difficulty score without a suggestion token stays a custom goal',
   assert.equal(created.pointsAwarded, 0);
   assert.equal(created.xpAwarded, 0);
   assert.equal(completionStatus(created), 'complete');
+});
+
+test('a farther saved deadline lowers difficulty and XP, while a closer one does not raise them', () => {
+  const now = new Date('2026-11-01T12:00:00.000Z');
+  const same = rewardsAfterDeadlineChange({
+    difficultyScore: 80,
+    pointsAwarded: rewardsForDifficultyScore(80).pointsAwarded,
+    xpAwarded: rewardsForDifficultyScore(80).xpAwarded,
+    fromDeadline: new Date('2026-12-01T00:00:00.000Z'),
+    toDeadline: new Date('2026-12-01T22:59:59.000Z'),
+    now,
+  });
+  assert.equal(same.difficultyScore, 80);
+  assert.equal(same.pointsAwarded, rewardsForDifficultyScore(80).pointsAwarded);
+
+  const farther = rewardsAfterDeadlineChange({
+    difficultyScore: 80,
+    pointsAwarded: rewardsForDifficultyScore(80).pointsAwarded,
+    xpAwarded: rewardsForDifficultyScore(80).xpAwarded,
+    fromDeadline: new Date('2026-11-15T00:00:00.000Z'),
+    toDeadline: new Date('2026-12-27T00:00:00.000Z'),
+    now,
+  });
+  assert.ok(farther.difficultyScore < 80);
+  assert.equal(farther.pointsAwarded, rewardsForDifficultyScore(farther.difficultyScore).pointsAwarded);
+  assert.equal(farther.xpAwarded, farther.pointsAwarded);
+
+  const closer = rewardsAfterDeadlineChange({
+    difficultyScore: 80,
+    pointsAwarded: rewardsForDifficultyScore(80).pointsAwarded,
+    xpAwarded: rewardsForDifficultyScore(80).xpAwarded,
+    fromDeadline: new Date('2026-12-27T00:00:00.000Z'),
+    toDeadline: new Date('2026-11-15T00:00:00.000Z'),
+    now,
+  });
+  assert.equal(closer.difficultyScore, 80);
+  assert.equal(closer.pointsAwarded, rewardsForDifficultyScore(80).pointsAwarded);
+  assert.equal(closer.xpAwarded, rewardsForDifficultyScore(80).xpAwarded);
+
+  const farm = rewardsAfterDeadlineChange({
+    difficultyScore: 80,
+    pointsAwarded: 0,
+    xpAwarded: 0,
+    fromDeadline: new Date('2026-11-15T00:00:00.000Z'),
+    toDeadline: new Date('2026-12-27T00:00:00.000Z'),
+    now,
+  });
+  assert.equal(farm.pointsAwarded, 0);
+  assert.equal(farm.xpAwarded, 0);
 });
 
 test('suggestion tokens reject bad signatures, expiry, other users, modified rewards, and other purposes', () => {

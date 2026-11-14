@@ -16,7 +16,7 @@ import ffmpeg from 'fluent-ffmpeg';
 import ffmpegPath from 'ffmpeg-static';
 
 import { Prisma } from '@prisma/client';
-import { classifyCreatedGoal, rewardsForDifficultyScore } from '../goals/classifyGoal.js';
+import { classifyCreatedGoal, dateFromYmd, rewardsAfterDeadlineChange, rewardsForDifficultyScore } from '../goals/classifyGoal.js';
 import { acceptAiSuggestion, claimSuggestionOnce, signAiSuggestion, SuggestionAlreadyUsed } from '../goals/suggestionToken.js';
 import { autoReviewFailureWrite, rejectionReason } from '../goals/proofFeedback.js';
 import {
@@ -1679,11 +1679,16 @@ Return a short description (1-3 short sentences) explaining why this goal is a g
 
       const suggestion = (out.data as any).suggestion;
       const signedTitle = String(suggestion.title ?? '').trim();
+      const signedDeadline = dateFromYmd(String(suggestion.deadline ?? '')) ?? dateFromYmd(String(parsed.data.deadline ?? ''));
+      const signedDeadlineYmd = signedDeadline
+        ? signedDeadline.toISOString().slice(0, 10)
+        : '';
       const suggestionToken = signedTitle
         ? signAiSuggestion(
             userId,
             {
               title: signedTitle,
+              deadline: signedDeadlineYmd,
               difficultyScore: score,
               difficultyConfidence: Number(suggestion.difficultyConfidence),
               difficultyReason: String(suggestion.difficultyReason ?? ''),
@@ -2669,7 +2674,26 @@ authRouter.post('/goals', async (req: Request, res: Response) => {
   if (parsed.data.suggestionToken) {
     const accepted = acceptAiSuggestion(parsed.data.suggestionToken, getConfig().jwtAccessSecret, userId, { ...parsed.data, title });
     if (!accepted.ok) return res.status(400).json({ error: accepted.error });
-    trusted = accepted.suggestion;
+    const suggestedDeadline = dateFromYmd(accepted.suggestion.deadline);
+    const chosenDeadline = parsed.data.dueAt ? new Date(parsed.data.dueAt) : null;
+    const scaled = suggestedDeadline
+      ? rewardsAfterDeadlineChange({
+          difficultyScore: accepted.suggestion.difficultyScore,
+          pointsAwarded: accepted.suggestion.pointsAwarded,
+          xpAwarded: accepted.suggestion.xpAwarded,
+          fromDeadline: suggestedDeadline,
+          toDeadline: chosenDeadline,
+        })
+      : null;
+    trusted = scaled
+      ? {
+          ...accepted.suggestion,
+          ...scaled,
+          difficultyReason: scaled.difficultyScore === accepted.suggestion.difficultyScore
+            ? accepted.suggestion.difficultyReason
+            : `${accepted.suggestion.difficultyReason} Adjusted for the saved deadline.`.trim(),
+        }
+      : accepted.suggestion;
     suggestionJti = accepted.suggestion.jti;
   }
   const classified = classifyCreatedGoal(trusted);
@@ -2841,6 +2865,7 @@ authRouter.put('/goals/:id', async (req: Request, res: Response) => {
       difficultyScore: true,
       pointsAwarded: true,
       xpAwarded: true,
+      dueAt: true,
     },
   });
   if (!existing) {
@@ -2865,6 +2890,22 @@ authRouter.put('/goals/:id', async (req: Request, res: Response) => {
   if ((parsed.data as any).rankField !== undefined) data.rankField = (parsed.data as any).rankField;
   if (parsed.data.progressPct !== undefined) data.progressPct = parsed.data.progressPct;
   if (parsed.data.dueAt !== undefined) data.dueAt = parsed.data.dueAt ? new Date(parsed.data.dueAt) : null;
+  if (
+    existing.requirementSource === 'AI' &&
+    data.dueAt !== undefined &&
+    typeof existing.difficultyScore === 'number'
+  ) {
+    const scaled = rewardsAfterDeadlineChange({
+      difficultyScore: existing.difficultyScore,
+      pointsAwarded: Number(existing.pointsAwarded ?? 0),
+      xpAwarded: Number(existing.xpAwarded ?? 0),
+      fromDeadline: existing.dueAt ? new Date(existing.dueAt) : null,
+      toDeadline: data.dueAt,
+    });
+    data.difficultyScore = scaled.difficultyScore;
+    data.pointsAwarded = scaled.pointsAwarded;
+    data.xpAwarded = scaled.xpAwarded;
+  }
   if (completion === 'complete') data.completed = true;
 
   if (data.rankField === undefined && !existing.rankField) {

@@ -7,6 +7,7 @@ export const AI_SUGGESTION_TTL = '7d';
 export type TrustedAiSuggestion = {
   jti: string;
   title: string;
+  deadline: string;
   difficultyScore: number;
   difficultyConfidence: number;
   difficultyReason: string;
@@ -69,6 +70,7 @@ export function acceptAiSuggestion(
   const suggestion: TrustedAiSuggestion = {
     jti,
     title,
+    deadline: typeof payload?.deadline === 'string' ? payload.deadline.trim() : '',
     difficultyScore: Number(payload.difficultyScore),
     difficultyConfidence: Number(payload.difficultyConfidence),
     difficultyReason: String(payload.difficultyReason ?? ''),

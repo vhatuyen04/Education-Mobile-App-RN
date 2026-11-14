@@ -11,6 +11,7 @@ import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
 import { markAppGoal } from '../motivation/appGoals';
+import { previewRewardsForDeadline } from '../motivation/deadlineDifficulty';
 
 type Props = {
   visible: boolean;
@@ -466,6 +467,16 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
 
   const displaySteps = useMemo(() => sanitizePlannerSteps(steps), [steps]);
   const stepCount = displaySteps.length;
+  const shownRewards = useMemo(() => {
+    if (typeof goalDifficultyScore !== 'number' || typeof goalPointsAwarded !== 'number' || typeof goalXpAwarded !== 'number') return null;
+    return previewRewardsForDeadline({
+      difficultyScore: goalDifficultyScore,
+      pointsAwarded: goalPointsAwarded,
+      xpAwarded: goalXpAwarded,
+      suggestedDeadline: goalDeadline,
+      chosenDeadline: deadline.trim() || goalDeadline,
+    });
+  }, [deadline, goalDeadline, goalDifficultyScore, goalPointsAwarded, goalXpAwarded]);
 
   const templates = useMemo(
     () => [
@@ -656,7 +667,9 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
 
       setGoalTitle(resp.suggestion.title || defaultGoalTitle(planText));
       setGoalField(resp.suggestion.field);
-      setGoalDeadline(resp.suggestion.deadline || resolvedDeadline);
+      const effectiveDeadline = resp.suggestion.deadline || resolvedDeadline;
+      setDeadline(effectiveDeadline);
+      setGoalDeadline(effectiveDeadline);
       setGoalRequirement(resp.suggestion.requirement || '');
       setGoalDifficultyScore(typeof resp.suggestion.difficultyScore === 'number' ? resp.suggestion.difficultyScore : null);
       setGoalDifficultyConfidence(typeof resp.suggestion.difficultyConfidence === 'number' ? resp.suggestion.difficultyConfidence : null);
@@ -664,7 +677,6 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
       setGoalSuggestionToken(resp.suggestion.suggestionToken || null);
       setGoalPointsAwarded(typeof (resp.suggestion as any).pointsAwarded === 'number' ? (resp.suggestion as any).pointsAwarded : null);
       setGoalXpAwarded(typeof (resp.suggestion as any).xpAwarded === 'number' ? (resp.suggestion as any).xpAwarded : null);
-      const effectiveDeadline = resp.suggestion.deadline || resolvedDeadline;
       const mapped = resp.suggestion.steps.map(s => ({
         id: makeId(),
         text: s.text,
@@ -705,7 +717,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
     if (loading) return;
     setLoading(true);
     try {
-      const resolvedDeadline = await resolveDeadlineForPlan(goalDeadline || deadline);
+      const resolvedDeadline = await resolveDeadlineForPlan(deadline.trim() || goalDeadline);
       if (!resolvedDeadline) return;
 
       const dueIso = parseDeadlineToISOEndOfDay(resolvedDeadline, { mustBeFuture: true });
@@ -892,9 +904,9 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
 
                   <View style={{ flexDirection: 'row', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
                     <Pill>Field: {goalField}</Pill>
-                    <Pill>Deadline: {goalDeadline || deadline || '—'}</Pill>
-                    {typeof goalPointsAwarded === 'number' ? <Pill>Points: {goalPointsAwarded}</Pill> : null}
-                    {typeof goalXpAwarded === 'number' ? <Pill>XP: {goalXpAwarded}</Pill> : null}
+                    <Pill>Deadline: {deadline.trim() || goalDeadline || '—'}</Pill>
+                    {shownRewards ? <Pill>Points: {shownRewards.pointsAwarded}</Pill> : null}
+                    {shownRewards ? <Pill>XP: {shownRewards.xpAwarded}</Pill> : null}
                   </View>
                 </Card>
 

@@ -13,6 +13,7 @@ import * as authApi from '../api/auth';
 import { getRecommendation, removeRecommendation, upsertRecommendation } from '../ai/recommendations';
 import { removeInboxItemsByRecoId } from '../notifications/inbox';
 import { markAppGoal } from '../motivation/appGoals';
+import { previewRewardsForDeadline } from '../motivation/deadlineDifficulty';
 
 type RouteParams = { id: string };
 
@@ -217,6 +218,20 @@ export function AiGoalRecommendationScreen() {
   const [descriptionDraft, setDescriptionDraft] = useState('');
   const [deadlineDraft, setDeadlineDraft] = useState('');
   const [stepsDraft, setStepsDraft] = useState<UiStep[]>([]);
+  const shownRewards = useMemo(() => {
+    const score = Number((rec?.suggestion as any)?.difficultyScore);
+    const points = Number((rec?.suggestion as any)?.pointsAwarded);
+    const xp = Number((rec?.suggestion as any)?.xpAwarded);
+    const suggested = String(rec?.suggestion?.deadline ?? '');
+    if (!rec || !Number.isFinite(score) || !Number.isFinite(points) || !Number.isFinite(xp)) return null;
+    return previewRewardsForDeadline({
+      difficultyScore: score,
+      pointsAwarded: points,
+      xpAwarded: xp,
+      suggestedDeadline: suggested,
+      chosenDeadline: deadlineDraft.trim() || suggested,
+    });
+  }, [deadlineDraft, rec]);
 
   const load = useCallback(async () => {
     if (!recoId) return;
@@ -398,9 +413,9 @@ export function AiGoalRecommendationScreen() {
           <View style={{ height: 10 }} />
           <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
             <Pill>Field: {rec.suggestion.field}</Pill>
-            <Pill>Deadline: {rec.suggestion.deadline}</Pill>
-            {typeof (rec.suggestion as any).pointsAwarded === 'number' ? <Pill>Points: {(rec.suggestion as any).pointsAwarded}</Pill> : null}
-            {typeof (rec.suggestion as any).xpAwarded === 'number' ? <Pill>XP: {(rec.suggestion as any).xpAwarded}</Pill> : null}
+            <Pill>Deadline: {deadlineDraft.trim() || rec.suggestion.deadline}</Pill>
+            {shownRewards ? <Pill>Points: {shownRewards.pointsAwarded}</Pill> : null}
+            {shownRewards ? <Pill>XP: {shownRewards.xpAwarded}</Pill> : null}
           </View>
 
           <View style={{ height: 12 }} />

@@ -139,16 +139,6 @@ export async function flushDueReminders() {
   if (!pending.length) return;
   const inbox = await getInbox();
   const seen = new Set(inbox.map(item => item.id));
-  let presented = new Set<string>();
-  try {
-    const shown = await Notifications.getPresentedNotificationsAsync();
-    presented = new Set(
-      shown
-        .map(item => String((item.request.content.data as any)?.inboxId ?? ''))
-        .filter(Boolean)
-    );
-  } catch {
-  }
 
   const keep: PendingReminder[] = [];
   for (const item of pending) {
@@ -179,16 +169,6 @@ export async function flushDueReminders() {
     if (item.osId) {
       try {
         await Notifications.cancelScheduledNotificationAsync(item.osId);
-      } catch {
-      }
-    }
-    if (!presented.has(item.id)) {
-      try {
-        await ensureAndroidChannel();
-        await Notifications.scheduleNotificationAsync({
-          content: reminderContent(item),
-          trigger: null,
-        });
       } catch {
       }
     }
@@ -312,7 +292,7 @@ async function scheduleReminderList(items: PendingReminder[]) {
   for (const item of items) {
     if (!withinWindow(item.fireAt, now)) continue;
     let osId: string | null = null;
-    if (allowed && item.fireAt > now + 1500) {
+    if (allowed && item.fireAt > now) {
       try {
         osId = await Notifications.scheduleNotificationAsync({
           content: reminderContent(item),
