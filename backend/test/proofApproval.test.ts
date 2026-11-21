@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { AntiFarmStale, antiFarmFingerprint, settleApprovalRewards } from '../src/goals/antiFarm.ts';
+import { hashRankingChallenge } from '../src/goals/rankingChallenge.ts';
 import {
   applyProofDecision,
   type LockedGoalReward,
@@ -131,6 +132,9 @@ function createMemoryDb(initial: DbState) {
         user.lastGoalCompletedAt = streak.lastGoalCompletedAt;
         dirty.users.add(userId);
       },
+      async rankingAlreadySettled(goalId, exceptAttemptId) {
+        return Object.values(state.attempts).some(row => row.goalId === goalId && row.id !== exceptAttemptId && row.status === 'APPROVED');
+      },
     };
 
     try {
@@ -155,6 +159,7 @@ function user(partial: Partial<UserRow> = {}): UserRow {
     sportScore: 0,
     academyScore: 0,
     entertainmentScore: 0,
+    name: 'ada',
     goalStreakDays: 2,
     lastGoalCompletedAt: new Date('2026-01-01T12:00:00.000Z'),
     ...partial,
@@ -165,7 +170,8 @@ function goal(partial: Partial<GoalRow> = {}): GoalRow {
   return {
     id: 'goal-1',
     userId: 'user-1',
-    completed: false,
+    completed: true,
+    rankingEligible: true,
     failedAt: null,
     rankField: 'Sport',
     title: 'Run',
@@ -178,20 +184,37 @@ function goal(partial: Partial<GoalRow> = {}): GoalRow {
   };
 }
 
+const CHALLENGE_CODE = 'AB23CD45';
+
 function attempt(partial: Partial<AttemptRow> = {}): AttemptRow {
+  const id = partial.id ?? 'attempt-1';
+  const userId = partial.userId ?? 'user-1';
+  const goalId = partial.goalId ?? 'goal-1';
   return {
-    id: 'attempt-1',
-    userId: 'user-1',
-    goalId: 'goal-1',
+    id,
+    userId,
+    goalId,
     status: 'PENDING_REVIEW',
     awardedPoints: 0,
     awardedXp: 0,
+    challengeHash: hashRankingChallenge(CHALLENGE_CODE, { userId, goalId, attemptId: id }),
+    moderationStatus: 'CLEAR',
     ...partial,
   };
 }
 
 function approve(attemptId: string, goalId = 'goal-1'): ProofDecisionInput {
-  return { attemptId, goalId, userId: 'user-1', decision: 'APPROVE', feedback: 'ok', reviewer: 'admin' };
+  return {
+    attemptId,
+    goalId,
+    userId: 'user-1',
+    decision: 'APPROVE',
+    feedback: 'ok',
+    reviewer: 'admin',
+    challengeCode: CHALLENGE_CODE,
+    usernameConfirmed: true,
+    achievementConfirmed: true,
+  };
 }
 
 const day1 = new Date('2026-01-02T12:00:00.000Z');
@@ -211,12 +234,12 @@ test('concurrent approvals of one goal award once', async () => {
     db.transaction(tx => applyProofDecision(tx, approve('attempt-1'), rewards, day1)),
     db.transaction(tx => applyProofDecision(tx, approve('attempt-2'), rewards, day1)),
   ]);
-  const awarded = [first, second].filter(result => result.ok && result.awardedXp === 8);
+  const awarded = [first, second].filter(result => result.ok && result.awardedPoints === 8);
   assert.equal(awarded.length, 1);
-  assert.equal(db.state.users['user-1'].xp, 8);
+  assert.equal(db.state.users['user-1'].xp, 0);
   assert.equal(db.state.users['user-1'].sportScore, 8);
   assert.equal(db.state.goals['goal-1'].completed, true);
-  assert.equal(db.state.users['user-1'].goalStreakDays, 3);
+  assert.equal(db.state.users['user-1'].goalStreakDays, 2);
   assert.equal(db.state.attempts['attempt-1'].status, 'APPROVED');
   assert.equal(db.state.attempts['attempt-2'].status, 'APPROVED');
 });
@@ -232,33 +255,39 @@ test('a failed approval rolls back and a retry awards once', async () => {
     db.transaction(async tx => {
       const failing: ProofApprovalDb = {
         ...tx,
-        markGoalCompleted: async (goalId, userId) => {
-          const count = await tx.markGoalCompleted(goalId, userId);
-          throw new Error(`write failed after claim ${count}`);
+        addUserRewards: async (userId, delta) => {
+          await tx.addUserRewards(userId, delta);
+          throw new Error('write failed after reward');
         },
       };
       return applyProofDecision(failing, approve('attempt-1'), async () => ({ points: 4, xp: 9 }), day1);
     })
   );
   assert.equal(db.state.attempts['attempt-1'].status, 'PENDING_REVIEW');
-  assert.equal(db.state.goals['goal-1'].completed, false);
+  assert.equal(db.state.goals['goal-1'].completed, true);
   assert.equal(db.state.users['user-1'].xp, 0);
   assert.equal(db.state.users['user-1'].goalStreakDays, 0);
 
   const retried = await db.transaction(tx => applyProofDecision(tx, approve('attempt-1'), async () => ({ points: 4, xp: 9 }), day1));
   assert.equal(retried.ok, true);
-  if (retried.ok) assert.equal(retried.awardedXp, 9);
-  assert.equal(db.state.users['user-1'].xp, 9);
+  if (retried.ok) {
+    assert.equal(retried.awardedPoints, 4);
+    assert.equal(retried.awardedXp, 0);
+    assert.equal(retried.completedGoal, false);
+  }
+  assert.equal(db.state.users['user-1'].xp, 0);
+  assert.equal(db.state.users['user-1'].sportScore, 4);
   assert.equal(db.state.goals['goal-1'].completed, true);
   assert.equal(db.state.attempts['attempt-1'].status, 'APPROVED');
 
   const again = await db.transaction(tx => applyProofDecision(tx, approve('attempt-1'), async () => ({ points: 4, xp: 9 }), day2));
   assert.equal(again.ok, false);
-  assert.equal(db.state.users['user-1'].xp, 9);
-  assert.equal(db.state.users['user-1'].goalStreakDays, 1);
+  assert.equal(db.state.users['user-1'].xp, 0);
+  assert.equal(db.state.users['user-1'].sportScore, 4);
+  assert.equal(db.state.users['user-1'].goalStreakDays, 0);
 });
 
-test('genuine zero rewards still complete the goal once', async () => {
+test('a zero ranking reward does not change completion or XP', async () => {
   const db = createMemoryDb({
     users: { 'user-1': user({ xp: 15, sportScore: 3 }) },
     goals: { 'goal-1': goal({ pointsAwarded: 0, xpAwarded: 0 }) },
@@ -269,21 +298,21 @@ test('genuine zero rewards still complete the goal once', async () => {
   if (decided.ok) {
     assert.equal(decided.awardedPoints, 0);
     assert.equal(decided.awardedXp, 0);
-    assert.equal(decided.completedGoal, true);
+    assert.equal(decided.completedGoal, false);
   }
   assert.equal(db.state.users['user-1'].xp, 15);
   assert.equal(db.state.users['user-1'].sportScore, 3);
   assert.equal(db.state.goals['goal-1'].completed, true);
   assert.equal(db.state.attempts['attempt-1'].awardedXp, 0);
-  assert.equal(db.state.users['user-1'].goalStreakDays, 3);
+  assert.equal(db.state.users['user-1'].goalStreakDays, 2);
 
   const retry = await db.transaction(tx => applyProofDecision(tx, approve('attempt-1'), async () => ({ points: 20, xp: 20 }), day2));
   assert.equal(retry.ok, false);
   assert.equal(db.state.users['user-1'].xp, 15);
-  assert.equal(db.state.users['user-1'].goalStreakDays, 3);
+  assert.equal(db.state.users['user-1'].goalStreakDays, 2);
 });
 
-test('concurrent completions keep both streak days', async () => {
+test('approvals of two goals pay ranking points without XP or completion', async () => {
   const db = createMemoryDb({
     users: { 'user-1': user() },
     goals: {
@@ -317,8 +346,9 @@ test('concurrent completions keep both streak days', async () => {
   );
   const [left, right] = await Promise.all([first, second]);
   assert.equal(left.ok && right.ok, true);
-  assert.equal(db.state.users['user-1'].goalStreakDays, 4);
-  assert.equal(db.state.users['user-1'].xp, 2);
+  assert.equal(db.state.users['user-1'].goalStreakDays, 2);
+  assert.equal(db.state.users['user-1'].xp, 0);
+  assert.equal(db.state.users['user-1'].sportScore, 2);
   assert.equal(db.state.goals['goal-1'].completed, true);
   assert.equal(db.state.goals['goal-2'].completed, true);
 });
@@ -339,22 +369,30 @@ test('rejection leaves the goal active so it can be resubmitted', async () => {
   );
   assert.equal(rejected.ok, true);
   if (rejected.ok) assert.equal(rejected.status, 'REJECTED');
-  assert.equal(db.state.goals['goal-1'].completed, false);
+  assert.equal(db.state.goals['goal-1'].completed, true);
   assert.equal(db.state.users['user-1'].xp, 0);
   assert.equal(db.state.attempts['attempt-1'].status, 'REJECTED');
 
   db.state.attempts['attempt-1'].status = 'PENDING_REVIEW';
   const approved = await db.transaction(tx => applyProofDecision(tx, approve('attempt-1'), async () => ({ points: 8, xp: 8 }), day1));
   assert.equal(approved.ok, true);
-  if (approved.ok) assert.equal(approved.awardedPoints, 8);
+  if (approved.ok) {
+    assert.equal(approved.awardedPoints, 8);
+    assert.equal(approved.awardedXp, 0);
+    assert.equal(approved.completedGoal, false);
+  }
   assert.equal(db.state.goals['goal-1'].completed, true);
+  assert.equal(db.state.users['user-1'].xp, 0);
   assert.equal(db.state.users['user-1'].sportScore, 8);
 });
 
 function recentCompleted(state: DbState, goalId: string) {
   const goal = state.goals[goalId];
+  const approvedGoalIds = new Set(
+    Object.values(state.attempts).filter(item => item.status === 'APPROVED').map(item => item.goalId)
+  );
   return Object.values(state.goals)
-    .filter(item => item.id !== goalId && item.userId === goal.userId && item.completed && item.requirementSource === 'AI' && item.rankField === goal.rankField)
+    .filter(item => item.id !== goalId && item.userId === goal.userId && item.requirementSource === 'AI' && item.rankField === goal.rankField && (item.completed || approvedGoalIds.has(item.id)))
     .map(item => ({
       id: item.id,
       title: item.title,
@@ -368,7 +406,7 @@ test('a slow anti-farm decision stays outside the row locks and is rechecked', a
     users: { 'user-1': user({ xp: 0, sportScore: 0, goalStreakDays: 0, lastGoalCompletedAt: null }) },
     goals: {
       'goal-1': goal({ title: 'Run daily' }),
-      'goal-2': goal({ id: 'goal-2', title: 'Run daily' }),
+      'goal-2': goal({ id: 'goal-2', title: 'Run daily', completed: false }),
     },
     attempts: { 'attempt-1': attempt() },
   });
@@ -396,8 +434,9 @@ test('a slow anti-farm decision stays outside the row locks and is rechecked', a
   assert.equal(sawLocks, false);
   assert.equal(decided.ok, true);
   if (decided.ok) {
+    assert.equal(decided.awardedPoints, 0);
     assert.equal(decided.awardedXp, 0);
-    assert.equal(decided.completedGoal, true);
+    assert.equal(decided.completedGoal, false);
   }
   assert.equal(db.state.users['user-1'].xp, 0);
   assert.equal(db.state.goals['goal-1'].completed, true);
@@ -439,10 +478,78 @@ test('concurrent similar approvals cannot both skip anti-farm', async () => {
   const [first, second] = await Promise.all([approveGoal('attempt-1', 'goal-1'), approveGoal('attempt-2', 'goal-2')]);
   assert.equal(modelInsideLock, false);
   assert.equal(first.ok && second.ok, true);
-  assert.equal(db.state.users['user-1'].xp, 8);
-  assert.equal(db.state.users['user-1'].sportScore, 8);
+  assert.equal(db.state.users['user-1'].xp, 0);
+  assert.equal(db.state.users['user-1'].sportScore, 0);
   assert.equal(db.state.goals['goal-1'].completed, true);
   assert.equal(db.state.goals['goal-2'].completed, true);
-  const awarded = [db.state.attempts['attempt-1'].awardedXp, db.state.attempts['attempt-2'].awardedXp].sort();
-  assert.deepEqual(awarded, [0, 8]);
+  const awarded = [db.state.attempts['attempt-1'].awardedPoints, db.state.attempts['attempt-2'].awardedPoints].sort();
+  assert.deepEqual(awarded, [0, 0]);
+});
+
+test('an already completed AI goal receives ranking points once and no extra XP', async () => {
+  const db = createMemoryDb({
+    users: { 'user-1': user({ xp: 10, sportScore: 0, goalStreakDays: 5 }) },
+    goals: { 'goal-1': goal({ completed: true, pointsAwarded: 8, xpAwarded: 8 }) },
+    attempts: {
+      'attempt-1': attempt(),
+      'attempt-2': attempt({ id: 'attempt-2' }),
+    },
+  });
+  const first = await db.transaction(tx => applyProofDecision(tx, approve('attempt-1'), async () => ({ points: 8, xp: 8 }), day1));
+  assert.equal(first.ok, true);
+  if (first.ok) {
+    assert.equal(first.awardedPoints, 8);
+    assert.equal(first.awardedXp, 0);
+    assert.equal(first.completedGoal, false);
+  }
+  assert.equal(db.state.goals['goal-1'].completed, true);
+  assert.equal(db.state.users['user-1'].xp, 10);
+  assert.equal(db.state.users['user-1'].sportScore, 8);
+  assert.equal(db.state.users['user-1'].goalStreakDays, 5);
+
+  const second = await db.transaction(tx => applyProofDecision(tx, approve('attempt-2'), async () => ({ points: 8, xp: 8 }), day2));
+  assert.equal(second.ok, true);
+  if (second.ok) assert.equal(second.awardedPoints, 0);
+  assert.equal(db.state.users['user-1'].sportScore, 8);
+  assert.equal(db.state.users['user-1'].xp, 10);
+  assert.equal(db.state.goals['goal-1'].completed, true);
+});
+
+test('flagged content blocks approval, while the admin checks decide the rest', async () => {
+  const db = createMemoryDb({
+    users: { 'user-1': user({ xp: 3, sportScore: 1 }) },
+    goals: { 'goal-1': goal({ completed: true, pointsAwarded: 5, xpAwarded: 5 }) },
+    attempts: { 'attempt-1': attempt({ moderationStatus: 'FLAGGED' }) },
+  });
+  const flagged = await db.transaction(tx => applyProofDecision(tx, approve('attempt-1'), async () => ({ points: 5, xp: 5 }), day1));
+  assert.equal(flagged.ok, false);
+  db.state.attempts['attempt-1'].moderationStatus = 'UNCERTAIN';
+  const rejected = await db.transaction(tx =>
+    applyProofDecision(tx, { ...approve('attempt-1'), decision: 'REJECT', feedback: '' }, async () => ({ points: 5, xp: 5 }), day1)
+  );
+  assert.equal(rejected.ok, true);
+  if (rejected.ok) {
+    assert.equal(rejected.status, 'REJECTED');
+    assert.equal(rejected.awardedPoints, 0);
+    assert.equal(rejected.awardedXp, 0);
+    assert.equal(rejected.completedGoal, false);
+  }
+  assert.equal(db.state.users['user-1'].sportScore, 1);
+  assert.equal(db.state.users['user-1'].xp, 3);
+  assert.equal(db.state.goals['goal-1'].completed, true);
+  assert.equal(db.state.attempts['attempt-1'].status, 'REJECTED');
+});
+
+test('an AI reviewer cannot approve ranking proof', async () => {
+  const db = createMemoryDb({
+    users: { 'user-1': user() },
+    goals: { 'goal-1': goal() },
+    attempts: { 'attempt-1': attempt() },
+  });
+  const decided = await db.transaction(tx =>
+    applyProofDecision(tx, { ...approve('attempt-1'), reviewer: 'AI' }, async () => ({ points: 8, xp: 8 }), day1)
+  );
+  assert.equal(decided.ok, false);
+  assert.equal(db.state.attempts['attempt-1'].status, 'PENDING_REVIEW');
+  assert.equal(db.state.users['user-1'].sportScore, 0);
 });

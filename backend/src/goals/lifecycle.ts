@@ -6,7 +6,6 @@ export type GoalLifecycleState = {
 export type LifecycleError = { status: 409; error: string };
 
 const IMMUTABLE = { status: 409 as const, error: 'Goal can no longer be edited' };
-const PROOF_REQUIRED = { status: 409 as const, error: 'Goal completion requires proof review' };
 
 export function isTerminalGoal(goal: GoalLifecycleState): boolean {
   return goal.completed === true || goal.failedAt != null;
@@ -27,17 +26,12 @@ export function denialForFail(goal: GoalLifecycleState & { deletedAt?: Date | st
   return null;
 }
 
-export function goalRequiresProofReview(goal: { requirementSource: string | null; difficultyScore: number | null }): boolean {
-  return goal.requirementSource === 'AI' || goal.difficultyScore != null;
-}
-
 export function userCompletionDecision(
   goal: GoalLifecycleState & { requirementSource: string | null; difficultyScore: number | null },
   requestedCompleted: boolean | undefined
 ): 'ignore' | 'complete' | LifecycleError {
   if (requestedCompleted === undefined) return 'ignore';
   if (requestedCompleted === false || isTerminalGoal(goal)) return IMMUTABLE;
-  if (goalRequiresProofReview(goal)) return PROOF_REQUIRED;
   return 'complete';
 }
 
@@ -45,8 +39,17 @@ export function proofStatusForDecision(decision: 'APPROVE' | 'REJECT'): 'APPROVE
   return decision === 'APPROVE' ? 'APPROVED' : 'REJECTED';
 }
 
-export function approvalShouldComplete(decision: 'APPROVE' | 'REJECT', goal: GoalLifecycleState): boolean {
-  return decision === 'APPROVE' && !isTerminalGoal(goal);
+export function approvedProofDeleteDenial(status: string): LifecycleError | null {
+  if (status === 'APPROVED') return { status: 409, error: 'An approved ranking proof cannot be deleted' };
+  return null;
+}
+
+export function proofsEligibleForDeletion<T extends { status: string }>(rows: T[]): T[] {
+  return rows.filter(row => row.status !== 'APPROVED');
+}
+
+export function approvalShouldComplete(_decision: 'APPROVE' | 'REJECT', _goal: GoalLifecycleState): boolean {
+  return false;
 }
 
 export function proofResubmitDecision(goal: GoalLifecycleState): { ok: true } | { ok: false; error: LifecycleError } {

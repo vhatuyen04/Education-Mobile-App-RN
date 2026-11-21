@@ -12,7 +12,7 @@ import { colors } from '../theme/colors';
 import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
-import { approvedGoalRewardMessage } from '../motivation/completionMessage';
+import { rankingAwardMessage } from '../motivation/completionMessage';
 
 export function SmartGoalProofScreen() {
   const nav = useNavigation<any>();
@@ -31,6 +31,9 @@ export function SmartGoalProofScreen() {
   const [status, setStatus] = useState<authApi.SmartGoalProofStatus | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [proofUrl, setProofUrl] = useState<string | null>(null);
+  const [challengeCode, setChallengeCode] = useState<string | null>(null);
+  const [challengeExpiresAt, setChallengeExpiresAt] = useState<string | null>(null);
+  const [proofClosed, setProofClosed] = useState(false);
 
   const [polling, setPolling] = useState(false);
   const awardedRef = useRef(false);
@@ -59,11 +62,38 @@ export function SmartGoalProofScreen() {
           // ignore
         }
 
+        try {
+          const opened = await authApi.openRankingProof(token, goalId);
+          if (!cancelled) {
+            setAttemptId(opened.attemptId);
+            setStatus(opened.status);
+            setFeedback(opened.aiFeedback ?? null);
+            setChallengeCode(opened.challengeCode);
+            setChallengeExpiresAt(opened.challengeExpiresAt);
+            const expiresAt = opened.challengeExpiresAt ? new Date(opened.challengeExpiresAt).getTime() : NaN;
+            const closed = Number.isFinite(expiresAt) && Date.now() > expiresAt;
+            setProofClosed(closed);
+            if (opened.status === 'PENDING_REVIEW') setPolling(true);
+            if (opened.status === 'APPROVED' || opened.status === 'REJECTED' || opened.status === 'PENDING_REVIEW' || closed) return;
+          }
+        } catch (e: any) {
+          const message = String(e?.message ?? '');
+          if (!cancelled && message === 'Challenge expired') {
+            setProofClosed(true);
+            setFeedback(message);
+          }
+        }
+
         const resp = await authApi.getLatestSmartGoalProofAttempt(token, goalId);
         if (cancelled) return;
         const a = resp.attempt;
         if (!a) return;
-        if (a.status === 'APPROVED') return;
+        if (a.status === 'APPROVED') {
+          setAttemptId(a.id);
+          setStatus('APPROVED');
+          setFeedback(a.aiFeedback ?? null);
+          return;
+        }
 
         setAttemptId(a.id);
         setStatus(a.status);
@@ -90,6 +120,7 @@ export function SmartGoalProofScreen() {
   }, [goalRequirement, requirementTextFromRoute]);
 
   const pickVideo = useCallback(async () => {
+    if (status === 'PENDING_REVIEW' || status === 'APPROVED' || proofClosed) return;
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) {
       toast('Permission denied. Please allow media access.');
@@ -109,25 +140,13 @@ export function SmartGoalProofScreen() {
       return;
     }
 
-    try {
-      const token = state.accessToken;
-      if (token && attemptId && status === 'PENDING_UPLOAD') {
-        await authApi.deleteSmartGoalProofAttempt(token, goalId, attemptId);
-      }
-    } catch {
-      // ignore
-    }
-
     setVideoUri(uri);
-    setAttemptId(null);
-    setStatus(null);
-    setFeedback(null);
-    setProofUrl(null);
-  }, [attemptId, goalId, state.accessToken, status]);
+  }, [proofClosed, status]);
 
   const submit = useCallback(async () => {
     const token = state.accessToken;
     if (!token) return;
+    if (proofClosed || status === 'APPROVED' || status === 'PENDING_REVIEW') return;
     if (!videoUri && !(attemptId && status === 'PENDING_UPLOAD')) return;
 
     setUploading(true);
@@ -158,7 +177,9 @@ export function SmartGoalProofScreen() {
 
       setAttemptId(presign.attemptId);
       setStatus(presign.status);
-      setProofUrl(presign.proofUrl);
+      setProofUrl(presign.proofUrl ?? null);
+      setChallengeCode(presign.challengeCode);
+      setChallengeExpiresAt(presign.challengeExpiresAt);
 
       const uploadType =
         (FileSystem as any)?.FileSystemUploadType?.BINARY_CONTENT ??
@@ -187,7 +208,7 @@ export function SmartGoalProofScreen() {
     } finally {
       setUploading(false);
     }
-  }, [attemptId, goalId, requirementText, state.accessToken, status, videoUri]);
+  }, [attemptId, goalId, proofClosed, requirementText, state.accessToken, status, videoUri]);
 
   useEffect(() => {
     if (!polling) return;
@@ -207,13 +228,12 @@ export function SmartGoalProofScreen() {
         if (resp.attempt.status === 'APPROVED') {
           if (!awardedRef.current) {
             awardedRef.current = true;
-            toast(approvedGoalRewardMessage(resp.attempt));
+            toast(rankingAwardMessage(resp.attempt.awardedPoints ?? 0));
           }
           setPolling(false);
-          nav.goBack();
         }
 
-        if (resp.attempt.status === 'REJECTED') {
+        if (resp.attempt.status === 'REJECTED' || resp.attempt.status === 'NEEDS_CLARIFICATION') {
           setPolling(false);
         }
       } catch {
@@ -249,9 +269,20 @@ export function SmartGoalProofScreen() {
     <Screen>
       <ScrollView contentContainerStyle={styles.wrap}>
         <Text style={styles.title}>{goalTitle}</Text>
+        <Text style={styles.meta}>Ranking proof is optional. It does not change goal completion or XP.</Text>
 
         <Card>
-          <Text style={styles.sectionTitle}>Requirement</Text>
+          <Text style={styles.sectionTitle}>Show these in the video</Text>
+          <Text style={styles.body}>Username: {state.user?.name || 'Add a username on your profile first.'}</Text>
+          <Text style={styles.body}>Challenge code: {challengeCode || 'No challenge code is available.'}</Text>
+          <Text style={styles.meta}>The proof must be submitted within 3 days of finishing the goal.</Text>
+          {challengeExpiresAt ? <Text style={styles.meta}>Record and submit before {new Date(challengeExpiresAt).toLocaleString()}.</Text> : null}
+          {proofClosed ? <Text style={styles.meta}>This deadline has passed, so this goal can no longer be submitted for ranking.</Text> : null}
+          <Text style={styles.body}>Both the username and the challenge code must be clearly visible in the video.</Text>
+        </Card>
+
+        <Card>
+          <Text style={styles.sectionTitle}>Requirement the video must demonstrate</Text>
           <Text style={styles.body}>{requirementText || 'No requirement provided.'}</Text>
         </Card>
 
@@ -259,8 +290,8 @@ export function SmartGoalProofScreen() {
 
         <Card>
 
-          <Text style={styles.sectionTitle}>Upload proof (video)</Text>
-          <Text style={styles.body}>Upload a short video that matches the requirement above.</Text>
+          <Text style={styles.sectionTitle}>Upload ranking video</Text>
+          <Text style={styles.body}>Use the existing private upload. A direct object link is not used for playback.</Text>
 
           <View style={{ height: 10 }} />
 
@@ -272,30 +303,43 @@ export function SmartGoalProofScreen() {
             </View>
           ) : null}
 
-          {attemptId && proofUrl ? (
+          {attemptId ? (
             <>
               <View style={{ height: 10 }} />
               <Button title="View uploaded video" small onPress={() => void viewUploaded()} />
             </>
           ) : null}
 
-          <View style={{ height: 10 }} />
+          {proofClosed || status === 'APPROVED' || status === 'PENDING_REVIEW' ? null : (
+            <>
+              <View style={{ height: 10 }} />
+              <Button title={videoUri ? 'Change video' : 'Pick video'} onPress={pickVideo} />
+            </>
+          )}
 
-          <Button title={videoUri ? 'Change video' : 'Pick video'} onPress={pickVideo} />
-
-          <View style={{ height: 10 }} />
-
-          <Button
-            title={uploading ? 'Uploading…' : status === 'PENDING_REVIEW' ? 'Waiting for verification…' : 'Submit proof'}
-            onPress={() => void submit()}
-            variant="primary"
-          />
+          {proofClosed || status === 'APPROVED' ? null : (
+            <>
+              <View style={{ height: 10 }} />
+              <Button
+                title={
+                  uploading
+                    ? 'Uploading…'
+                    : status === 'PENDING_REVIEW'
+                      ? 'Waiting for admin review…'
+                      : 'Submit for Ranking'
+                }
+                onPress={() => void submit()}
+                variant="primary"
+                disabled={status === 'PENDING_REVIEW' || uploading}
+              />
+            </>
+          )}
 
           <View style={{ height: 12 }} />
 
           <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center' }}>
             <Text style={styles.meta}>Status:</Text>
-            <Badge>{status ?? '—'}</Badge>
+            <Badge>{status === 'NEEDS_CLARIFICATION' ? 'REJECTED' : (status ?? '—')}</Badge>
           </View>
 
           {feedback ? (
@@ -303,7 +347,13 @@ export function SmartGoalProofScreen() {
           ) : null}
 
           {status === 'REJECTED' ? (
-            <Text style={[styles.body, { marginTop: 10 }]}>Verification rejected. Your goal is still active. No XP was awarded.</Text>
+            <Text style={[styles.body, { marginTop: 10 }]}>This proof was rejected. Goal completion and XP stay unchanged, and no ranking points were awarded. You can submit another video with the same challenge code.</Text>
+          ) : null}
+          {status === 'NEEDS_CLARIFICATION' ? (
+            <Text style={[styles.body, { marginTop: 10 }]}>This proof was rejected. Goal completion and XP stay unchanged, and no ranking points were awarded. You can submit another video with the same challenge code.</Text>
+          ) : null}
+          {status === 'APPROVED' ? (
+            <Text style={[styles.body, { marginTop: 10 }]}>Ranking points were awarded once for this goal. Another submission cannot award them again.</Text>
           ) : null}
 
           <View style={{ height: 12 }} />

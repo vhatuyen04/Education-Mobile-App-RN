@@ -18,6 +18,13 @@ enum SmartGoalProofStatus {
   PENDING_REVIEW
   APPROVED
   REJECTED
+  NEEDS_CLARIFICATION
+}
+
+enum ContentModerationStatus {
+  CLEAR
+  FLAGGED
+  UNCERTAIN
 }
 
 enum GoalFailedReason {
@@ -83,16 +90,20 @@ model Goal {
   title       String
   description String?
   requirement String?
+  expectation String?
   requirementSource GoalRequirementSource @default(USER)
   rankField   RankField?
   progressPct Int      @default(0)
   dueAt       DateTime?
   completed   Boolean  @default(false)
+  completedAt DateTime?
   difficultyScore      Int?
   difficultyConfidence Float?
   difficultyReason     String?
   pointsAwarded        Int      @default(1)
   xpAwarded            Int      @default(50)
+  rankingEligible      Boolean?
+  rankingEligibilityReason String?
   deletedAt   DateTime?
   failedAt    DateTime?
   failedReason GoalFailedReason?
@@ -120,6 +131,12 @@ model SmartGoalProofAttempt {
   reviewedBy      String?
   awardedPoints   Int?               @default(0)
   awardedXp       Int?               @default(0)
+  challengeHash   String?
+  challengeCode   String?
+  challengeExpiresAt DateTime?
+  moderationStatus ContentModerationStatus?
+  moderationNote String?
+  moderationCheckedAt DateTime?
   createdAt       DateTime           @default(now())
   updatedAt       DateTime           @updatedAt
 

@@ -1,7 +1,5 @@
-export function rejectionReason(feedback: string | null | undefined): { ok: true; reason: string } | { ok: false; error: string } {
-  const reason = String(feedback ?? '').replace(/\s+/g, ' ').trim();
-  if (reason.length < 3) return { ok: false, error: 'A rejection reason is required' };
-  return { ok: true, reason };
+export function rejectionReason(feedback: string | null | undefined): { ok: true; reason: string } {
+  return { ok: true, reason: String(feedback ?? '').replace(/\s+/g, ' ').trim() };
 }
 
 export function autoReviewFailureWrite(attemptId: string, message: string) {

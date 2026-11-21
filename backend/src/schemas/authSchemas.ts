@@ -39,6 +39,7 @@ export const CreateGoalSchema = z.object({
   title: z.string().min(1),
   description: z.string().optional().nullable(),
   requirement: z.string().optional().nullable(),
+  expectation: z.string().optional().nullable(),
   rankField: z.enum(['Sport', 'Academy', 'Entertainment']).optional(),
   progressPct: z.number().int().min(0).max(100).optional(),
   dueAt: z.string().datetime().optional(),

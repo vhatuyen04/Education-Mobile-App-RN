@@ -43,7 +43,7 @@ export function RootStack() {
           <Stack.Screen name="NotificationList" component={NotificationListScreen} options={{ title: 'Notifications', headerShown: false }} />
           <Stack.Screen name="NotificationSettings" component={NotificationSettingsScreen} options={{ title: 'Notification settings' }} />
           <Stack.Screen name="GoalsDetails" component={GoalsDetailsScreen} options={{ title: 'Goals details' }} />
-          <Stack.Screen name="SmartGoalProof" component={SmartGoalProofScreen} options={{ title: 'Complete SmartGoal' }} />
+          <Stack.Screen name="SmartGoalProof" component={SmartGoalProofScreen} options={{ title: 'Ranking proof' }} />
           <Stack.Screen name="AiGoalRecommendation" component={AiGoalRecommendationScreen} options={{ title: 'AI recommendation', headerShown: false }} />
           <Stack.Screen name="Progress" component={ProgressScreen} options={{ title: 'Progress', headerShown: false }} />
           <Stack.Screen name="AdminProofReview" component={AdminProofReviewScreen} options={{ title: 'Admin', headerShown: false }} />

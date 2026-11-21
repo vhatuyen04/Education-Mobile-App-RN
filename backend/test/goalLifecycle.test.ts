@@ -8,6 +8,8 @@ import {
   denialForGoalEdit,
   proofResubmitDecision,
   proofStatusForDecision,
+  proofsEligibleForDeletion,
+  approvedProofDeleteDenial,
   userCompletionDecision,
 } from '../src/goals/lifecycle.ts';
 
@@ -88,29 +90,41 @@ test('failed goals cannot be completed or rewarded, and fail cannot repeat', () 
   assert.equal(active.failedReason, 'GAVE_UP');
 });
 
-test('an AI goal cannot be completed directly, and another user cannot claim it', () => {
+test('an AI goal can be completed directly, and another user cannot claim it', () => {
   const goal = row({ requirementSource: 'AI', difficultyScore: 20 });
-  const decision = userCompletionDecision(goal, true);
-  assert.ok(typeof decision !== 'string');
-  if (typeof decision !== 'string') assert.equal(decision.error, 'Goal completion requires proof review');
+  assert.equal(userCompletionDecision(goal, true), 'complete');
   assert.equal(claimActiveWrite(goal, 'intruder', { completed: true }), 0);
   assert.equal(goal.completed, false);
   assert.equal(goal.awarded, 0);
+  assert.equal(claimActiveWrite(goal, 'owner', { completed: true }), 1);
+  assert.equal(goal.completed, true);
 });
 
-test('admin or AI approval completes an active goal once, and rejection does not', () => {
+test('an approved ranking proof is kept when other proofs are cleared', () => {
+  const rows = [
+    { id: 'approved', status: 'APPROVED' },
+    { id: 'rejected', status: 'REJECTED' },
+    { id: 'pending', status: 'PENDING_REVIEW' },
+  ];
+  assert.equal(approvedProofDeleteDenial('APPROVED')?.error, 'An approved ranking proof cannot be deleted');
+  assert.equal(approvedProofDeleteDenial('REJECTED'), null);
+  const removable = proofsEligibleForDeletion(rows);
+  assert.deepEqual(removable.map(row => row.id), ['rejected', 'pending']);
+});
+
+test('proof approval does not complete a goal, while the owner can still complete it once', () => {
   const active = row({ requirementSource: 'AI', difficultyScore: 30 });
   assert.equal(proofStatusForDecision('APPROVE'), 'APPROVED');
-  assert.equal(approvalShouldComplete('APPROVE', active), true);
+  assert.equal(approvalShouldComplete('APPROVE', active), false);
+  assert.equal(active.completed, false);
+  assert.equal(userCompletionDecision(active, true), 'complete');
   assert.equal(awardIfClaimed(active, 'owner'), 1);
   assert.equal(awardIfClaimed(active, 'owner'), 0);
-  assert.equal(active.awarded, 10);
 
   const rejected = row({ requirementSource: 'AI' });
   assert.equal(proofStatusForDecision('REJECT'), 'REJECTED');
   assert.equal(approvalShouldComplete('REJECT', rejected), false);
   assert.equal(rejected.completed, false);
-  assert.equal(rejected.awarded, 0);
 
   const failed = row({ failedAt: new Date(), requirementSource: 'AI' });
   assert.equal(approvalShouldComplete('APPROVE', failed), false);
@@ -131,18 +145,15 @@ test('a rejected proof can be resubmitted only while the goal is active', () => 
   assert.equal(failed.attemptStatus, 'REJECTED');
 });
 
-test('concurrent approval claims award only one completion', () => {
+test('one pending attempt can be approved without completing the goal', () => {
   const goal = row({ requirementSource: 'AI', difficultyScore: 10, attemptStatus: 'PENDING_REVIEW' });
   const claimAttempt = () => {
     if (goal.attemptStatus !== 'PENDING_REVIEW') return 0;
     goal.attemptStatus = 'APPROVED';
     return 1;
   };
-  const first = claimAttempt();
-  const second = claimAttempt();
-  if (first === 1) awardIfClaimed(goal, 'owner');
-  if (second === 1) awardIfClaimed(goal, 'owner');
-  assert.equal(first + second, 1);
-  assert.equal(goal.awarded, 10);
-  assert.equal(goal.completed, true);
+  assert.equal(claimAttempt(), 1);
+  assert.equal(claimAttempt(), 0);
+  assert.equal(goal.completed, false);
+  assert.equal(goal.awarded, 0);
 });

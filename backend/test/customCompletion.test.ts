@@ -299,8 +299,8 @@ test('a zero reward still completes the goal once', async () => {
   assert.equal(db.state.users['user-1'].xp, 10);
 });
 
-test('an AI goal cannot be completed manually', async () => {
-  const stored = goal({ requirementSource: 'AI', difficultyScore: 20, pointsAwarded: 4, xpAwarded: 4 });
+test('an AI goal success pays stored XP once and no ranking points', async () => {
+  const stored = goal({ requirementSource: 'AI', difficultyScore: 20, rankField: 'Sport', pointsAwarded: 4, xpAwarded: 4 });
   const db = createDb({ users: { 'user-1': user() }, goals: { 'goal-1': stored } });
   const decided = await db.transaction(tx =>
     applyCustomCompletion(tx, {
@@ -312,10 +312,28 @@ test('an AI goal cannot be completed manually', async () => {
       now: day,
     })
   );
-  assert.equal(decided.ok, false);
-  if (!decided.ok) assert.equal(decided.error, 'Goal completion requires proof review');
-  assert.equal(db.state.goals['goal-1'].completed, false);
-  assert.equal(db.state.users['user-1'].xp, 10);
+  assert.equal(decided.ok, true);
+  if (decided.ok) {
+    assert.equal(decided.awardedPoints, 0);
+    assert.equal(decided.awardedXp, 4);
+  }
+  assert.equal(db.state.goals['goal-1'].completed, true);
+  assert.equal(db.state.users['user-1'].xp, 14);
+  assert.equal(db.state.users['user-1'].sportScore, 2);
+
+  const retry = await db.transaction(tx =>
+    applyCustomCompletion(tx, {
+      userId: 'user-1',
+      goalId: 'goal-1',
+      patch: {},
+      rewards: { points: 4, xp: 4 },
+      fingerprint: antiFarmFingerprint(stored, []),
+      now: day,
+    })
+  );
+  assert.equal(retry.ok, false);
+  assert.equal(db.state.users['user-1'].xp, 14);
+  assert.equal(db.state.users['user-1'].sportScore, 2);
 });
 
 test('a stale anti-farm snapshot is retried outside the lock', async () => {

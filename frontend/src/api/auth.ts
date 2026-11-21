@@ -161,12 +161,15 @@ export type AiGoalSuggestion = {
   description?: string;
   field: LeaderboardField;
   deadline: string;
+  expectation?: string;
   requirement: string;
   difficultyScore: number;
   difficultyConfidence: number;
   difficultyReason: string;
   pointsAwarded: number;
   xpAwarded: number;
+  rankingEligible?: boolean;
+  rankingEligibilityReason?: string;
   suggestionToken?: string;
   steps: AiGoalStep[];
 };
@@ -207,6 +210,7 @@ export type GoalItem = {
   title: string;
   description?: string | null;
   requirement?: string | null;
+  expectation?: string | null;
   requirementSource?: 'USER' | 'AI' | null;
   rankField?: LeaderboardField | null;
   progressPct: number;
@@ -214,9 +218,13 @@ export type GoalItem = {
   completed: boolean;
   pointsAwarded?: number | null;
   xpAwarded?: number | null;
+  difficultyScore?: number | null;
+  rankingEligible?: boolean | null;
+  rankingEligibilityReason?: string | null;
   deletedAt?: string | null;
   failedAt?: string | null;
   failedReason?: 'EXPIRED' | 'GAVE_UP' | null;
+  completedAt?: string | null;
 };
 
 export type DashboardEvent = {
@@ -264,7 +272,7 @@ export type DashboardResponse = {
   todaySteps: TodayStepItem[];
 };
 
-export type SmartGoalProofStatus = 'PENDING_UPLOAD' | 'PENDING_REVIEW' | 'APPROVED' | 'REJECTED';
+export type SmartGoalProofStatus = 'PENDING_UPLOAD' | 'PENDING_REVIEW' | 'APPROVED' | 'REJECTED' | 'NEEDS_CLARIFICATION';
 
 export type SmartGoalProofAttempt = {
   id: string;
@@ -273,6 +281,8 @@ export type SmartGoalProofAttempt = {
   requirementText: string | null;
   proofUrl: string | null;
   aiFeedback: string | null;
+  moderationStatus?: 'CLEAR' | 'FLAGGED' | 'UNCERTAIN' | null;
+  moderationNote?: string | null;
   reviewedBy?: string | null;
   awardedPoints?: number | null;
   awardedXp?: number | null;
@@ -284,13 +294,22 @@ export type AdminSmartGoalProofAttempt = {
   id: string;
   userId: string;
   userEmail?: string | null;
+  username?: string | null;
   goalId: string;
   goalTitle?: string | null;
+  goalDescription?: string | null;
+  requirement?: string | null;
+  difficultyScore?: number | null;
+  potentialRankingPoints?: number | null;
   status: SmartGoalProofStatus;
   requirementText: string | null;
   proofKey: string | null;
   proofUrl: string | null;
   aiFeedback: string | null;
+  moderationStatus?: 'CLEAR' | 'FLAGGED' | 'UNCERTAIN' | null;
+  moderationNote?: string | null;
+  moderationLimitation?: string | null;
+  challengeCode?: string | null;
   awardedPoints?: number | null;
   awardedXp?: number | null;
   createdAt?: string;
@@ -307,11 +326,18 @@ export type UserNotificationItem = {
   readAt: string | null;
 };
 
+export async function openRankingProof(
+  accessToken: string,
+  goalId: string
+): Promise<{ attemptId: string; status: SmartGoalProofStatus; challengeCode: string | null; challengeExpiresAt: string | null; aiFeedback: string | null }> {
+  return postJsonAuth(`/auth/goals/${goalId}/proof-attempts/challenge`, {}, accessToken);
+}
+
 export async function presignSmartGoalProof(
   accessToken: string,
   goalId: string,
   body: { requirementText?: string | null; contentType?: string; fileExt?: string }
-): Promise<{ attemptId: string; status: SmartGoalProofStatus; uploadUrl: string; proofKey: string; proofUrl: string }> {
+): Promise<{ attemptId: string; status: SmartGoalProofStatus; uploadUrl: string; proofKey: string; proofUrl?: string | null; challengeCode: string; challengeExpiresAt: string }> {
   return postJsonAuth(`/auth/goals/${goalId}/proof-attempts/presign`, body, accessToken);
 }
 
@@ -327,7 +353,7 @@ export async function deleteSmartGoalProofAttempt(accessToken: string, goalId: s
   return deleteJsonAuth(`/auth/goals/${goalId}/proof-attempts/${encodeURIComponent(attemptId)}`, accessToken);
 }
 
-export async function deleteSmartGoalProofsForGoal(accessToken: string, goalId: string): Promise<{ ok: true; deleted: number }> {
+export async function deleteSmartGoalProofsForGoal(accessToken: string, goalId: string): Promise<{ ok: true; deleted: number; keptApproved: number }> {
   return deleteJsonAuth(`/auth/goals/${goalId}/proof-attempts`, accessToken);
 }
 
@@ -410,7 +436,14 @@ export async function adminPresignProofAttemptView(
 export async function adminDecideProofAttempt(
   accessToken: string,
   attemptId: string,
-  body: { decision: 'APPROVE' | 'REJECT'; feedback?: string | null }
+  body: {
+    decision: 'APPROVE' | 'REJECT';
+    feedback?: string | null;
+    challengeCode?: string;
+    usernameConfirmed?: boolean;
+    achievementConfirmed?: boolean;
+    username?: string;
+  }
 ): Promise<{ attempt: AdminSmartGoalProofAttempt } | { attempt: any }> {
   return postJsonAuth(`/auth/admin/proof-attempts/${encodeURIComponent(attemptId)}/decision`, body, accessToken);
 }
@@ -491,6 +524,19 @@ export async function getLeaderboardField(
   return getJsonAuth<LeaderboardFieldPageResponse>(`/auth/leaderboard/field?${qs}`, accessToken);
 }
 
+export type ProvedRankingGoal = {
+  goalId: string;
+  title: string;
+  rankField: LeaderboardField | null;
+};
+
+export async function getProvedRankingGoals(
+  accessToken: string,
+  userId: string
+): Promise<{ userId: string; name: string; goals: ProvedRankingGoal[] }> {
+  return getJsonAuth(`/auth/leaderboard/users/${encodeURIComponent(userId)}/proved-goals`, accessToken);
+}
+
 export async function listGoals(accessToken: string, opts?: { includeDeleted?: boolean; includeFailed?: boolean }): Promise<{ goals: GoalItem[] }> {
   const sp = new URLSearchParams();
   if (opts?.includeDeleted) sp.set('includeDeleted', '1');
@@ -513,6 +559,7 @@ export async function createGoal(
     title: string;
     description?: string | null;
     requirement?: string | null;
+    expectation?: string | null;
     rankField?: LeaderboardField;
     progressPct?: number;
     dueAt?: string;

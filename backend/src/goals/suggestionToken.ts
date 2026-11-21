@@ -15,6 +15,8 @@ export type TrustedAiSuggestion = {
   xpAwarded: number;
   requirement: string;
   rankField: 'Sport' | 'Academy' | 'Entertainment';
+  rankingEligible: boolean;
+  rankingEligibilityReason: string;
 };
 
 export class SuggestionAlreadyUsed extends Error {
@@ -52,6 +54,7 @@ export function acceptAiSuggestion(
     xpAwarded?: number;
     requirement?: string | null;
     rankField?: 'Sport' | 'Academy' | 'Entertainment';
+    rankingEligible?: boolean;
   }
 ): { ok: true; suggestion: TrustedAiSuggestion } | { ok: false; error: string } {
   let payload: any;
@@ -78,6 +81,8 @@ export function acceptAiSuggestion(
     xpAwarded: Number(payload.xpAwarded),
     requirement: String(payload.requirement ?? ''),
     rankField: payload.rankField,
+    rankingEligible: payload.rankingEligible === true,
+    rankingEligibilityReason: typeof payload.rankingEligibilityReason === 'string' ? payload.rankingEligibilityReason.trim() : '',
   };
   const matches =
     sameText(body.title, suggestion.title) &&
@@ -87,7 +92,8 @@ export function acceptAiSuggestion(
     body.pointsAwarded === suggestion.pointsAwarded &&
     body.xpAwarded === suggestion.xpAwarded &&
     sameText(body.requirement, suggestion.requirement) &&
-    body.rankField === suggestion.rankField;
+    body.rankField === suggestion.rankField &&
+    (body.rankingEligible === undefined || body.rankingEligible === suggestion.rankingEligible);
   if (!matches) return { ok: false, error: 'Suggestion does not match the goal' };
   return { ok: true, suggestion };
 }

@@ -74,16 +74,31 @@ function overlap(left: Set<string>, right: Set<string>) {
   return union ? inter / union : 0;
 }
 
+function targetNumbers(value: string): number[] {
+  return [...String(value || '').matchAll(/\d+(?:\.\d+)?/g)]
+    .map(match => Number(match[0]))
+    .filter(number => Number.isFinite(number));
+}
+
+function hasHigherTarget(nextTitle: string, previousTitle: string): boolean {
+  const next = targetNumbers(nextTitle);
+  const previous = targetNumbers(previousTitle);
+  if (!next.length || !previous.length) return false;
+  return next[0] > previous[0];
+}
+
 export function heuristicFarm(goal: AntiFarmGoal, recent: AntiFarmRecent[]): boolean {
   const curTokens = tokenSet(goal.title);
   const curDiff = typeof goal.difficultyScore === 'number' ? Number(goal.difficultyScore) : null;
   for (const item of recent) {
-    const sim = overlap(curTokens, tokenSet(String(item.title ?? '')));
+    const previousTitle = String(item.title ?? '');
+    const sim = overlap(curTokens, tokenSet(previousTitle));
     if (sim < 0.55) continue;
+    if (hasHigherTarget(goal.title, previousTitle)) continue;
     const prevDiff = typeof item.difficultyScore === 'number' ? Number(item.difficultyScore) : null;
     if (curDiff !== null && prevDiff !== null && curDiff <= prevDiff) return true;
     if (curDiff === null || prevDiff === null) {
-      if (norm(goal.title) === norm(String(item.title ?? ''))) return true;
+      if (norm(goal.title) === norm(previousTitle)) return true;
     }
   }
   return false;

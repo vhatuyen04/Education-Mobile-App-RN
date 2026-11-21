@@ -1,5 +1,4 @@
-import { approvalShouldComplete, proofStatusForDecision } from './lifecycle.js';
-import { nextGoalStreak } from './streak.js';
+import { proofStatusForDecision } from './lifecycle.js';
 
 export type RankFieldName = 'Sport' | 'Academy' | 'Entertainment';
 export type ScoreFieldName = 'sportScore' | 'academyScore' | 'entertainmentScore';
@@ -8,9 +7,11 @@ export type LockedProofAttempt = {
   id: string;
   userId: string;
   goalId: string;
-  status: 'PENDING_UPLOAD' | 'PENDING_REVIEW' | 'APPROVED' | 'REJECTED';
+  status: 'PENDING_UPLOAD' | 'PENDING_REVIEW' | 'APPROVED' | 'REJECTED' | 'NEEDS_CLARIFICATION';
   awardedPoints: number;
   awardedXp: number;
+  challengeHash: string | null;
+  moderationStatus: 'CLEAR' | 'FLAGGED' | 'UNCERTAIN' | null;
 };
 
 export type LockedGoalReward = {
@@ -25,10 +26,12 @@ export type LockedGoalReward = {
   difficultyScore: number | null;
   pointsAwarded: number | null;
   xpAwarded: number | null;
+  rankingEligible: boolean | null;
 };
 
 export type LockedUserStreak = {
   id: string;
+  name: string;
   goalStreakDays: number;
   lastGoalCompletedAt: Date | null;
 };
@@ -40,7 +43,7 @@ export type ProofApprovalDb = {
   updateAttempt(
     attemptId: string,
     data: {
-      status: 'APPROVED' | 'REJECTED';
+      status: 'APPROVED' | 'REJECTED' | 'NEEDS_CLARIFICATION';
       aiFeedback: string | null;
       reviewedBy: 'admin' | 'AI';
       awardedPoints: number;
@@ -48,6 +51,7 @@ export type ProofApprovalDb = {
     }
   ): Promise<number>;
   markGoalCompleted(goalId: string, userId: string): Promise<number>;
+  rankingAlreadySettled(goalId: string, exceptAttemptId: string): Promise<boolean>;
   addUserRewards(userId: string, delta: { xp: number; points: number; scoreField: ScoreFieldName | null }): Promise<void>;
   saveStreak(userId: string, streak: { goalStreakDays: number; lastGoalCompletedAt: Date }): Promise<void>;
 };
@@ -59,12 +63,16 @@ export type ProofDecisionInput = {
   reviewer: 'admin' | 'AI';
   userId?: string;
   goalId?: string;
+  challengeCode?: string | null;
+  usernameConfirmed?: boolean;
+  achievementConfirmed?: boolean;
+  claimedUsername?: string | null;
 };
 
 export type ProofDecisionResult =
   | {
       ok: true;
-      status: 'APPROVED' | 'REJECTED';
+      status: 'APPROVED' | 'REJECTED' | 'NEEDS_CLARIFICATION';
       awardedPoints: number;
       awardedXp: number;
       userId: string;
@@ -99,7 +107,7 @@ export async function applyProofDecision(
   db: ProofApprovalDb,
   input: ProofDecisionInput,
   rewardsFor: (goal: LockedGoalReward) => Promise<{ points: number; xp: number }>,
-  now = new Date()
+  _now = new Date()
 ): Promise<ProofDecisionResult> {
   const attempt = await db.lockAttempt(input.attemptId);
   if (!attempt) return { ok: false, error: 'Not found' };
@@ -134,23 +142,23 @@ export async function applyProofDecision(
   const goal = await db.lockGoal(attempt.goalId, attempt.userId);
   if (!goal) return { ok: false, error: 'Not found' };
 
-  let awardedPoints = 0;
-  let awardedXp = 0;
-  let completedGoal = false;
-  if (approvalShouldComplete('APPROVE', goal)) {
-    const rewards = await rewardsFor(goal);
-    const claimed = await db.markGoalCompleted(goal.id, goal.userId);
-    if (claimed === 1) {
-      completedGoal = true;
-      awardedPoints = whole(rewards.points);
-      awardedXp = whole(rewards.xp);
-      await db.addUserRewards(user.id, {
-        xp: awardedXp,
-        points: awardedPoints,
-        scoreField: scoreFieldForRank(goal.rankField),
-      });
-      await db.saveStreak(user.id, nextGoalStreak(user, now));
-    }
+  if (!goal.completed || goal.failedAt || goal.requirementSource !== 'AI' || goal.rankingEligible !== true) {
+    return { ok: false, error: 'Goal is not eligible for ranking' };
+  }
+  if (input.reviewer !== 'admin') return { ok: false, error: 'Only an admin can approve ranking proof' };
+  if (attempt.moderationStatus === 'FLAGGED') return { ok: false, error: 'Content moderation flagged this proof' };
+  if (!user.name.trim()) return { ok: false, error: 'Account has no username to confirm' };
+
+  const rewards = await rewardsFor(goal);
+  const alreadySettled = await db.rankingAlreadySettled(goal.id, attempt.id);
+  const awardedPoints = alreadySettled ? 0 : whole(rewards.points);
+  const awardedXp = 0;
+  if (awardedPoints > 0) {
+    await db.addUserRewards(user.id, {
+      xp: 0,
+      points: awardedPoints,
+      scoreField: scoreFieldForRank(goal.rankField),
+    });
   }
 
   const updated = await db.updateAttempt(attempt.id, {
@@ -170,6 +178,6 @@ export async function applyProofDecision(
     userId: attempt.userId,
     goalId: attempt.goalId,
     rankField: goal.rankField,
-    completedGoal,
+    completedGoal: false,
   };
 }

@@ -4,6 +4,12 @@ export function rewardsForDifficultyScore(score: number): { pointsAwarded: numbe
   return { pointsAwarded, xpAwarded: Math.max(0, pointsAwarded) };
 }
 
+export function stableDifficultyScore(score: number): number {
+  const clamped = Math.max(1, Math.min(100, Math.floor(score)));
+  const band = Math.round(clamped / 5) * 5;
+  return Math.max(5, Math.min(100, band));
+}
+
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const OPEN_DEADLINE_DAYS = 365;
 
@@ -64,6 +70,8 @@ export function classifyCreatedGoal(
     difficultyReason: string;
     pointsAwarded: number;
     xpAwarded: number;
+    rankingEligible?: boolean;
+    rankingEligibilityReason?: string;
   } | null
 ) {
   if (!trusted) {
@@ -74,6 +82,8 @@ export function classifyCreatedGoal(
       difficultyReason: null,
       pointsAwarded: 0,
       xpAwarded: 0,
+      rankingEligible: false,
+      rankingEligibilityReason: null,
       requiresProof: false,
     };
   }
@@ -84,6 +94,8 @@ export function classifyCreatedGoal(
     difficultyReason: trusted.difficultyReason,
     pointsAwarded: trusted.pointsAwarded,
     xpAwarded: trusted.xpAwarded,
+    rankingEligible: trusted.rankingEligible === true,
+    rankingEligibilityReason: trusted.rankingEligibilityReason ?? null,
     requiresProof: true,
   };
 }

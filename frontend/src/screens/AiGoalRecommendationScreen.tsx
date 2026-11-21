@@ -9,6 +9,7 @@ import { Pill } from '../components/Pill';
 import { colors } from '../theme/colors';
 import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
+import { useSettings } from '../settings/SettingsContext';
 import * as authApi from '../api/auth';
 import { getRecommendation, removeRecommendation, upsertRecommendation } from '../ai/recommendations';
 import { removeInboxItemsByRecoId } from '../notifications/inbox';
@@ -209,6 +210,7 @@ export function AiGoalRecommendationScreen() {
   const nav = useNavigation<any>();
   const route = useRoute<any>();
   const { state } = useAuth();
+  const { settings } = useSettings();
 
   const recoId = String((route.params as RouteParams | undefined)?.id ?? '');
 
@@ -232,6 +234,7 @@ export function AiGoalRecommendationScreen() {
       chosenDeadline: deadlineDraft.trim() || suggested,
     });
   }, [deadlineDraft, rec]);
+  const shownRankingEligible = rec?.suggestion.rankingEligible === true;
 
   const load = useCallback(async () => {
     if (!recoId) return;
@@ -245,7 +248,7 @@ export function AiGoalRecommendationScreen() {
 
   useEffect(() => {
     if (!rec) return;
-    setDescriptionDraft(String((rec.suggestion as any)?.description ?? rec.contextSummary ?? ''));
+    setDescriptionDraft(String((rec.suggestion as any)?.description ?? '').trim());
     setDeadlineDraft(String(rec.suggestion?.deadline ?? ''));
     const baseSteps = (rec.suggestion?.steps ?? []).map(s => ({
       id: makeId(),
@@ -337,6 +340,7 @@ export function AiGoalRecommendationScreen() {
         description: descriptionDraft.trim() ? descriptionDraft.trim() : null,
         rankField: rec.suggestion.field,
         requirement: String((rec.suggestion as any).requirement ?? '').trim() || null,
+        expectation: String((rec.suggestion as any).expectation ?? '').trim() || null,
         dueAt: dueIso,
         difficultyScore: (rec.suggestion as any).difficultyScore,
         difficultyConfidence: (rec.suggestion as any).difficultyConfidence,
@@ -416,22 +420,26 @@ export function AiGoalRecommendationScreen() {
             <Pill>Deadline: {deadlineDraft.trim() || rec.suggestion.deadline}</Pill>
             {shownRewards ? <Pill>Points: {shownRewards.pointsAwarded}</Pill> : null}
             {shownRewards ? <Pill>XP: {shownRewards.xpAwarded}</Pill> : null}
+            <Pill>{shownRankingEligible ? 'Eligible' : 'Non eligible'}</Pill>
           </View>
 
           <View style={{ height: 12 }} />
           <Text style={styles.label}>Description</Text>
-          <TextInput
-            value={descriptionDraft}
-            onChangeText={setDescriptionDraft}
-            placeholder="Description"
-            placeholderTextColor={colors.muted}
-            multiline
-            style={[styles.input, { minHeight: 88, textAlignVertical: 'top' } as any]}
-          />
+          <Text style={styles.muted}>{descriptionDraft.trim() || '—'}</Text>
 
-          <View style={{ height: 12 }} />
-          <Text style={styles.label}>Requirement</Text>
-          <Text style={styles.muted}>{String((rec.suggestion as any).requirement ?? '').trim() || '—'}</Text>
+          {shownRankingEligible && settings.rankingMode ? (
+            <>
+              <View style={{ height: 12 }} />
+              <Text style={styles.label}>Ranking requirement</Text>
+              <Text style={styles.muted}>{String(rec.suggestion.requirement ?? '').trim() || '—'}</Text>
+            </>
+          ) : String(rec.suggestion.expectation ?? '').trim() ? (
+            <>
+              <View style={{ height: 12 }} />
+              <Text style={styles.label}>Expectation</Text>
+              <Text style={styles.muted}>{String(rec.suggestion.expectation ?? '').trim()}</Text>
+            </>
+          ) : null}
 
           <View style={{ height: 12 }} />
           <Text style={styles.label}>Deadline</Text>

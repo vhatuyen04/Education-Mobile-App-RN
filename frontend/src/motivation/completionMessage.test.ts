@@ -1,10 +1,20 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { approvedGoalRewardMessage, customGoalCompletionMessage } from './completionMessage.ts';
+import { approvedGoalRewardMessage, customGoalCompletionMessage, goalSuccessMessage, rankingAwardMessage } from './completionMessage.ts';
 
 test('custom goal completion does not claim a reward', () => {
   assert.equal(customGoalCompletionMessage(), 'Goal completed');
+});
+
+test('goal success names XP only when the server awarded it', () => {
+  assert.equal(goalSuccessMessage(12), 'Goal completed. +12 XP.');
+  assert.equal(goalSuccessMessage(0), 'Goal completed');
+});
+
+test('ranking approval reports ranking points and does not claim XP', () => {
+  assert.equal(rankingAwardMessage(8), 'Ranking verified. +8 ranking points.');
+  assert.equal(rankingAwardMessage(0), 'Ranking verified. No additional ranking points.');
 });
 
 test('approved goals show persisted rewards, including zero, and omit missing awards', () => {

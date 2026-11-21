@@ -275,7 +275,7 @@ export function ProgressScreen() {
   function clearGoalProofs(goalId: string, goalName: string) {
     const token = state.accessToken;
     if (!token) return;
-    Alert.alert('Clear goal proofs', `Remove every uploaded proof for ${goalName}?`, [
+    Alert.alert('Clear goal proofs', `Remove uploaded proofs for ${goalName}? An approved ranking proof stays, so the goal cannot be paid again.`, [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Clear',
@@ -284,7 +284,7 @@ export function ProgressScreen() {
           void (async () => {
             try {
               await authApi.deleteSmartGoalProofsForGoal(token, goalId);
-              setProofs(prev => prev.filter(item => item.goalId !== goalId));
+              setProofs(prev => prev.filter(item => item.goalId !== goalId || item.status === 'APPROVED'));
               keepScrollPlace();
             } catch (e: any) {
               toast(String(e?.message ?? 'Failed to clear'));
@@ -419,12 +419,14 @@ export function ProgressScreen() {
                 {visible.map(p => {
                   const statusLabel =
                     p.status === 'PENDING_REVIEW'
-                      ? 'Reviewing'
+                      ? 'Waiting for admin'
                       : p.status === 'APPROVED'
-                        ? 'Accepted'
+                        ? 'Ranking verified'
                         : p.status === 'REJECTED'
                           ? 'Rejected'
-                          : 'Pending upload';
+                          : p.status === 'NEEDS_CLARIFICATION'
+                            ? 'Rejected'
+                            : 'Pending upload';
 
                   return (
                     <View key={p.id} style={styles.proofRow}>
@@ -441,10 +443,10 @@ export function ProgressScreen() {
                       </Text>
 
                       <View style={{ marginTop: 8, flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
-                        {p.proofUrl ? <Button title="View" small onPress={() => void openProof({ id: p.id, goalId: g.goalId })} /> : null}
-                        <Button title="Delete" small variant="danger" onPress={() => deleteProof(g.goalId, p.id)} />
+                        <Button title="View" small onPress={() => void openProof({ id: p.id, goalId: g.goalId })} />
+                        {p.status === 'APPROVED' ? null : <Button title="Delete" small variant="danger" onPress={() => deleteProof(g.goalId, p.id)} />}
                       </View>
-                      {p.proofUrl ? null : <Text style={styles.meta}>No video uploaded.</Text>}
+                      {p.status === 'APPROVED' ? <Text style={styles.meta}>Verified ranking proof.</Text> : <Text style={styles.meta}>Not a verified ranking result.</Text>}
                     </View>
                   );
                 })}

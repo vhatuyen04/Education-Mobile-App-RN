@@ -9,6 +9,7 @@ import { Pill } from './Pill';
 import { Step } from './StepEditorList';
 import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
+import { useSettings } from '../settings/SettingsContext';
 import * as authApi from '../api/auth';
 import { markAppGoal } from '../motivation/appGoals';
 import { previewRewardsForDeadline } from '../motivation/deadlineDifficulty';
@@ -445,6 +446,7 @@ function defaultGoalTitle(text: string) {
 
 export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
   const { state } = useAuth();
+  const { settings } = useSettings();
   const [planText, setPlanText] = useState('');
   const [deadline, setDeadline] = useState('');
   const [intensity, setIntensity] = useState<'Light' | 'Normal' | 'Hard'>('Normal');
@@ -456,15 +458,18 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
   const [generated, setGenerated] = useState(false);
 
   const [goalTitle, setGoalTitle] = useState('');
+  const [goalDescription, setGoalDescription] = useState('');
   const [goalField, setGoalField] = useState<'Sport' | 'Academy' | 'Entertainment'>('Academy');
   const [goalDeadline, setGoalDeadline] = useState('');
   const [goalRequirement, setGoalRequirement] = useState('');
+  const [goalExpectation, setGoalExpectation] = useState('');
   const [goalDifficultyScore, setGoalDifficultyScore] = useState<number | null>(null);
   const [goalDifficultyConfidence, setGoalDifficultyConfidence] = useState<number | null>(null);
   const [goalDifficultyReason, setGoalDifficultyReason] = useState<string | null>(null);
   const [goalSuggestionToken, setGoalSuggestionToken] = useState<string | null>(null);
   const [goalPointsAwarded, setGoalPointsAwarded] = useState<number | null>(null);
   const [goalXpAwarded, setGoalXpAwarded] = useState<number | null>(null);
+  const [goalRankingEligible, setGoalRankingEligible] = useState(false);
   const [steps, setSteps] = useState<PlannerStep[]>([]);
 
   const displaySteps = useMemo(() => sanitizePlannerSteps(steps), [steps]);
@@ -479,6 +484,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
       chosenDeadline: deadline.trim() || goalDeadline,
     });
   }, [deadline, goalDeadline, goalDifficultyScore, goalPointsAwarded, goalXpAwarded]);
+  const shownRankingEligible = goalRankingEligible;
 
   const templates = useMemo(
     () => [
@@ -498,15 +504,18 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
     }
     setGenerated(false);
     setGoalTitle('');
+    setGoalDescription('');
     setGoalField('Academy');
     setGoalDeadline(clearPlan ? '' : deadline);
     setGoalRequirement('');
+    setGoalExpectation('');
     setGoalDifficultyScore(null);
     setGoalDifficultyConfidence(null);
     setGoalDifficultyReason(null);
     setGoalSuggestionToken(null);
     setGoalPointsAwarded(null);
     setGoalXpAwarded(null);
+    setGoalRankingEligible(false);
     setSteps([]);
     setAiHelp(null);
     setDirty(false);
@@ -667,17 +676,20 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
       }
 
       setGoalTitle(resp.suggestion.title || defaultGoalTitle(planText));
+      setGoalDescription(String(resp.suggestion.description ?? '').trim());
       setGoalField(resp.suggestion.field);
       const effectiveDeadline = resp.suggestion.deadline || resolvedDeadline;
       setDeadline(effectiveDeadline);
       setGoalDeadline(effectiveDeadline);
       setGoalRequirement(resp.suggestion.requirement || '');
+      setGoalExpectation(resp.suggestion.expectation || '');
       setGoalDifficultyScore(typeof resp.suggestion.difficultyScore === 'number' ? resp.suggestion.difficultyScore : null);
       setGoalDifficultyConfidence(typeof resp.suggestion.difficultyConfidence === 'number' ? resp.suggestion.difficultyConfidence : null);
       setGoalDifficultyReason(resp.suggestion.difficultyReason || null);
       setGoalSuggestionToken(resp.suggestion.suggestionToken || null);
-      setGoalPointsAwarded(typeof (resp.suggestion as any).pointsAwarded === 'number' ? (resp.suggestion as any).pointsAwarded : null);
-      setGoalXpAwarded(typeof (resp.suggestion as any).xpAwarded === 'number' ? (resp.suggestion as any).xpAwarded : null);
+      setGoalPointsAwarded(typeof resp.suggestion.pointsAwarded === 'number' ? resp.suggestion.pointsAwarded : null);
+      setGoalXpAwarded(typeof resp.suggestion.xpAwarded === 'number' ? resp.suggestion.xpAwarded : null);
+      setGoalRankingEligible(resp.suggestion.rankingEligible === true);
       const mapped = resp.suggestion.steps.map(s => {
         const schedule = normalizeAiStepSchedule(s.schedule, effectiveDeadline);
         return {
@@ -703,13 +715,8 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
   async function save() {
     const title = goalTitle.trim();
     const nonEmptySteps = sanitizePlannerSteps(steps);
-    const stepTexts = nonEmptySteps.map(s => s.text);
     if (!title) {
       toast('Goal title is required');
-      return;
-    }
-    if (stepTexts.length === 0) {
-      toast('Please add at least 1 step');
       return;
     }
 
@@ -733,8 +740,9 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
 
       const created = await authApi.createGoal(token, {
         title,
-        description: planText.trim() ? planText.trim() : null,
+        description: goalDescription.trim() ? goalDescription.trim() : null,
         requirement: goalRequirement.trim() ? goalRequirement.trim() : null,
+        expectation: goalExpectation.trim() ? goalExpectation.trim() : null,
         rankField: goalField,
         dueAt: dueIso,
         difficultyScore: goalDifficultyScore ?? undefined,
@@ -804,6 +812,9 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
             <Text style={styles.mutedSmall}>Describe your plan. SmartGoal will suggest 1 goal and a checklist. Requirement is determined completely by the SmartGoal app.</Text>
             <Text style={[styles.mutedSmall, { marginTop: 8 }]}>
               Write in English. Use a number for time: in 3 weeks, for 10 days, within 2 months, or by 2027-01-01. Words such as “a week” are not read. The Deadline field uses YYYY-MM-DD.
+            </Text>
+            <Text style={[styles.mutedSmall, { marginTop: 8 }]}>
+              If a suggested goal is eligible for ranking, you can later submit a video to prove the achievement and compete on the ranking board. You can still complete the goal without ranking.
             </Text>
 
             <View style={styles.field}>
@@ -906,17 +917,31 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
                     <Text style={styles.stepItemText}>{goalTitle}</Text>
                   </View>
 
-                  <View style={[styles.field, { marginTop: 10 }]}
-                  >
-                    <Text style={styles.label}>Requirement</Text>
-                    <Text style={styles.mutedSmall}>{goalRequirement || '—'}</Text>
-                  </View>
+                  {goalDescription.trim() ? (
+                    <View style={[styles.field, { marginTop: 10 }]}>
+                      <Text style={styles.label}>Description</Text>
+                      <Text style={styles.mutedSmall}>{goalDescription.trim()}</Text>
+                    </View>
+                  ) : null}
+
+                  {shownRankingEligible && settings.rankingMode ? (
+                    <View style={[styles.field, { marginTop: 10 }]}>
+                      <Text style={styles.label}>Ranking requirement</Text>
+                      <Text style={styles.mutedSmall}>{goalRequirement || '—'}</Text>
+                    </View>
+                  ) : goalExpectation.trim() ? (
+                    <View style={[styles.field, { marginTop: 10 }]}>
+                      <Text style={styles.label}>Expectation</Text>
+                      <Text style={styles.mutedSmall}>{goalExpectation.trim()}</Text>
+                    </View>
+                  ) : null}
 
                   <View style={{ flexDirection: 'row', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
                     <Pill>Field: {goalField}</Pill>
                     <Pill>Deadline: {deadline.trim() || goalDeadline || '—'}</Pill>
                     {shownRewards ? <Pill>Points: {shownRewards.pointsAwarded}</Pill> : null}
                     {shownRewards ? <Pill>XP: {shownRewards.xpAwarded}</Pill> : null}
+                    <Pill>{shownRankingEligible ? 'Eligible' : 'Non eligible'}</Pill>
                   </View>
                 </Card>
 

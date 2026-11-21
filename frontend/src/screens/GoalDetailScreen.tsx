@@ -13,9 +13,10 @@ import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
 import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
+import { useSettings } from '../settings/SettingsContext';
 import * as authApi from '../api/auth';
-import { customGoalCompletionMessage } from '../motivation/completionMessage';
-import { isAppGoal, unmarkAppGoal } from '../motivation/appGoals';
+import { goalSuccessMessage } from '../motivation/completionMessage';
+import { isAppGoal, markAppGoal, unmarkAppGoal } from '../motivation/appGoals';
 import { getFailedReason, type FailedReason } from '../motivation/failedGoals';
 import { appendScorePoint } from '../motivation/scoreHistory';
 import type { RootStackParamList } from '../navigation/types';
@@ -60,6 +61,7 @@ export function GoalDetailScreen() {
   const nav = useNavigation<Nav>();
   const route = useRoute<R>();
   const { state } = useAuth();
+  const { settings } = useSettings();
 
   const goalId = route.params?.id;
   const initialTitle = stripLegacyStepsFromGoalTitle(route.params?.title || 'New goal');
@@ -68,8 +70,15 @@ export function GoalDetailScreen() {
   const [desc, setDesc] = useState('');
   const [dueAt, setDueAt] = useState<string | null>(null);
   const [requirement, setRequirement] = useState<string>('');
+  const [expectation, setExpectation] = useState('');
   const [pointsAwarded, setPointsAwarded] = useState<number | null>(null);
   const [xpAwarded, setXpAwarded] = useState<number | null>(null);
+  const [difficultyScore, setDifficultyScore] = useState<number | null>(null);
+  const [rankingEligible, setRankingEligible] = useState(false);
+  const [rankingReason, setRankingReason] = useState<string | null>(null);
+  const [requirementSource, setRequirementSource] = useState<'USER' | 'AI' | null>(null);
+  const [rankingProofStatus, setRankingProofStatus] = useState<authApi.SmartGoalProofStatus | null>(null);
+  const [completedAt, setCompletedAt] = useState<string | null>(null);
   const [steps, setSteps] = useState<UiStep[]>([]);
   const [saving, setSaving] = useState(false);
   const [completed, setCompleted] = useState(false);
@@ -124,28 +133,44 @@ export function GoalDetailScreen() {
       const fr = await getFailedReason(goalId);
 
       const resp = await authApi.getGoal(token, goalId);
+      const serverIsAi = resp.goal.requirementSource === 'AI';
+      if (app && !serverIsAi) await unmarkAppGoal(goalId);
+      if (!app && serverIsAi) await markAppGoal(goalId);
+      setIsSmartGoal(serverIsAi);
       const serverFailedReason: FailedReason | null = resp.goal.failedAt
         ? (resp.goal.failedReason === 'GAVE_UP' ? 'gave_up' : 'expired')
         : null;
       setFailedReason(fr ?? serverFailedReason);
       setTitle(stripLegacyStepsFromGoalTitle(resp.goal.title));
       const rawDesc = resp.goal.description ?? '';
-      if (app && (!rawDesc || rawDesc.toLowerCase().includes('ai recommended goal'))) {
+      if (serverIsAi && (!rawDesc || rawDesc.toLowerCase().includes('ai recommended goal'))) {
         setDesc('SmartGoal recommended goal');
       } else {
         setDesc(rawDesc);
       }
       setDueAt(resp.goal.dueAt ?? null);
-      setRequirement(String((resp.goal as any).requirement ?? ''));
-      if (app) {
-        setPointsAwarded(typeof (resp.goal as any).pointsAwarded === 'number' ? (resp.goal as any).pointsAwarded : null);
-        setXpAwarded(typeof (resp.goal as any).xpAwarded === 'number' ? (resp.goal as any).xpAwarded : null);
+      setRequirement(String(resp.goal.requirement ?? ''));
+      setExpectation(String(resp.goal.expectation ?? ''));
+      setRequirementSource(resp.goal.requirementSource ?? null);
+      setRankingEligible(resp.goal.rankingEligible === true);
+      setRankingReason(resp.goal.rankingEligibilityReason ?? null);
+      setDifficultyScore(typeof resp.goal.difficultyScore === 'number' ? resp.goal.difficultyScore : null);
+      if (resp.goal.requirementSource === 'AI') {
+        setPointsAwarded(typeof resp.goal.pointsAwarded === 'number' ? resp.goal.pointsAwarded : null);
+        setXpAwarded(typeof resp.goal.xpAwarded === 'number' ? resp.goal.xpAwarded : null);
       } else {
         setPointsAwarded(null);
         setXpAwarded(null);
       }
+      if (resp.goal.completed && resp.goal.rankingEligible === true) {
+        const latest = await authApi.getLatestSmartGoalProofAttempt(token, goalId);
+        setRankingProofStatus(latest.attempt?.status ?? null);
+      } else {
+        setRankingProofStatus(null);
+      }
       setDeadlineDraft(resp.goal.dueAt ? toYmdLocal(new Date(resp.goal.dueAt)) : '');
       setCompleted(!!resp.goal.completed);
+      setCompletedAt(resp.goal.completedAt ?? null);
       const stepResp = await authApi.listGoalSteps(token, goalId);
       const uiSteps: UiStep[] = stepResp.steps.map(s => ({
         id: makeId(),
@@ -154,7 +179,7 @@ export function GoalDetailScreen() {
         description: s.description ?? '',
         scheduleText: scheduleToShortText(s),
       }));
-      setSteps(uiSteps.length ? uiSteps : [{ id: makeId(), text: 'New step', description: '', scheduleText: '' }]);
+      setSteps(uiSteps);
     } catch (e: any) {
       toast(String(e?.message ?? 'Failed to load'));
     }
@@ -236,13 +261,8 @@ export function GoalDetailScreen() {
       return;
     }
     const t = stripLegacyStepsFromGoalTitle(title);
-    const stepTexts = steps.map(s => s.text.trim()).filter(Boolean);
     if (!t) {
       toast('Goal name is required');
-      return;
-    }
-    if (stepTexts.length === 0) {
-      toast('Please add at least 1 step');
       return;
     }
 
@@ -265,12 +285,14 @@ export function GoalDetailScreen() {
       let effectiveGoalId = goalId;
       const wasNew = !effectiveGoalId;
       if (effectiveGoalId) {
-        await authApi.updateGoal(token, effectiveGoalId, {
-          ...(isSmartGoal ? null : { title: t }),
-          description: isSmartGoal ? 'SmartGoal recommended goal' : desc.trim() ? desc : null,
-          ...(isSmartGoal ? null : { requirement: requirement.trim() ? requirement.trim() : null }),
-          ...(isSmartGoal ? null : { dueAt: dueAt ? dueAt : null }),
-        });
+        if (!isSmartGoal) {
+          await authApi.updateGoal(token, effectiveGoalId, {
+            title: t,
+            description: desc.trim() ? desc : null,
+            requirement: requirement.trim() ? requirement.trim() : null,
+            dueAt: dueAt ? dueAt : null,
+          });
+        }
       } else {
         const created = await authApi.createGoal(token, {
           title: t,
@@ -318,17 +340,6 @@ export function GoalDetailScreen() {
       setSteps(updatedSteps);
 
       if (opts.finish && effectiveGoalId && !wasNew) {
-        const app = await isAppGoal(effectiveGoalId);
-        if (app) {
-          void autoScheduleRemindersForSignedInUser({ minIntervalMs: 0 });
-          nav.navigate('SmartGoalProof', {
-            goalId: effectiveGoalId,
-            goalTitle: title ?? 'SmartGoal',
-            requirementText: requirement ?? null,
-          });
-          return;
-        }
-
         const updated = await authApi.updateGoal(token, effectiveGoalId, { completed: true });
 
         try {
@@ -338,7 +349,7 @@ export function GoalDetailScreen() {
           // ignore
         }
 
-        toast(customGoalCompletionMessage());
+        toast(goalSuccessMessage(updated.rewardsApplied?.xp ?? 0));
       } else {
         toast('Saved');
       }
@@ -377,6 +388,8 @@ export function GoalDetailScreen() {
     }
     await saveImpl({ finish: true });
   }
+
+  const rankingWindowClosed = completedAt != null && Date.now() > new Date(completedAt).getTime() + 3 * 24 * 60 * 60 * 1000;
 
   return (
     <Screen style={{ padding: 0 }}>
@@ -425,7 +438,7 @@ export function GoalDetailScreen() {
             {!completed && !isSmartGoal ? <Text style={styles.meta}>Tap to edit (YYYY-MM-DD)</Text> : null}
           </View>
 
-          {isSmartGoal && (typeof pointsAwarded === 'number' || typeof xpAwarded === 'number') ? (
+          {requirementSource === 'AI' && (typeof pointsAwarded === 'number' || typeof xpAwarded === 'number') ? (
             <View style={styles.field}>
               <Text style={styles.label}>Rewards</Text>
               <View style={styles.hSub}>
@@ -445,6 +458,31 @@ export function GoalDetailScreen() {
             </View>
           </View>
 
+          {completed && requirementSource === 'AI' && rankingEligible && !failedReason ? (
+            <View style={styles.field}>
+              <Text style={styles.label}>Ranking</Text>
+              <Text style={styles.meta}>Difficulty: {difficultyScore ?? '—'}</Text>
+              <Text style={styles.meta}>Potential ranking points: {pointsAwarded ?? '—'}</Text>
+              <Text style={styles.meta}>{rankingReason || 'This goal can be submitted for ranking.'}</Text>
+              {rankingProofStatus === 'APPROVED' ? <Text style={styles.meta}>Ranking points were awarded for this goal.</Text> : null}
+              {rankingProofStatus === 'PENDING_REVIEW' ? <Text style={styles.meta}>Ranking proof is waiting for admin review. Completion and XP stay as they are.</Text> : null}
+              {rankingProofStatus === 'REJECTED' || rankingProofStatus === 'NEEDS_CLARIFICATION' ? <Text style={styles.meta}>The last proof was rejected. Completion and XP were not changed.</Text> : null}
+              {settings.rankingMode && rankingProofStatus !== 'APPROVED' && rankingProofStatus !== 'PENDING_REVIEW' && !rankingWindowClosed ? (
+                <View style={{ marginTop: 8 }}>
+                  <Button
+                    title="Submit for Ranking"
+                    onPress={() => {
+                      if (!goalId) return;
+                      nav.navigate('SmartGoalProof', { goalId, goalTitle: title, requirementText: requirement });
+                    }}
+                  />
+                </View>
+              ) : null}
+              {rankingWindowClosed && rankingProofStatus !== 'APPROVED' ? <Text style={styles.meta}>The 3-day ranking deadline has passed.</Text> : null}
+              <Text style={styles.meta}>Ranking is optional. Skipping it keeps this goal completed and keeps the XP already awarded.</Text>
+            </View>
+          ) : null}
+
           <View style={styles.field}>
             <Text style={styles.label}>Description</Text>
             <TextInput
@@ -458,23 +496,27 @@ export function GoalDetailScreen() {
             />
           </View>
 
-          <View style={styles.field}>
-            <Text style={styles.label}>Requirement</Text>
-            <Text style={styles.meta}>{isSmartGoal ? 'SmartGoal requirement' : 'Custom goal requirement (optional)'}</Text>
-            {isSmartGoal ? (
-              <Text style={styles.meta}>{requirement || '—'}</Text>
-            ) : (
+          {isSmartGoal ? (
+            expectation.trim() ? (
+              <View style={styles.field}>
+                <Text style={styles.label}>Expectation</Text>
+                <Text style={styles.meta}>{expectation.trim()}</Text>
+              </View>
+            ) : null
+          ) : (
+            <View style={styles.field}>
+              <Text style={styles.label}>Expectation (Optional)</Text>
               <TextInput
                 value={requirement}
                 onChangeText={setRequirement}
-                placeholder={'Example: Show your notes for 3 lessons and explain one key idea'}
+                placeholder="What does finishing this goal look like?"
                 placeholderTextColor={colors.muted}
                 editable
                 style={styles.input}
                 multiline
               />
-            )}
-          </View>
+            </View>
+          )}
 
           <View style={styles.divider} />
 

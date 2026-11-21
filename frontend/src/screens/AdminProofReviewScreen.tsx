@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { Linking, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 
 import { Screen } from '../components/Screen';
@@ -22,9 +22,6 @@ export function AdminProofReviewScreen() {
   const [reviewingAttempts, setReviewingAttempts] = useState<Attempt[]>([]);
   const [verifiedAttempts, setVerifiedAttempts] = useState<Attempt[]>([]);
   const [feedbackDraft, setFeedbackDraft] = useState<Record<string, string>>({});
-  const [autoAiEnabled, setAutoAiEnabled] = useState(false);
-  const [autoAiSettingBusy, setAutoAiSettingBusy] = useState(false);
-  const [aiBusyIds, setAiBusyIds] = useState<Record<string, boolean>>({});
   const [sessionHiddenIds, setSessionHiddenIds] = useState<Record<string, boolean>>({});
   const isAdmin = state.user?.role === 'ADMIN';
 
@@ -32,13 +29,11 @@ export function AdminProofReviewScreen() {
     if (!token) return;
     setLoading(true);
     try {
-      const settingResp = await authApi.adminGetAutoAiReviewSetting(token);
-      if (!autoAiSettingBusy) setAutoAiEnabled(Boolean(settingResp?.enabled));
-
-      const [pendingResp, approvedResp, rejectedResp] = await Promise.all([
+      const [pendingResp, approvedResp, rejectedResp, clarificationResp] = await Promise.all([
         authApi.adminListProofAttempts(token, { status: 'PENDING_REVIEW' }),
         authApi.adminListProofAttempts(token, { status: 'APPROVED' }),
         authApi.adminListProofAttempts(token, { status: 'REJECTED' }),
+        authApi.adminListProofAttempts(token, { status: 'NEEDS_CLARIFICATION' }),
       ]);
       const byNewestVerification = (a: Attempt, b: Attempt) => {
         const aTime = new Date(a.updatedAt ?? a.createdAt ?? 0).getTime();
@@ -46,13 +41,13 @@ export function AdminProofReviewScreen() {
         return bTime - aTime;
       };
       setReviewingAttempts([...(pendingResp.attempts ?? [])].sort(byNewestVerification));
-      setVerifiedAttempts([...(approvedResp.attempts ?? []), ...(rejectedResp.attempts ?? [])].sort(byNewestVerification));
+      setVerifiedAttempts([...(approvedResp.attempts ?? []), ...(rejectedResp.attempts ?? []), ...(clarificationResp.attempts ?? [])].sort(byNewestVerification));
     } catch (e: any) {
       toast(String(e?.message ?? 'Failed to load'));
     } finally {
       setLoading(false);
     }
-  }, [token, autoAiSettingBusy]);
+  }, [token]);
 
   useFocusEffect(
     useCallback(() => {
@@ -87,10 +82,6 @@ export function AdminProofReviewScreen() {
   async function decide(a: Attempt, decision: 'APPROVE' | 'REJECT') {
     if (!token) return;
     const feedback = (feedbackDraft[a.id] ?? '').trim();
-    if (decision === 'REJECT' && feedback.length < 3) {
-      toast('A rejection reason is required');
-      return;
-    }
     try {
       await authApi.adminDecideProofAttempt(token, a.id, {
         decision,
@@ -100,42 +91,6 @@ export function AdminProofReviewScreen() {
       await refresh();
     } catch (e: any) {
       toast(String(e?.message ?? 'Failed'));
-    }
-  }
-
-  async function aiReview(a: Attempt, opts?: { skipRefresh?: boolean }) {
-    if (!token) return;
-    if (aiBusyIds[a.id]) return;
-    setAiBusyIds(prev => ({ ...prev, [a.id]: true }));
-    try {
-      await authApi.adminAiReviewProofAttempt(token, a.id);
-      toast('AI reviewed');
-      if (!opts?.skipRefresh) await refresh();
-    } catch (e: any) {
-      toast(String(e?.message ?? 'AI review failed'));
-    } finally {
-      setAiBusyIds(prev => {
-        const next = { ...prev };
-        delete next[a.id];
-        return next;
-      });
-    }
-  }
-
-  async function toggleAutoAi(next: boolean) {
-    if (!token) return;
-    if (autoAiSettingBusy) return;
-    setAutoAiSettingBusy(true);
-    setAutoAiEnabled(next);
-    try {
-      const resp = await authApi.adminSetAutoAiReviewSetting(token, { enabled: next });
-      setAutoAiEnabled(Boolean(resp?.enabled));
-      await refresh();
-    } catch (e: any) {
-      toast(String(e?.message ?? 'Failed'));
-      setAutoAiEnabled(!next);
-    } finally {
-      setAutoAiSettingBusy(false);
     }
   }
 
@@ -156,30 +111,6 @@ export function AdminProofReviewScreen() {
   const visibleVerifiedAttempts = useMemo(
     () => verifiedAttempts.filter(a => !sessionHiddenIds[a.id]),
     [verifiedAttempts, sessionHiddenIds]
-  );
-
-  useFocusEffect(
-    useCallback(() => {
-      if (!autoAiEnabled) return;
-      if (!token) return;
-      if (loading) return;
-      if (reviewingAttempts.length === 0) return;
-
-      let canceled = false;
-      (async () => {
-        const batch = [...reviewingAttempts];
-        for (const a of batch) {
-          if (canceled) return;
-          await aiReview(a, { skipRefresh: true });
-        }
-        if (canceled) return;
-        await refresh();
-      })();
-
-      return () => {
-        canceled = true;
-      };
-    }, [autoAiEnabled, token, loading, reviewingAttempts, refresh])
   );
 
   if (!isAdmin) {
@@ -213,10 +144,6 @@ export function AdminProofReviewScreen() {
 
           <View style={styles.rowBetween}>
             <Button title="Refresh" small onPress={() => void refresh()} />
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-              <Text style={styles.meta}>Auto sending to AI</Text>
-              <Switch value={autoAiEnabled} onValueChange={v => void toggleAutoAi(v)} />
-            </View>
           </View>
         </Card>
 
@@ -230,26 +157,32 @@ export function AdminProofReviewScreen() {
             </View>
 
             <View style={{ height: 6 }} />
-            <Text style={styles.meta} numberOfLines={1}>
-              User: {a.userEmail || a.userId}
-            </Text>
-            <Text style={styles.meta} numberOfLines={1}>
-              Goal: {a.goalTitle || a.goalId}
-            </Text>
-
-            <View style={{ height: 8 }} />
-            <Text style={styles.body}>{a.requirementText || 'No requirement provided.'}</Text>
+            <Text style={styles.meta}>Username: {a.username || '—'}</Text>
+            <Text style={styles.meta}>Expected code</Text>
+            <Text style={styles.expectedCode}>{a.challengeCode || '—'}</Text>
+            <Text style={styles.body}>The username and this expected code must be shown in the video.</Text>
+            <Text style={styles.meta}>Email: {a.userEmail || a.userId}</Text>
+            <Text style={styles.body}>{a.goalTitle || a.goalId}</Text>
+            <Text style={styles.meta}>{a.goalDescription || 'No description.'}</Text>
+            <Text style={styles.body}>Requirement: {a.requirement || a.requirementText || 'No requirement provided.'}</Text>
+            <Text style={styles.meta}>Difficulty: {a.difficultyScore ?? '—'}</Text>
+            <Text style={styles.meta}>Potential ranking points: {a.potentialRankingPoints ?? '—'}</Text>
+            <Text style={styles.meta}>Moderation: {a.moderationStatus || 'Not clear'}</Text>
+            <Text style={styles.meta}>{a.moderationNote || 'No moderation note.'}</Text>
+            {a.moderationLimitation && !(a.moderationNote ?? '').includes(a.moderationLimitation) ? (
+              <Text style={styles.meta}>{a.moderationLimitation}</Text>
+            ) : null}
 
             <View style={{ height: 10 }} />
-            <Button title="View video" small onPress={() => void viewAttempt(a)} />
+            <Button title="Play video" small onPress={() => void viewAttempt(a)} />
 
             <View style={{ height: 10 }} />
-            <Text style={styles.meta}>Feedback (optional)</Text>
+            <Text style={styles.meta}>Feedback</Text>
             <View style={{ height: 6 }} />
             <TextInput
               value={feedbackDraft[a.id] ?? ''}
               onChangeText={t => setFeedbackDraft(prev => ({ ...prev, [a.id]: t }))}
-              placeholder="Reason / feedback"
+              placeholder="Optional feedback"
               placeholderTextColor={colors.muted}
               style={styles.input}
               multiline
@@ -257,7 +190,6 @@ export function AdminProofReviewScreen() {
 
             <View style={{ height: 10 }} />
             <View style={{ flexDirection: 'row', gap: 10, flexWrap: 'wrap' }}>
-              <Button title={aiBusyIds[a.id] ? 'AI reviewing…' : 'AI Review'} onPress={() => void aiReview(a)} />
               <Button title="Approve" variant="primary" onPress={() => void decide(a, 'APPROVE')} />
               <Button title="Reject" onPress={() => void decide(a, 'REJECT')} />
             </View>
@@ -287,7 +219,7 @@ export function AdminProofReviewScreen() {
               <Text style={styles.itemTitle} numberOfLines={1}>
                 Attempt {a.id.slice(0, 8)}
               </Text>
-              <Badge>{a.status}</Badge>
+              <Badge>{a.status === 'NEEDS_CLARIFICATION' ? 'REJECTED' : a.status}</Badge>
             </View>
 
             <View style={{ height: 6 }} />
@@ -303,9 +235,9 @@ export function AdminProofReviewScreen() {
 
             <View style={{ height: 10 }} />
             <View style={{ flexDirection: 'row', gap: 10, flexWrap: 'wrap' }}>
-              <Button title="View video" small onPress={() => void viewAttempt(a)} />
-              <Button title="Hide" onPress={() => hideVerified(a)} />
-              <Button title="Delete" onPress={() => void dismissVerified(a)} />
+              <Button title="Play video" small onPress={() => void viewAttempt(a)} />
+              {a.status === 'APPROVED' || a.status === 'REJECTED' || a.status === 'NEEDS_CLARIFICATION' ? <Button title="Hide" onPress={() => hideVerified(a)} /> : null}
+              {a.status === 'APPROVED' || a.status === 'REJECTED' || a.status === 'NEEDS_CLARIFICATION' ? <Button title="Delete" onPress={() => void dismissVerified(a)} /> : null}
             </View>
           </Card>
         ))}
@@ -345,6 +277,13 @@ const styles = StyleSheet.create({
     color: colors.muted,
     fontSize: 12,
     fontWeight: '700',
+    marginTop: 2,
+  },
+  expectedCode: {
+    color: colors.text,
+    fontSize: 22,
+    fontWeight: '900',
+    letterSpacing: 2,
     marginTop: 2,
   },
   body: {

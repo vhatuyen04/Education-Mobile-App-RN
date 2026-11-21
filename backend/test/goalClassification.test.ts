@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import jwt from 'jsonwebtoken';
 
-import { classifyCreatedGoal, rewardsAfterDeadlineChange, rewardsForDifficultyScore } from '../src/goals/classifyGoal.ts';
+import { classifyCreatedGoal, rewardsAfterDeadlineChange, rewardsForDifficultyScore, stableDifficultyScore } from '../src/goals/classifyGoal.ts';
 import { userCompletionDecision } from '../src/goals/lifecycle.ts';
 import { acceptAiSuggestion, AI_SUGGESTION_PURPOSE, signAiSuggestion, type TrustedAiSuggestion } from '../src/goals/suggestionToken.ts';
 
@@ -19,6 +19,8 @@ function trusted(partial: Partial<TrustedAiSuggestion> = {}): TrustedAiSuggestio
     rankField: 'Academy',
     title: 'Practice piano',
     deadline: '2026-12-01',
+    rankingEligible: false,
+    rankingEligibilityReason: 'Ordinary practice',
     ...partial,
   };
 }
@@ -29,6 +31,14 @@ function completionStatus(created: ReturnType<typeof classifyCreatedGoal>) {
     true
   );
 }
+
+test('difficulty scores snap to the same 5-point band', () => {
+  assert.equal(stableDifficultyScore(63), 65);
+  assert.equal(stableDifficultyScore(67), 65);
+  assert.equal(stableDifficultyScore(1), 5);
+  assert.equal(stableDifficultyScore(100), 100);
+  assert.equal(rewardsForDifficultyScore(stableDifficultyScore(63)).xpAwarded, rewardsForDifficultyScore(65).xpAwarded);
+});
 
 test('a signed AI suggestion is classified from the token, including an empty requirement', () => {
   const suggestion = trusted({ requirement: '', pointsAwarded: 0, xpAwarded: 0 });
@@ -41,8 +51,7 @@ test('a signed AI suggestion is classified from the token, including an empty re
   assert.equal(created.requiresProof, true);
   assert.equal(created.pointsAwarded, 0);
   assert.equal(created.xpAwarded, 0);
-  const decision = completionStatus(created);
-  assert.equal(typeof decision === 'string' ? decision : decision.error, 'Goal completion requires proof review');
+  assert.equal(completionStatus(created), 'complete');
 });
 
 test('a forged difficulty score without a suggestion token stays a custom goal', () => {
@@ -51,6 +60,7 @@ test('a forged difficulty score without a suggestion token stays a custom goal',
   assert.equal(created.difficultyScore, null);
   assert.equal(created.pointsAwarded, 0);
   assert.equal(created.xpAwarded, 0);
+  assert.equal(created.rankingEligible, false);
   assert.equal(completionStatus(created), 'complete');
 });
 

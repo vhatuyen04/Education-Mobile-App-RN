@@ -11,9 +11,10 @@ import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
 import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
+import { useSettings } from '../settings/SettingsContext';
 import * as authApi from '../api/auth';
 import type { RootStackParamList } from '../navigation/types';
-import { customGoalCompletionMessage } from '../motivation/completionMessage';
+import { goalSuccessMessage } from '../motivation/completionMessage';
 import { isAppGoal, markAppGoal, unmarkAppGoal } from '../motivation/appGoals';
 import { appendScorePoint } from '../motivation/scoreHistory';
 import { appendInbox } from '../notifications/inbox';
@@ -26,6 +27,7 @@ type Goal = authApi.GoalItem;
 export function GoalsScreen() {
   const nav = useNavigation<Nav>();
   const { state } = useAuth();
+  const { settings } = useSettings();
 
   const [goals, setGoals] = useState<Goal[]>([]);
   const [loading, setLoading] = useState(false);
@@ -108,16 +110,11 @@ export function GoalsScreen() {
       const inferredIds = await Promise.all(
         list.map(async g => {
           const already = await isAppGoal(g.id);
-          if (already) return g.id;
-
-          const looksSmart =
-            (g as any).requirementSource === 'AI' ||
-            typeof (g as any).pointsAwarded === 'number' ||
-            typeof (g as any).xpAwarded === 'number';
-          if (looksSmart) {
-            await markAppGoal(g.id);
+          if (g.requirementSource === 'AI') {
+            if (!already) await markAppGoal(g.id);
             return g.id;
           }
+          if (already) await unmarkAppGoal(g.id);
           return null;
         })
       );
@@ -172,19 +169,8 @@ export function GoalsScreen() {
 
     setLoading(true);
     try {
-      const app = await isAppGoal(g.id);
-      if (app) {
-        setConfirm({ open: false });
-        nav.navigate('SmartGoalProof', {
-          goalId: g.id,
-          goalTitle: g.title,
-          requirementText: (g as any).requirement ?? null,
-        });
-        return;
-      }
-      await authApi.updateGoal(token, g.id, { completed: true });
-
-      toast(customGoalCompletionMessage());
+      const updated = await authApi.updateGoal(token, g.id, { completed: true });
+      toast(goalSuccessMessage(updated.rewardsApplied?.xp ?? 0));
 
       await refresh();
     } catch (e: any) {
@@ -355,6 +341,21 @@ export function GoalsScreen() {
 
         <View style={styles.goalActions}>
           <Badge>{goalTypeLabel(g)}</Badge>
+          {settings.rankingMode && g.completed && g.requirementSource === 'AI' && g.rankingEligible === true ? (
+            <Pressable
+              onPress={e => {
+                e.stopPropagation();
+                nav.navigate('SmartGoalProof', {
+                  goalId: g.id,
+                  goalTitle: g.title,
+                  requirementText: g.requirement ?? null,
+                });
+              }}
+              style={({ pressed }) => [styles.rankBtn, pressed ? { opacity: 0.85 } : null]}
+            >
+              <Text style={styles.tinyBtnText} numberOfLines={1}>Rank</Text>
+            </Pressable>
+          ) : null}
           <Pressable
             onPress={e => {
               e.stopPropagation();
@@ -504,8 +505,20 @@ const styles = StyleSheet.create({
   },
   goalActions: {
     flexDirection: 'row',
+    flexShrink: 0,
+    flexWrap: 'nowrap',
     gap: 8,
     alignItems: 'center',
+  },
+  rankBtn: {
+    height: 28,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   tinyBtn: {
     width: 32,

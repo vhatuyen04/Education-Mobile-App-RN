@@ -83,8 +83,10 @@ export async function applyCustomCompletion(
   const claimed = await db.updateGoal(params.goalId, params.userId, { ...params.patch, completed: true });
   if (claimed !== 1) return { ok: false, status: 409, error: 'Goal can no longer be edited' };
 
+  // Success pays stored XP once for an AI goal, after the anti-farm snapshot.
+  // Ranking points stay on admin proof approval. Custom goals pay neither.
   const awardedPoints = 0;
-  const awardedXp = 0;
+  const awardedXp = subject.requirementSource === 'AI' ? Math.max(0, Math.floor(params.rewards.xp)) : 0;
   await db.addUserRewards(user.id, {
     xp: awardedXp,
     points: awardedPoints,

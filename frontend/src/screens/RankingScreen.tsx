@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 
 import { Screen } from '../components/Screen';
@@ -17,7 +17,7 @@ type Field = authApi.LeaderboardField;
 export function RankingScreen() {
   const { state } = useAuth();
   const { settings } = useSettings();
-  const [field, setField] = useState<Field>('Sport');
+  const [field, setField] = useState<Field>(settings.interestedFields?.[0] ?? 'Academy');
 
   const listRef = useRef<FlatList<authApi.LeaderboardEntry> | null>(null);
 
@@ -25,6 +25,8 @@ export function RankingScreen() {
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [pendingScrollIndex, setPendingScrollIndex] = useState<number | null>(null);
+
+  const [details, setDetails] = useState<{ name: string; goals: authApi.ProvedRankingGoal[]; loading: boolean } | null>(null);
 
   const limit = 50;
 
@@ -109,6 +111,19 @@ export function RankingScreen() {
     return `${from}–${to} of ${page.total}`;
   }, [list.length, page]);
 
+  const openDetails = useCallback(async (entry: authApi.LeaderboardEntry) => {
+    const token = state.accessToken;
+    if (!token) return;
+    setDetails({ name: entry.name, goals: [], loading: true });
+    try {
+      const resp = await authApi.getProvedRankingGoals(token, entry.userId);
+      setDetails({ name: resp.name || entry.name, goals: resp.goals ?? [], loading: false });
+    } catch (e: any) {
+      setDetails(null);
+      toast(String(e?.message ?? 'Failed to load'));
+    }
+  }, [state.accessToken]);
+
   const moveToMyRank = useCallback(async () => {
     const r = page?.me?.rank ?? null;
     if (!r) {
@@ -126,7 +141,7 @@ export function RankingScreen() {
         <View style={{ flex: 1 }}>
           <Text style={styles.hTitle}>Ranking</Text>
           <View style={styles.hSub}>
-            <Pill dot>Leaderboards</Pill>
+            <Pill dot>Sport · Academy · Entertainment</Pill>
           </View>
         </View>
       </View>
@@ -146,6 +161,7 @@ export function RankingScreen() {
 
         <View style={{ height: 12 }} />
 
+        <Text style={styles.meta}>Verified ranking points from eligible AI goals. Unverified proofs are not shown here.</Text>
         <Text style={styles.meta}>Top user: {topUser ?? '—'}</Text>
         {rangeText ? <Text style={styles.meta}>Showing: {rangeText}</Text> : null}
 
@@ -189,7 +205,7 @@ export function RankingScreen() {
                 <Text style={styles.name}>Top {item.rank} · {item.name}</Text>
                 <Text style={styles.meta}>Points: {item.points}</Text>
               </View>
-              <Button title="Profile" small onPress={() => toast('View profile (todo)')} />
+              <Button title="Details" small onPress={() => void openDetails(item)} />
             </View>
           </View>
         )}
@@ -211,6 +227,28 @@ export function RankingScreen() {
           )
         }
       />
+      <Modal visible={details != null} transparent animationType="fade" onRequestClose={() => setDetails(null)}>
+        <View style={styles.backdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setDetails(null)} />
+          <View style={styles.sheet}>
+            <View style={styles.row}>
+              <Text style={styles.sheetTitle}>Details · {details?.name ?? ''}</Text>
+              <Pressable onPress={() => setDetails(null)} hitSlop={10}>
+                <Text style={styles.close}>✕</Text>
+              </Pressable>
+            </View>
+            <ScrollView style={{ maxHeight: 360 }}>
+              {details?.loading ? <Text style={styles.meta}>Loading…</Text> : null}
+              {!details?.loading && (details?.goals.length ?? 0) === 0 ? <Text style={styles.meta}>No proved goals yet.</Text> : null}
+              {details?.goals.map(goal => (
+                <Text key={goal.goalId} style={styles.goalLine}>
+                  {goal.title} - {goal.rankField ? `${goal.rankField} field` : 'No field'}
+                </Text>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </Screen>
   );
 }
@@ -303,5 +341,37 @@ const styles = StyleSheet.create({
   bold: {
     color: colors.text,
     fontWeight: '900',
+  },
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'center',
+    padding: 18,
+  },
+  sheet: {
+    backgroundColor: colors.surface,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.line,
+    padding: 14,
+    gap: 10,
+  },
+  sheetTitle: {
+    flex: 1,
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  close: {
+    color: colors.text,
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  goalLine: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: '700',
+    lineHeight: 20,
+    marginTop: 8,
   },
 });

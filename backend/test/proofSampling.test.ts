@@ -66,8 +66,8 @@ test('auto review failure feedback is limited to pending attempts', () => {
   assert.equal(feedback, 'Admin: the video is too dark');
 });
 
-test('admin rejection requires a meaningful reason', () => {
-  assert.equal(rejectionReason('  ').ok, false);
-  assert.equal(rejectionReason('no').ok, false);
-  assert.equal(rejectionReason('The video does not show the exercise').ok, true);
+test('admin rejection may omit a reason', () => {
+  assert.equal(rejectionReason('  ').ok, true);
+  assert.equal(rejectionReason('  ').reason, '');
+  assert.equal(rejectionReason('The video does not show the exercise').reason, 'The video does not show the exercise');
 });
