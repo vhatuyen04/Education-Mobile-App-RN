@@ -37,6 +37,11 @@ import {
   requiredRepCount,
 } from '../goals/proofSampling.js';
 import { GoalLifecycleError, withLockedGoal } from '../goals/goalCriticalSection.js';
+import {
+  expectedRepeatOccurrences,
+  isStepScheduledOnDay,
+  scheduleWriteError,
+} from '../goals/recurrenceSchedule.js';
 import { mockReviewAccess } from '../goals/mockReviewAccess.js';
 import { proofDecisionNotice } from '../goals/proofDecisionNotice.js';
 import {
@@ -533,123 +538,8 @@ async function deleteStoredProofObjects(keys: Array<string | null | undefined>) 
   }
 }
 
-function daysInMonth(year: number, monthIndex0: number) {
-  return new Date(year, monthIndex0 + 1, 0).getDate();
-}
-
-function normalizeRepeat(repeat: string | null | undefined) {
-  if (!repeat) return null;
-  const r = repeat.trim().toLowerCase();
-  return r || null;
-}
-
-function countRepeatOccurrencesBetween(
-  step: { repeat: string | null; repeatDay: number | null; repeatMonth: number | null },
-  fromDay: Date,
-  toDay: Date
-): number {
-  const repeat = normalizeRepeat(step.repeat);
-  if (!repeat) return 0;
-
-  const from = startOfLocalDay(fromDay);
-  const to = startOfLocalDay(toDay);
-  if (to.getTime() < from.getTime()) return 0;
-
-  if (repeat === 'daily') {
-    const ms = to.getTime() - from.getTime();
-    return Math.floor(ms / (24 * 60 * 60 * 1000)) + 1;
-  }
-
-  if (repeat === 'weekly') {
-    const targetDow = step.repeatDay;
-    if (targetDow === null || targetDow === undefined) return 0;
-    let count = 0;
-    const cur = new Date(from);
-    while (cur.getTime() <= to.getTime()) {
-      if (cur.getDay() === Number(targetDow)) count++;
-      cur.setDate(cur.getDate() + 1);
-    }
-    return count;
-  }
-
-  if (repeat === 'monthly') {
-    const targetDom = step.repeatDay;
-    if (targetDom === null || targetDom === undefined) return 0;
-    let count = 0;
-    const cur = new Date(from.getFullYear(), from.getMonth(), 1);
-    const end = new Date(to.getFullYear(), to.getMonth(), 1);
-    while (cur.getTime() <= end.getTime()) {
-      const year = cur.getFullYear();
-      const month0 = cur.getMonth();
-      const dim = daysInMonth(year, month0);
-      const day = Math.min(Number(targetDom), dim);
-      const occ = new Date(year, month0, day);
-      if (occ.getTime() >= from.getTime() && occ.getTime() <= to.getTime()) count++;
-      cur.setMonth(cur.getMonth() + 1);
-    }
-    return count;
-  }
-
-  if (repeat === 'yearly') {
-    const targetMonth = step.repeatMonth;
-    const targetDom = step.repeatDay;
-    if (!targetMonth || !targetDom) return 0;
-    let count = 0;
-    for (let y = from.getFullYear(); y <= to.getFullYear(); y++) {
-      const month0 = Number(targetMonth) - 1;
-      if (month0 < 0 || month0 > 11) continue;
-      const dim = daysInMonth(y, month0);
-      const day = Math.min(Number(targetDom), dim);
-      const occ = new Date(y, month0, day);
-      if (occ.getTime() >= from.getTime() && occ.getTime() <= to.getTime()) count++;
-    }
-    return count;
-  }
-
-  return 0;
-}
-
 function isStepScheduledToday(step: any, now: Date) {
-  const todayStart = startOfLocalDay(now);
-  const todayEnd = endOfLocalDay(now);
-  const repeat = normalizeRepeat(step.repeat);
-
-  if (!repeat || repeat === 'once') {
-    if (!step.dueAt) return false;
-    const due = new Date(step.dueAt);
-    return due.getTime() >= todayStart.getTime() && due.getTime() <= todayEnd.getTime();
-  }
-
-  if (repeat === 'daily') return true;
-
-  if (repeat === 'weekly') {
-    const dow = Number(step.repeatDay);
-    if (!Number.isFinite(dow)) return true;
-    return now.getDay() === dow;
-  }
-
-  if (repeat === 'monthly') {
-    const target = Number(step.repeatDay);
-    if (!Number.isFinite(target) || target <= 0) return true;
-    const last = daysInMonth(now.getFullYear(), now.getMonth());
-    const effective = Math.min(target, last);
-    return now.getDate() === effective;
-  }
-
-  if (repeat === 'yearly') {
-    const targetMonth = Number(step.repeatMonth);
-    const targetDay = Number(step.repeatDay);
-    if (!Number.isFinite(targetMonth) || targetMonth < 1 || targetMonth > 12) return true;
-    if (!Number.isFinite(targetDay) || targetDay <= 0) return true;
-    const monthIndex0 = targetMonth - 1;
-    if (now.getMonth() !== monthIndex0) return false;
-    const last = daysInMonth(now.getFullYear(), monthIndex0);
-    const effective = Math.min(targetDay, last);
-    return now.getDate() === effective;
-  }
-
-  // Unknown repeat type: do not schedule by default.
-  return false;
+  return isStepScheduledOnDay(step, now);
 }
 
 function isRepeating(repeat: string | null | undefined) {
@@ -2169,21 +2059,10 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
           continue;
         }
 
-        const repeat = normalizeRepeat(s.repeat);
-        if (!repeat) {
-          // Unscheduled step in DB: treat as not contributing.
-          continue;
-        }
-
-        // Repeating step: expected occurrences until goal deadline.
-        // If goal has no deadline, cap expected occurrences at 100 as a default horizon.
-        let expected: number = 0;
-        if (goalDueDay) {
-          expected = countRepeatOccurrencesBetween(s, goalStartDay, goalDueDay);
-        } else {
-          expected = 100;
-        }
-        if (expected <= 0) expected = 100;
+        // Repeating step. Open-ended goals keep the 100-occurrence horizon.
+        // A deadline with no matching day stays at zero and adds no progress.
+        const expected = expectedRepeatOccurrences(s, goalStartDay, goalDueDay);
+        if (expected <= 0) continue;
         const ratio = Math.min(Number(completedCount) / Number(expected), 1);
         overall += ratio * perStepWeight;
       }
@@ -2886,6 +2765,13 @@ authRouter.post('/goals/:id/steps', async (req: Request, res: Response) => {
   const goalId = String(req.params.id);
   const text = parsed.data.text.trim();
   if (!text) return res.status(400).json({ error: 'Invalid payload' });
+  const scheduleError = scheduleWriteError({
+    dueAt: parsed.data.dueAt ?? null,
+    repeat: parsed.data.repeat ?? null,
+    repeatDay: parsed.data.repeatDay ?? null,
+    repeatMonth: parsed.data.repeatMonth ?? null,
+  });
+  if (scheduleError) return res.status(400).json({ error: scheduleError });
 
   try {
     const step = await prisma.$transaction((tx) =>
@@ -2948,8 +2834,25 @@ authRouter.put('/goals/:goalId/steps/:stepId', async (req: Request, res: Respons
       withLockedGoal(
         () => lockOwnedGoal(tx, goalId, userId),
         async () => {
-          const existing = await tx.goalStep.findFirst({ where: { id: stepId, goalId }, select: { id: true } });
+          const existing = await tx.goalStep.findFirst({
+            where: { id: stepId, goalId },
+            select: { id: true, dueAt: true, repeat: true, repeatDay: true, repeatMonth: true },
+          });
           if (!existing) throw new GoalLifecycleError(404, 'Not found');
+          const scheduleTouched =
+            parsed.data.dueAt !== undefined ||
+            parsed.data.repeat !== undefined ||
+            parsed.data.repeatDay !== undefined ||
+            parsed.data.repeatMonth !== undefined;
+          if (scheduleTouched) {
+            const scheduleError = scheduleWriteError({
+              dueAt: parsed.data.dueAt !== undefined ? parsed.data.dueAt : existing.dueAt,
+              repeat: parsed.data.repeat !== undefined ? parsed.data.repeat : existing.repeat,
+              repeatDay: parsed.data.repeatDay !== undefined ? parsed.data.repeatDay : existing.repeatDay,
+              repeatMonth: parsed.data.repeatMonth !== undefined ? parsed.data.repeatMonth : existing.repeatMonth,
+            });
+            if (scheduleError) throw new GoalLifecycleError(400, scheduleError);
+          }
           return tx.goalStep.update({
             where: { id: stepId },
             data,

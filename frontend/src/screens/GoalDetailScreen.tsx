@@ -20,7 +20,7 @@ import { isAppGoal, markAppGoal, unmarkAppGoal } from '../motivation/appGoals';
 import { getFailedReason, type FailedReason } from '../motivation/failedGoals';
 import { appendScorePoint } from '../motivation/scoreHistory';
 import type { RootStackParamList } from '../navigation/types';
-import { parseScheduleShortText, scheduleToShortText } from '../utils/stepSchedule';
+import { parseScheduleShortText, scheduleDraftError, scheduleToShortText } from '../utils/stepSchedule';
 import { autoScheduleRemindersForSignedInUser } from '../notifications/scheduler';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -278,6 +278,15 @@ export function GoalDetailScreen() {
     if (!token) {
       toast('Not signed in');
       return;
+    }
+
+    for (const s of steps) {
+      if (!s.text.trim()) continue;
+      const scheduleError = scheduleDraftError(s.scheduleText);
+      if (scheduleError) {
+        toast(scheduleError);
+        return;
+      }
     }
 
     setSaving(true);

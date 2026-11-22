@@ -15,6 +15,7 @@ import { getRecommendation, removeRecommendation, upsertRecommendation } from '.
 import { removeInboxItemsByRecoId } from '../notifications/inbox';
 import { markAppGoal } from '../motivation/appGoals';
 import { previewRewardsForDeadline } from '../motivation/deadlineDifficulty';
+import { scheduleDraftError } from '../utils/stepSchedule';
 
 type RouteParams = { id: string };
 
@@ -105,12 +106,7 @@ function parseScheduleShortText(input: string): authApi.AiGoalStepSchedule {
     return { type: 'repeat', repeat: 'yearly' };
   }
 
-  if (lower.startsWith('repeat:')) {
-    const repeat = raw.slice(7).trim();
-    return repeat ? { type: 'repeat', repeat } : { type: 'none' };
-  }
-
-  return { type: 'repeat', repeat: raw };
+  return { type: 'none' };
 }
 
 function parseDeadlineToISOEndOfDay(v: string): string | null {
@@ -325,6 +321,15 @@ export function AiGoalRecommendationScreen() {
     };
     await upsertRecommendation(nextRec);
     setRec(nextRec);
+
+    for (const step of normalized) {
+      if (!step.text.trim()) continue;
+      const scheduleError = scheduleDraftError(step.scheduleText);
+      if (scheduleError) {
+        toast(scheduleError);
+        return;
+      }
+    }
 
     const dueIso = parseDeadlineToISOEndOfDay(String(nextRec.suggestion?.deadline ?? ''));
     if (!dueIso) {

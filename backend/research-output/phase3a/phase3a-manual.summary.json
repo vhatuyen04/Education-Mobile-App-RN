@@ -1,0 +1,25 @@
+{
+  "experimentId": "phase3a-manual",
+  "recordedAt": "2026-11-22T00:18:00.000Z",
+  "method": "manual",
+  "unknownCountedAsPass": false,
+  "counts": {
+    "PASS": 3,
+    "FAIL": 7,
+    "UNKNOWN": 3,
+    "total": 13
+  },
+  "expectedComparisons": {
+    "matched": 13,
+    "mismatched": 0,
+    "notDeclared": 0
+  },
+  "recovery": {
+    "requiredItems": 19,
+    "coveredItems": 9,
+    "COVERED": 4,
+    "PARTIAL": 4,
+    "NOT_COVERED": 3,
+    "NOT_REQUIRED": 2
+  }
+}

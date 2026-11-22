@@ -1,0 +1,1971 @@
+{
+  "experimentId": "phase3c-llm-mock",
+  "recordedAt": "2026-11-22T00:57:00.000Z",
+  "reusableBy": [
+    "direct_context_llm",
+    "direct_context_llm_verified",
+    "mcp"
+  ],
+  "tasks": [
+    {
+      "scenarioId": "goal-a-valid-recovery",
+      "snapshot": {
+        "snapshotVersion": "0.1",
+        "asOf": "2026-11-21",
+        "dateConvention": "civil-date",
+        "weekdayIndex": "0=Sunday..6=Saturday",
+        "window": {
+          "from": "2026-11-16",
+          "to": "2026-11-28",
+          "futureHorizonDays": 14,
+          "pastHorizonDays": 14,
+          "goalCreatedAt": "2026-11-16",
+          "goalDeadline": "2026-11-28",
+          "horizonEnd": "2026-12-05",
+          "truncatedPast": false,
+          "truncatedFuture": false,
+          "rule": "Inclusive civil dates from max(createdAt, asOf - pastHorizonDays) through min(deadline or horizon end, asOf + futureHorizonDays). Repeating dates outside createdAt..deadline are not scheduled. Scheduled dates outside this window are omitted and, when a completion exists, listed in completionsOutsideWindow."
+        },
+        "goal": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "title": "Learn Java Every Day",
+          "deadline": "2026-11-28",
+          "completed": false,
+          "failedAt": null,
+          "completionEvidence": "stored_flag_only"
+        },
+        "steps": [
+          {
+            "id": "11111111-1111-4111-8111-1111111111a1",
+            "order": 0,
+            "text": "Study Java",
+            "description": null,
+            "schedule": {
+              "type": "repeat",
+              "repeat": "daily"
+            },
+            "occurrenceStatus": "scheduled",
+            "ambiguity": null
+          }
+        ],
+        "occurrences": [
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-16",
+            "status": "DONE",
+            "evidence": "self_report"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-17",
+            "status": "DONE",
+            "evidence": "self_report"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-18",
+            "status": "DONE",
+            "evidence": "self_report"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-19",
+            "status": "MISSED",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-20",
+            "status": "MISSED",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-21",
+            "status": "TODO",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-22",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-23",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-24",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-25",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-26",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-27",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-28",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          }
+        ],
+        "summary": {
+          "done": 3,
+          "missed": 2,
+          "todo": 1,
+          "future": 7,
+          "total": 13
+        },
+        "unscheduledCompletions": [],
+        "completionsOutsideWindow": [],
+        "ambiguousSteps": [],
+        "constraints": {
+          "goalDeadline": "2026-11-28",
+          "schedules": "step_rows",
+          "workloadLimit": null,
+          "taskDurationMinutes": null,
+          "userPreferences": null,
+          "verifiedAchievement": null
+        },
+        "missing": [
+          "workloadLimit",
+          "taskDurationMinutes",
+          "timeOfDay",
+          "userPreferences",
+          "verifiedAchievement"
+        ],
+        "limitations": [
+          "goal_completed_is_a_stored_flag_not_step_progress",
+          "goal_step_done_flag_is_not_a_completion_source",
+          "no_duration_workload_or_preferences_in_source_data",
+          "nonexistent_monthly_and_yearly_dates_are_omitted",
+          "recorded_step_completion_is_self_report"
+        ]
+      },
+      "constraints": {
+        "dailyWorkloadLimitMinutes": 60
+      },
+      "requiredRecovery": [
+        {
+          "stepId": "11111111-1111-4111-8111-1111111111a1",
+          "missedDate": "2026-11-19"
+        },
+        {
+          "stepId": "11111111-1111-4111-8111-1111111111a1",
+          "missedDate": "2026-11-20"
+        }
+      ]
+    },
+    {
+      "scenarioId": "goal-a-after-deadline",
+      "snapshot": {
+        "snapshotVersion": "0.1",
+        "asOf": "2026-11-21",
+        "dateConvention": "civil-date",
+        "weekdayIndex": "0=Sunday..6=Saturday",
+        "window": {
+          "from": "2026-11-16",
+          "to": "2026-11-28",
+          "futureHorizonDays": 14,
+          "pastHorizonDays": 14,
+          "goalCreatedAt": "2026-11-16",
+          "goalDeadline": "2026-11-28",
+          "horizonEnd": "2026-12-05",
+          "truncatedPast": false,
+          "truncatedFuture": false,
+          "rule": "Inclusive civil dates from max(createdAt, asOf - pastHorizonDays) through min(deadline or horizon end, asOf + futureHorizonDays). Repeating dates outside createdAt..deadline are not scheduled. Scheduled dates outside this window are omitted and, when a completion exists, listed in completionsOutsideWindow."
+        },
+        "goal": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "title": "Learn Java Every Day",
+          "deadline": "2026-11-28",
+          "completed": false,
+          "failedAt": null,
+          "completionEvidence": "stored_flag_only"
+        },
+        "steps": [
+          {
+            "id": "11111111-1111-4111-8111-1111111111a1",
+            "order": 0,
+            "text": "Study Java",
+            "description": null,
+            "schedule": {
+              "type": "repeat",
+              "repeat": "daily"
+            },
+            "occurrenceStatus": "scheduled",
+            "ambiguity": null
+          }
+        ],
+        "occurrences": [
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-16",
+            "status": "DONE",
+            "evidence": "self_report"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-17",
+            "status": "DONE",
+            "evidence": "self_report"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-18",
+            "status": "DONE",
+            "evidence": "self_report"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-19",
+            "status": "MISSED",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-20",
+            "status": "MISSED",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-21",
+            "status": "TODO",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-22",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-23",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-24",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-25",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-26",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-27",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-28",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          }
+        ],
+        "summary": {
+          "done": 3,
+          "missed": 2,
+          "todo": 1,
+          "future": 7,
+          "total": 13
+        },
+        "unscheduledCompletions": [],
+        "completionsOutsideWindow": [],
+        "ambiguousSteps": [],
+        "constraints": {
+          "goalDeadline": "2026-11-28",
+          "schedules": "step_rows",
+          "workloadLimit": null,
+          "taskDurationMinutes": null,
+          "userPreferences": null,
+          "verifiedAchievement": null
+        },
+        "missing": [
+          "workloadLimit",
+          "taskDurationMinutes",
+          "timeOfDay",
+          "userPreferences",
+          "verifiedAchievement"
+        ],
+        "limitations": [
+          "goal_completed_is_a_stored_flag_not_step_progress",
+          "goal_step_done_flag_is_not_a_completion_source",
+          "no_duration_workload_or_preferences_in_source_data",
+          "nonexistent_monthly_and_yearly_dates_are_omitted",
+          "recorded_step_completion_is_self_report"
+        ]
+      },
+      "constraints": {
+        "dailyWorkloadLimitMinutes": 60
+      },
+      "requiredRecovery": [
+        {
+          "stepId": "11111111-1111-4111-8111-1111111111a1",
+          "missedDate": "2026-11-19"
+        },
+        {
+          "stepId": "11111111-1111-4111-8111-1111111111a1",
+          "missedDate": "2026-11-20"
+        }
+      ]
+    },
+    {
+      "scenarioId": "goal-a-past-date",
+      "snapshot": {
+        "snapshotVersion": "0.1",
+        "asOf": "2026-11-21",
+        "dateConvention": "civil-date",
+        "weekdayIndex": "0=Sunday..6=Saturday",
+        "window": {
+          "from": "2026-11-16",
+          "to": "2026-11-28",
+          "futureHorizonDays": 14,
+          "pastHorizonDays": 14,
+          "goalCreatedAt": "2026-11-16",
+          "goalDeadline": "2026-11-28",
+          "horizonEnd": "2026-12-05",
+          "truncatedPast": false,
+          "truncatedFuture": false,
+          "rule": "Inclusive civil dates from max(createdAt, asOf - pastHorizonDays) through min(deadline or horizon end, asOf + futureHorizonDays). Repeating dates outside createdAt..deadline are not scheduled. Scheduled dates outside this window are omitted and, when a completion exists, listed in completionsOutsideWindow."
+        },
+        "goal": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "title": "Learn Java Every Day",
+          "deadline": "2026-11-28",
+          "completed": false,
+          "failedAt": null,
+          "completionEvidence": "stored_flag_only"
+        },
+        "steps": [
+          {
+            "id": "11111111-1111-4111-8111-1111111111a1",
+            "order": 0,
+            "text": "Study Java",
+            "description": null,
+            "schedule": {
+              "type": "repeat",
+              "repeat": "daily"
+            },
+            "occurrenceStatus": "scheduled",
+            "ambiguity": null
+          }
+        ],
+        "occurrences": [
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-16",
+            "status": "DONE",
+            "evidence": "self_report"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-17",
+            "status": "DONE",
+            "evidence": "self_report"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-18",
+            "status": "DONE",
+            "evidence": "self_report"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-19",
+            "status": "MISSED",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-20",
+            "status": "MISSED",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-21",
+            "status": "TODO",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-22",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-23",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-24",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-25",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-26",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-27",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-28",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          }
+        ],
+        "summary": {
+          "done": 3,
+          "missed": 2,
+          "todo": 1,
+          "future": 7,
+          "total": 13
+        },
+        "unscheduledCompletions": [],
+        "completionsOutsideWindow": [],
+        "ambiguousSteps": [],
+        "constraints": {
+          "goalDeadline": "2026-11-28",
+          "schedules": "step_rows",
+          "workloadLimit": null,
+          "taskDurationMinutes": null,
+          "userPreferences": null,
+          "verifiedAchievement": null
+        },
+        "missing": [
+          "workloadLimit",
+          "taskDurationMinutes",
+          "timeOfDay",
+          "userPreferences",
+          "verifiedAchievement"
+        ],
+        "limitations": [
+          "goal_completed_is_a_stored_flag_not_step_progress",
+          "goal_step_done_flag_is_not_a_completion_source",
+          "no_duration_workload_or_preferences_in_source_data",
+          "nonexistent_monthly_and_yearly_dates_are_omitted",
+          "recorded_step_completion_is_self_report"
+        ]
+      },
+      "constraints": {
+        "dailyWorkloadLimitMinutes": 60
+      },
+      "requiredRecovery": [
+        {
+          "stepId": "11111111-1111-4111-8111-1111111111a1",
+          "missedDate": "2026-11-19"
+        },
+        {
+          "stepId": "11111111-1111-4111-8111-1111111111a1",
+          "missedDate": "2026-11-20"
+        }
+      ]
+    },
+    {
+      "scenarioId": "goal-a-done-dropped",
+      "snapshot": {
+        "snapshotVersion": "0.1",
+        "asOf": "2026-11-21",
+        "dateConvention": "civil-date",
+        "weekdayIndex": "0=Sunday..6=Saturday",
+        "window": {
+          "from": "2026-11-16",
+          "to": "2026-11-28",
+          "futureHorizonDays": 14,
+          "pastHorizonDays": 14,
+          "goalCreatedAt": "2026-11-16",
+          "goalDeadline": "2026-11-28",
+          "horizonEnd": "2026-12-05",
+          "truncatedPast": false,
+          "truncatedFuture": false,
+          "rule": "Inclusive civil dates from max(createdAt, asOf - pastHorizonDays) through min(deadline or horizon end, asOf + futureHorizonDays). Repeating dates outside createdAt..deadline are not scheduled. Scheduled dates outside this window are omitted and, when a completion exists, listed in completionsOutsideWindow."
+        },
+        "goal": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "title": "Learn Java Every Day",
+          "deadline": "2026-11-28",
+          "completed": false,
+          "failedAt": null,
+          "completionEvidence": "stored_flag_only"
+        },
+        "steps": [
+          {
+            "id": "11111111-1111-4111-8111-1111111111a1",
+            "order": 0,
+            "text": "Study Java",
+            "description": null,
+            "schedule": {
+              "type": "repeat",
+              "repeat": "daily"
+            },
+            "occurrenceStatus": "scheduled",
+            "ambiguity": null
+          }
+        ],
+        "occurrences": [
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-16",
+            "status": "DONE",
+            "evidence": "self_report"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-17",
+            "status": "DONE",
+            "evidence": "self_report"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-18",
+            "status": "DONE",
+            "evidence": "self_report"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-19",
+            "status": "MISSED",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-20",
+            "status": "MISSED",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-21",
+            "status": "TODO",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-22",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-23",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-24",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-25",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-26",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-27",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-28",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          }
+        ],
+        "summary": {
+          "done": 3,
+          "missed": 2,
+          "todo": 1,
+          "future": 7,
+          "total": 13
+        },
+        "unscheduledCompletions": [],
+        "completionsOutsideWindow": [],
+        "ambiguousSteps": [],
+        "constraints": {
+          "goalDeadline": "2026-11-28",
+          "schedules": "step_rows",
+          "workloadLimit": null,
+          "taskDurationMinutes": null,
+          "userPreferences": null,
+          "verifiedAchievement": null
+        },
+        "missing": [
+          "workloadLimit",
+          "taskDurationMinutes",
+          "timeOfDay",
+          "userPreferences",
+          "verifiedAchievement"
+        ],
+        "limitations": [
+          "goal_completed_is_a_stored_flag_not_step_progress",
+          "goal_step_done_flag_is_not_a_completion_source",
+          "no_duration_workload_or_preferences_in_source_data",
+          "nonexistent_monthly_and_yearly_dates_are_omitted",
+          "recorded_step_completion_is_self_report"
+        ]
+      },
+      "constraints": {
+        "dailyWorkloadLimitMinutes": 60
+      },
+      "requiredRecovery": [
+        {
+          "stepId": "11111111-1111-4111-8111-1111111111a1",
+          "missedDate": "2026-11-19"
+        },
+        {
+          "stepId": "11111111-1111-4111-8111-1111111111a1",
+          "missedDate": "2026-11-20"
+        }
+      ]
+    },
+    {
+      "scenarioId": "goal-a-unknown-step",
+      "snapshot": {
+        "snapshotVersion": "0.1",
+        "asOf": "2026-11-21",
+        "dateConvention": "civil-date",
+        "weekdayIndex": "0=Sunday..6=Saturday",
+        "window": {
+          "from": "2026-11-16",
+          "to": "2026-11-28",
+          "futureHorizonDays": 14,
+          "pastHorizonDays": 14,
+          "goalCreatedAt": "2026-11-16",
+          "goalDeadline": "2026-11-28",
+          "horizonEnd": "2026-12-05",
+          "truncatedPast": false,
+          "truncatedFuture": false,
+          "rule": "Inclusive civil dates from max(createdAt, asOf - pastHorizonDays) through min(deadline or horizon end, asOf + futureHorizonDays). Repeating dates outside createdAt..deadline are not scheduled. Scheduled dates outside this window are omitted and, when a completion exists, listed in completionsOutsideWindow."
+        },
+        "goal": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "title": "Learn Java Every Day",
+          "deadline": "2026-11-28",
+          "completed": false,
+          "failedAt": null,
+          "completionEvidence": "stored_flag_only"
+        },
+        "steps": [
+          {
+            "id": "11111111-1111-4111-8111-1111111111a1",
+            "order": 0,
+            "text": "Study Java",
+            "description": null,
+            "schedule": {
+              "type": "repeat",
+              "repeat": "daily"
+            },
+            "occurrenceStatus": "scheduled",
+            "ambiguity": null
+          }
+        ],
+        "occurrences": [
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-16",
+            "status": "DONE",
+            "evidence": "self_report"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-17",
+            "status": "DONE",
+            "evidence": "self_report"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-18",
+            "status": "DONE",
+            "evidence": "self_report"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-19",
+            "status": "MISSED",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-20",
+            "status": "MISSED",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-21",
+            "status": "TODO",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-22",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-23",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-24",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-25",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-26",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-27",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-28",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          }
+        ],
+        "summary": {
+          "done": 3,
+          "missed": 2,
+          "todo": 1,
+          "future": 7,
+          "total": 13
+        },
+        "unscheduledCompletions": [],
+        "completionsOutsideWindow": [],
+        "ambiguousSteps": [],
+        "constraints": {
+          "goalDeadline": "2026-11-28",
+          "schedules": "step_rows",
+          "workloadLimit": null,
+          "taskDurationMinutes": null,
+          "userPreferences": null,
+          "verifiedAchievement": null
+        },
+        "missing": [
+          "workloadLimit",
+          "taskDurationMinutes",
+          "timeOfDay",
+          "userPreferences",
+          "verifiedAchievement"
+        ],
+        "limitations": [
+          "goal_completed_is_a_stored_flag_not_step_progress",
+          "goal_step_done_flag_is_not_a_completion_source",
+          "no_duration_workload_or_preferences_in_source_data",
+          "nonexistent_monthly_and_yearly_dates_are_omitted",
+          "recorded_step_completion_is_self_report"
+        ]
+      },
+      "constraints": {
+        "dailyWorkloadLimitMinutes": 60
+      },
+      "requiredRecovery": [
+        {
+          "stepId": "11111111-1111-4111-8111-1111111111a1",
+          "missedDate": "2026-11-19"
+        },
+        {
+          "stepId": "11111111-1111-4111-8111-1111111111a1",
+          "missedDate": "2026-11-20"
+        }
+      ]
+    },
+    {
+      "scenarioId": "goal-a-duplicate-activity",
+      "snapshot": {
+        "snapshotVersion": "0.1",
+        "asOf": "2026-11-21",
+        "dateConvention": "civil-date",
+        "weekdayIndex": "0=Sunday..6=Saturday",
+        "window": {
+          "from": "2026-11-16",
+          "to": "2026-11-28",
+          "futureHorizonDays": 14,
+          "pastHorizonDays": 14,
+          "goalCreatedAt": "2026-11-16",
+          "goalDeadline": "2026-11-28",
+          "horizonEnd": "2026-12-05",
+          "truncatedPast": false,
+          "truncatedFuture": false,
+          "rule": "Inclusive civil dates from max(createdAt, asOf - pastHorizonDays) through min(deadline or horizon end, asOf + futureHorizonDays). Repeating dates outside createdAt..deadline are not scheduled. Scheduled dates outside this window are omitted and, when a completion exists, listed in completionsOutsideWindow."
+        },
+        "goal": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "title": "Learn Java Every Day",
+          "deadline": "2026-11-28",
+          "completed": false,
+          "failedAt": null,
+          "completionEvidence": "stored_flag_only"
+        },
+        "steps": [
+          {
+            "id": "11111111-1111-4111-8111-1111111111a1",
+            "order": 0,
+            "text": "Study Java",
+            "description": null,
+            "schedule": {
+              "type": "repeat",
+              "repeat": "daily"
+            },
+            "occurrenceStatus": "scheduled",
+            "ambiguity": null
+          }
+        ],
+        "occurrences": [
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-16",
+            "status": "DONE",
+            "evidence": "self_report"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-17",
+            "status": "DONE",
+            "evidence": "self_report"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-18",
+            "status": "DONE",
+            "evidence": "self_report"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-19",
+            "status": "MISSED",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-20",
+            "status": "MISSED",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-21",
+            "status": "TODO",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-22",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-23",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-24",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-25",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-26",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-27",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-28",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          }
+        ],
+        "summary": {
+          "done": 3,
+          "missed": 2,
+          "todo": 1,
+          "future": 7,
+          "total": 13
+        },
+        "unscheduledCompletions": [],
+        "completionsOutsideWindow": [],
+        "ambiguousSteps": [],
+        "constraints": {
+          "goalDeadline": "2026-11-28",
+          "schedules": "step_rows",
+          "workloadLimit": null,
+          "taskDurationMinutes": null,
+          "userPreferences": null,
+          "verifiedAchievement": null
+        },
+        "missing": [
+          "workloadLimit",
+          "taskDurationMinutes",
+          "timeOfDay",
+          "userPreferences",
+          "verifiedAchievement"
+        ],
+        "limitations": [
+          "goal_completed_is_a_stored_flag_not_step_progress",
+          "goal_step_done_flag_is_not_a_completion_source",
+          "no_duration_workload_or_preferences_in_source_data",
+          "nonexistent_monthly_and_yearly_dates_are_omitted",
+          "recorded_step_completion_is_self_report"
+        ]
+      },
+      "constraints": {
+        "dailyWorkloadLimitMinutes": 60
+      },
+      "requiredRecovery": [
+        {
+          "stepId": "11111111-1111-4111-8111-1111111111a1",
+          "missedDate": "2026-11-19"
+        },
+        {
+          "stepId": "11111111-1111-4111-8111-1111111111a1",
+          "missedDate": "2026-11-20"
+        }
+      ]
+    },
+    {
+      "scenarioId": "goal-b-workload",
+      "snapshot": {
+        "snapshotVersion": "0.1",
+        "asOf": "2026-11-21",
+        "dateConvention": "civil-date",
+        "weekdayIndex": "0=Sunday..6=Saturday",
+        "window": {
+          "from": "2026-11-16",
+          "to": "2026-11-28",
+          "futureHorizonDays": 14,
+          "pastHorizonDays": 14,
+          "goalCreatedAt": "2026-11-16",
+          "goalDeadline": "2026-11-28",
+          "horizonEnd": "2026-12-05",
+          "truncatedPast": false,
+          "truncatedFuture": false,
+          "rule": "Inclusive civil dates from max(createdAt, asOf - pastHorizonDays) through min(deadline or horizon end, asOf + futureHorizonDays). Repeating dates outside createdAt..deadline are not scheduled. Scheduled dates outside this window are omitted and, when a completion exists, listed in completionsOutsideWindow."
+        },
+        "goal": {
+          "id": "22222222-2222-4222-8222-222222222222",
+          "title": "Complete Java OOP Project",
+          "deadline": "2026-11-28",
+          "completed": false,
+          "failedAt": null,
+          "completionEvidence": "stored_flag_only"
+        },
+        "steps": [
+          {
+            "id": "22222222-2222-4222-8222-2222222222b1",
+            "order": 0,
+            "text": "Sketch the class diagram",
+            "description": null,
+            "schedule": {
+              "type": "once",
+              "due": "2026-11-18"
+            },
+            "occurrenceStatus": "scheduled",
+            "ambiguity": null
+          },
+          {
+            "id": "22222222-2222-4222-8222-2222222222b2",
+            "order": 1,
+            "text": "Implement the classes",
+            "description": null,
+            "schedule": {
+              "type": "once",
+              "due": "2026-11-20"
+            },
+            "occurrenceStatus": "scheduled",
+            "ambiguity": null
+          },
+          {
+            "id": "22222222-2222-4222-8222-2222222222b3",
+            "order": 2,
+            "text": "Write unit tests",
+            "description": null,
+            "schedule": {
+              "type": "once",
+              "due": "2026-11-21"
+            },
+            "occurrenceStatus": "scheduled",
+            "ambiguity": null
+          },
+          {
+            "id": "22222222-2222-4222-8222-2222222222b4",
+            "order": 3,
+            "text": "Submit the project",
+            "description": null,
+            "schedule": {
+              "type": "once",
+              "due": "2026-11-27"
+            },
+            "occurrenceStatus": "scheduled",
+            "ambiguity": null
+          }
+        ],
+        "occurrences": [
+          {
+            "stepId": "22222222-2222-4222-8222-2222222222b1",
+            "date": "2026-11-18",
+            "status": "DONE",
+            "evidence": "self_report"
+          },
+          {
+            "stepId": "22222222-2222-4222-8222-2222222222b2",
+            "date": "2026-11-20",
+            "status": "MISSED",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "22222222-2222-4222-8222-2222222222b3",
+            "date": "2026-11-21",
+            "status": "TODO",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "22222222-2222-4222-8222-2222222222b4",
+            "date": "2026-11-27",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          }
+        ],
+        "summary": {
+          "done": 1,
+          "missed": 1,
+          "todo": 1,
+          "future": 1,
+          "total": 4
+        },
+        "unscheduledCompletions": [],
+        "completionsOutsideWindow": [],
+        "ambiguousSteps": [],
+        "constraints": {
+          "goalDeadline": "2026-11-28",
+          "schedules": "step_rows",
+          "workloadLimit": null,
+          "taskDurationMinutes": null,
+          "userPreferences": null,
+          "verifiedAchievement": null
+        },
+        "missing": [
+          "workloadLimit",
+          "taskDurationMinutes",
+          "timeOfDay",
+          "userPreferences",
+          "verifiedAchievement"
+        ],
+        "limitations": [
+          "goal_completed_is_a_stored_flag_not_step_progress",
+          "goal_step_done_flag_is_not_a_completion_source",
+          "no_duration_workload_or_preferences_in_source_data",
+          "nonexistent_monthly_and_yearly_dates_are_omitted",
+          "recorded_step_completion_is_self_report"
+        ]
+      },
+      "constraints": {
+        "dailyWorkloadLimitMinutes": 60
+      },
+      "requiredRecovery": [
+        {
+          "stepId": "22222222-2222-4222-8222-2222222222b2",
+          "missedDate": "2026-11-20"
+        }
+      ]
+    },
+    {
+      "scenarioId": "goal-b-time-conflict",
+      "snapshot": {
+        "snapshotVersion": "0.1",
+        "asOf": "2026-11-21",
+        "dateConvention": "civil-date",
+        "weekdayIndex": "0=Sunday..6=Saturday",
+        "window": {
+          "from": "2026-11-16",
+          "to": "2026-11-28",
+          "futureHorizonDays": 14,
+          "pastHorizonDays": 14,
+          "goalCreatedAt": "2026-11-16",
+          "goalDeadline": "2026-11-28",
+          "horizonEnd": "2026-12-05",
+          "truncatedPast": false,
+          "truncatedFuture": false,
+          "rule": "Inclusive civil dates from max(createdAt, asOf - pastHorizonDays) through min(deadline or horizon end, asOf + futureHorizonDays). Repeating dates outside createdAt..deadline are not scheduled. Scheduled dates outside this window are omitted and, when a completion exists, listed in completionsOutsideWindow."
+        },
+        "goal": {
+          "id": "22222222-2222-4222-8222-222222222222",
+          "title": "Complete Java OOP Project",
+          "deadline": "2026-11-28",
+          "completed": false,
+          "failedAt": null,
+          "completionEvidence": "stored_flag_only"
+        },
+        "steps": [
+          {
+            "id": "22222222-2222-4222-8222-2222222222b1",
+            "order": 0,
+            "text": "Sketch the class diagram",
+            "description": null,
+            "schedule": {
+              "type": "once",
+              "due": "2026-11-18"
+            },
+            "occurrenceStatus": "scheduled",
+            "ambiguity": null
+          },
+          {
+            "id": "22222222-2222-4222-8222-2222222222b2",
+            "order": 1,
+            "text": "Implement the classes",
+            "description": null,
+            "schedule": {
+              "type": "once",
+              "due": "2026-11-20"
+            },
+            "occurrenceStatus": "scheduled",
+            "ambiguity": null
+          },
+          {
+            "id": "22222222-2222-4222-8222-2222222222b3",
+            "order": 2,
+            "text": "Write unit tests",
+            "description": null,
+            "schedule": {
+              "type": "once",
+              "due": "2026-11-21"
+            },
+            "occurrenceStatus": "scheduled",
+            "ambiguity": null
+          },
+          {
+            "id": "22222222-2222-4222-8222-2222222222b4",
+            "order": 3,
+            "text": "Submit the project",
+            "description": null,
+            "schedule": {
+              "type": "once",
+              "due": "2026-11-27"
+            },
+            "occurrenceStatus": "scheduled",
+            "ambiguity": null
+          }
+        ],
+        "occurrences": [
+          {
+            "stepId": "22222222-2222-4222-8222-2222222222b1",
+            "date": "2026-11-18",
+            "status": "DONE",
+            "evidence": "self_report"
+          },
+          {
+            "stepId": "22222222-2222-4222-8222-2222222222b2",
+            "date": "2026-11-20",
+            "status": "MISSED",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "22222222-2222-4222-8222-2222222222b3",
+            "date": "2026-11-21",
+            "status": "TODO",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "22222222-2222-4222-8222-2222222222b4",
+            "date": "2026-11-27",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          }
+        ],
+        "summary": {
+          "done": 1,
+          "missed": 1,
+          "todo": 1,
+          "future": 1,
+          "total": 4
+        },
+        "unscheduledCompletions": [],
+        "completionsOutsideWindow": [],
+        "ambiguousSteps": [],
+        "constraints": {
+          "goalDeadline": "2026-11-28",
+          "schedules": "step_rows",
+          "workloadLimit": null,
+          "taskDurationMinutes": null,
+          "userPreferences": null,
+          "verifiedAchievement": null
+        },
+        "missing": [
+          "workloadLimit",
+          "taskDurationMinutes",
+          "timeOfDay",
+          "userPreferences",
+          "verifiedAchievement"
+        ],
+        "limitations": [
+          "goal_completed_is_a_stored_flag_not_step_progress",
+          "goal_step_done_flag_is_not_a_completion_source",
+          "no_duration_workload_or_preferences_in_source_data",
+          "nonexistent_monthly_and_yearly_dates_are_omitted",
+          "recorded_step_completion_is_self_report"
+        ]
+      },
+      "constraints": {
+        "dailyWorkloadLimitMinutes": 180
+      },
+      "requiredRecovery": [
+        {
+          "stepId": "22222222-2222-4222-8222-2222222222b2",
+          "missedDate": "2026-11-20"
+        }
+      ]
+    },
+    {
+      "scenarioId": "goal-a-missing-constraints",
+      "snapshot": {
+        "snapshotVersion": "0.1",
+        "asOf": "2026-11-21",
+        "dateConvention": "civil-date",
+        "weekdayIndex": "0=Sunday..6=Saturday",
+        "window": {
+          "from": "2026-11-16",
+          "to": "2026-11-28",
+          "futureHorizonDays": 14,
+          "pastHorizonDays": 14,
+          "goalCreatedAt": "2026-11-16",
+          "goalDeadline": "2026-11-28",
+          "horizonEnd": "2026-12-05",
+          "truncatedPast": false,
+          "truncatedFuture": false,
+          "rule": "Inclusive civil dates from max(createdAt, asOf - pastHorizonDays) through min(deadline or horizon end, asOf + futureHorizonDays). Repeating dates outside createdAt..deadline are not scheduled. Scheduled dates outside this window are omitted and, when a completion exists, listed in completionsOutsideWindow."
+        },
+        "goal": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "title": "Learn Java Every Day",
+          "deadline": "2026-11-28",
+          "completed": false,
+          "failedAt": null,
+          "completionEvidence": "stored_flag_only"
+        },
+        "steps": [
+          {
+            "id": "11111111-1111-4111-8111-1111111111a1",
+            "order": 0,
+            "text": "Study Java",
+            "description": null,
+            "schedule": {
+              "type": "repeat",
+              "repeat": "daily"
+            },
+            "occurrenceStatus": "scheduled",
+            "ambiguity": null
+          }
+        ],
+        "occurrences": [
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-16",
+            "status": "DONE",
+            "evidence": "self_report"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-17",
+            "status": "DONE",
+            "evidence": "self_report"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-18",
+            "status": "DONE",
+            "evidence": "self_report"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-19",
+            "status": "MISSED",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-20",
+            "status": "MISSED",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-21",
+            "status": "TODO",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-22",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-23",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-24",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-25",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-26",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-27",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-28",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          }
+        ],
+        "summary": {
+          "done": 3,
+          "missed": 2,
+          "todo": 1,
+          "future": 7,
+          "total": 13
+        },
+        "unscheduledCompletions": [],
+        "completionsOutsideWindow": [],
+        "ambiguousSteps": [],
+        "constraints": {
+          "goalDeadline": "2026-11-28",
+          "schedules": "step_rows",
+          "workloadLimit": null,
+          "taskDurationMinutes": null,
+          "userPreferences": null,
+          "verifiedAchievement": null
+        },
+        "missing": [
+          "workloadLimit",
+          "taskDurationMinutes",
+          "timeOfDay",
+          "userPreferences",
+          "verifiedAchievement"
+        ],
+        "limitations": [
+          "goal_completed_is_a_stored_flag_not_step_progress",
+          "goal_step_done_flag_is_not_a_completion_source",
+          "no_duration_workload_or_preferences_in_source_data",
+          "nonexistent_monthly_and_yearly_dates_are_omitted",
+          "recorded_step_completion_is_self_report"
+        ]
+      },
+      "constraints": {
+        "dailyWorkloadLimitMinutes": null
+      },
+      "requiredRecovery": [
+        {
+          "stepId": "11111111-1111-4111-8111-1111111111a1",
+          "missedDate": "2026-11-19"
+        },
+        {
+          "stepId": "11111111-1111-4111-8111-1111111111a1",
+          "missedDate": "2026-11-20"
+        }
+      ]
+    },
+    {
+      "scenarioId": "goal-d-ambiguous-schedule",
+      "snapshot": {
+        "snapshotVersion": "0.1",
+        "asOf": "2026-11-21",
+        "dateConvention": "civil-date",
+        "weekdayIndex": "0=Sunday..6=Saturday",
+        "window": {
+          "from": "2026-11-16",
+          "to": "2026-11-28",
+          "futureHorizonDays": 14,
+          "pastHorizonDays": 14,
+          "goalCreatedAt": "2026-11-16",
+          "goalDeadline": "2026-11-28",
+          "horizonEnd": "2026-12-05",
+          "truncatedPast": false,
+          "truncatedFuture": false,
+          "rule": "Inclusive civil dates from max(createdAt, asOf - pastHorizonDays) through min(deadline or horizon end, asOf + futureHorizonDays). Repeating dates outside createdAt..deadline are not scheduled. Scheduled dates outside this window are omitted and, when a completion exists, listed in completionsOutsideWindow."
+        },
+        "goal": {
+          "id": "44444444-4444-4444-8444-444444444444",
+          "title": "Review Java Once a Week",
+          "deadline": "2026-11-28",
+          "completed": false,
+          "failedAt": null,
+          "completionEvidence": "stored_flag_only"
+        },
+        "steps": [
+          {
+            "id": "44444444-4444-4444-8444-4444444444d1",
+            "order": 0,
+            "text": "Review Java notes",
+            "description": null,
+            "schedule": {
+              "type": "none"
+            },
+            "occurrenceStatus": "ambiguous",
+            "ambiguity": "weekly_missing_weekday"
+          }
+        ],
+        "occurrences": [],
+        "summary": {
+          "done": 0,
+          "missed": 0,
+          "todo": 0,
+          "future": 0,
+          "total": 0
+        },
+        "unscheduledCompletions": [],
+        "completionsOutsideWindow": [],
+        "ambiguousSteps": [
+          {
+            "stepId": "44444444-4444-4444-8444-4444444444d1",
+            "reason": "weekly_missing_weekday"
+          }
+        ],
+        "constraints": {
+          "goalDeadline": "2026-11-28",
+          "schedules": "step_rows",
+          "workloadLimit": null,
+          "taskDurationMinutes": null,
+          "userPreferences": null,
+          "verifiedAchievement": null
+        },
+        "missing": [
+          "workloadLimit",
+          "taskDurationMinutes",
+          "timeOfDay",
+          "userPreferences",
+          "verifiedAchievement"
+        ],
+        "limitations": [
+          "goal_completed_is_a_stored_flag_not_step_progress",
+          "goal_step_done_flag_is_not_a_completion_source",
+          "no_duration_workload_or_preferences_in_source_data",
+          "nonexistent_monthly_and_yearly_dates_are_omitted",
+          "recorded_step_completion_is_self_report"
+        ]
+      },
+      "constraints": {
+        "dailyWorkloadLimitMinutes": 60
+      },
+      "requiredRecovery": []
+    },
+    {
+      "scenarioId": "goal-a-constraints-without-recovery",
+      "snapshot": {
+        "snapshotVersion": "0.1",
+        "asOf": "2026-11-21",
+        "dateConvention": "civil-date",
+        "weekdayIndex": "0=Sunday..6=Saturday",
+        "window": {
+          "from": "2026-11-16",
+          "to": "2026-11-28",
+          "futureHorizonDays": 14,
+          "pastHorizonDays": 14,
+          "goalCreatedAt": "2026-11-16",
+          "goalDeadline": "2026-11-28",
+          "horizonEnd": "2026-12-05",
+          "truncatedPast": false,
+          "truncatedFuture": false,
+          "rule": "Inclusive civil dates from max(createdAt, asOf - pastHorizonDays) through min(deadline or horizon end, asOf + futureHorizonDays). Repeating dates outside createdAt..deadline are not scheduled. Scheduled dates outside this window are omitted and, when a completion exists, listed in completionsOutsideWindow."
+        },
+        "goal": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "title": "Learn Java Every Day",
+          "deadline": "2026-11-28",
+          "completed": false,
+          "failedAt": null,
+          "completionEvidence": "stored_flag_only"
+        },
+        "steps": [
+          {
+            "id": "11111111-1111-4111-8111-1111111111a1",
+            "order": 0,
+            "text": "Study Java",
+            "description": null,
+            "schedule": {
+              "type": "repeat",
+              "repeat": "daily"
+            },
+            "occurrenceStatus": "scheduled",
+            "ambiguity": null
+          }
+        ],
+        "occurrences": [
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-16",
+            "status": "DONE",
+            "evidence": "self_report"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-17",
+            "status": "DONE",
+            "evidence": "self_report"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-18",
+            "status": "DONE",
+            "evidence": "self_report"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-19",
+            "status": "MISSED",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-20",
+            "status": "MISSED",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-21",
+            "status": "TODO",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-22",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-23",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-24",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-25",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-26",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-27",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-28",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          }
+        ],
+        "summary": {
+          "done": 3,
+          "missed": 2,
+          "todo": 1,
+          "future": 7,
+          "total": 13
+        },
+        "unscheduledCompletions": [],
+        "completionsOutsideWindow": [],
+        "ambiguousSteps": [],
+        "constraints": {
+          "goalDeadline": "2026-11-28",
+          "schedules": "step_rows",
+          "workloadLimit": null,
+          "taskDurationMinutes": null,
+          "userPreferences": null,
+          "verifiedAchievement": null
+        },
+        "missing": [
+          "workloadLimit",
+          "taskDurationMinutes",
+          "timeOfDay",
+          "userPreferences",
+          "verifiedAchievement"
+        ],
+        "limitations": [
+          "goal_completed_is_a_stored_flag_not_step_progress",
+          "goal_step_done_flag_is_not_a_completion_source",
+          "no_duration_workload_or_preferences_in_source_data",
+          "nonexistent_monthly_and_yearly_dates_are_omitted",
+          "recorded_step_completion_is_self_report"
+        ]
+      },
+      "constraints": {
+        "dailyWorkloadLimitMinutes": 60
+      },
+      "requiredRecovery": [
+        {
+          "stepId": "11111111-1111-4111-8111-1111111111a1",
+          "missedDate": "2026-11-19"
+        },
+        {
+          "stepId": "11111111-1111-4111-8111-1111111111a1",
+          "missedDate": "2026-11-20"
+        }
+      ]
+    },
+    {
+      "scenarioId": "goal-c-off-schedule-completion",
+      "snapshot": {
+        "snapshotVersion": "0.1",
+        "asOf": "2026-11-21",
+        "dateConvention": "civil-date",
+        "weekdayIndex": "0=Sunday..6=Saturday",
+        "window": {
+          "from": "2026-11-16",
+          "to": "2026-11-28",
+          "futureHorizonDays": 14,
+          "pastHorizonDays": 14,
+          "goalCreatedAt": "2026-11-16",
+          "goalDeadline": "2026-11-28",
+          "horizonEnd": "2026-12-05",
+          "truncatedPast": false,
+          "truncatedFuture": false,
+          "rule": "Inclusive civil dates from max(createdAt, asOf - pastHorizonDays) through min(deadline or horizon end, asOf + futureHorizonDays). Repeating dates outside createdAt..deadline are not scheduled. Scheduled dates outside this window are omitted and, when a completion exists, listed in completionsOutsideWindow."
+        },
+        "goal": {
+          "id": "33333333-3333-4333-8333-333333333333",
+          "title": "Practice Java Three Days a Week",
+          "deadline": "2026-11-28",
+          "completed": false,
+          "failedAt": null,
+          "completionEvidence": "stored_flag_only"
+        },
+        "steps": [
+          {
+            "id": "33333333-3333-4333-8333-3333333333c1",
+            "order": 0,
+            "text": "Review Java syntax",
+            "description": null,
+            "schedule": {
+              "type": "repeat",
+              "repeat": "weekly",
+              "repeatDay": 1
+            },
+            "occurrenceStatus": "scheduled",
+            "ambiguity": null
+          },
+          {
+            "id": "33333333-3333-4333-8333-3333333333c2",
+            "order": 1,
+            "text": "Solve practice exercises",
+            "description": null,
+            "schedule": {
+              "type": "repeat",
+              "repeat": "weekly",
+              "repeatDay": 3
+            },
+            "occurrenceStatus": "scheduled",
+            "ambiguity": null
+          },
+          {
+            "id": "33333333-3333-4333-8333-3333333333c3",
+            "order": 2,
+            "text": "Review the week's mistakes",
+            "description": null,
+            "schedule": {
+              "type": "repeat",
+              "repeat": "weekly",
+              "repeatDay": 5
+            },
+            "occurrenceStatus": "scheduled",
+            "ambiguity": null
+          }
+        ],
+        "occurrences": [
+          {
+            "stepId": "33333333-3333-4333-8333-3333333333c1",
+            "date": "2026-11-16",
+            "status": "DONE",
+            "evidence": "self_report"
+          },
+          {
+            "stepId": "33333333-3333-4333-8333-3333333333c2",
+            "date": "2026-11-18",
+            "status": "DONE",
+            "evidence": "self_report"
+          },
+          {
+            "stepId": "33333333-3333-4333-8333-3333333333c3",
+            "date": "2026-11-20",
+            "status": "MISSED",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "33333333-3333-4333-8333-3333333333c1",
+            "date": "2026-11-23",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "33333333-3333-4333-8333-3333333333c2",
+            "date": "2026-11-25",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          },
+          {
+            "stepId": "33333333-3333-4333-8333-3333333333c3",
+            "date": "2026-11-27",
+            "status": "FUTURE",
+            "evidence": "no_completion_row"
+          }
+        ],
+        "summary": {
+          "done": 2,
+          "missed": 1,
+          "todo": 0,
+          "future": 3,
+          "total": 6
+        },
+        "unscheduledCompletions": [
+          {
+            "stepId": "33333333-3333-4333-8333-3333333333c3",
+            "date": "2026-11-19",
+            "evidence": "self_report",
+            "reason": "not_a_scheduled_date"
+          }
+        ],
+        "completionsOutsideWindow": [],
+        "ambiguousSteps": [],
+        "constraints": {
+          "goalDeadline": "2026-11-28",
+          "schedules": "step_rows",
+          "workloadLimit": null,
+          "taskDurationMinutes": null,
+          "userPreferences": null,
+          "verifiedAchievement": null
+        },
+        "missing": [
+          "workloadLimit",
+          "taskDurationMinutes",
+          "timeOfDay",
+          "userPreferences",
+          "verifiedAchievement"
+        ],
+        "limitations": [
+          "goal_completed_is_a_stored_flag_not_step_progress",
+          "goal_step_done_flag_is_not_a_completion_source",
+          "no_duration_workload_or_preferences_in_source_data",
+          "nonexistent_monthly_and_yearly_dates_are_omitted",
+          "recorded_step_completion_is_self_report"
+        ]
+      },
+      "constraints": {
+        "dailyWorkloadLimitMinutes": 60
+      },
+      "requiredRecovery": [
+        {
+          "stepId": "33333333-3333-4333-8333-3333333333c3",
+          "missedDate": "2026-11-20"
+        }
+      ]
+    },
+    {
+      "scenarioId": "goal-e-synthetic-conflict",
+      "snapshot": {
+        "snapshotVersion": "0.1",
+        "asOf": "2026-11-21",
+        "dateConvention": "civil-date",
+        "weekdayIndex": "0=Sunday..6=Saturday",
+        "window": {
+          "from": "2026-11-16",
+          "to": "2026-11-28",
+          "futureHorizonDays": 14,
+          "pastHorizonDays": 14,
+          "goalCreatedAt": "2026-11-16",
+          "goalDeadline": "2026-11-28",
+          "horizonEnd": "2026-12-05",
+          "truncatedPast": false,
+          "truncatedFuture": false,
+          "rule": "Inclusive civil dates from max(createdAt, asOf - pastHorizonDays) through min(deadline or horizon end, asOf + futureHorizonDays). Repeating dates outside createdAt..deadline are not scheduled. Scheduled dates outside this window are omitted and, when a completion exists, listed in completionsOutsideWindow."
+        },
+        "goal": {
+          "id": "55555555-5555-4555-8555-555555555555",
+          "title": "Java Hour With a Conflicting Schedule",
+          "deadline": "2026-11-28",
+          "completed": false,
+          "failedAt": null,
+          "completionEvidence": "stored_flag_only"
+        },
+        "steps": [
+          {
+            "id": "55555555-5555-4555-8555-5555555555e1",
+            "order": 0,
+            "text": "Study Java for an hour",
+            "description": null,
+            "schedule": {
+              "type": "none"
+            },
+            "occurrenceStatus": "ambiguous",
+            "ambiguity": "conflicting_due_and_repeat"
+          }
+        ],
+        "occurrences": [],
+        "summary": {
+          "done": 0,
+          "missed": 0,
+          "todo": 0,
+          "future": 0,
+          "total": 0
+        },
+        "unscheduledCompletions": [],
+        "completionsOutsideWindow": [],
+        "ambiguousSteps": [
+          {
+            "stepId": "55555555-5555-4555-8555-5555555555e1",
+            "reason": "conflicting_due_and_repeat"
+          }
+        ],
+        "constraints": {
+          "goalDeadline": "2026-11-28",
+          "schedules": "step_rows",
+          "workloadLimit": null,
+          "taskDurationMinutes": null,
+          "userPreferences": null,
+          "verifiedAchievement": null
+        },
+        "missing": [
+          "workloadLimit",
+          "taskDurationMinutes",
+          "timeOfDay",
+          "userPreferences",
+          "verifiedAchievement"
+        ],
+        "limitations": [
+          "goal_completed_is_a_stored_flag_not_step_progress",
+          "goal_step_done_flag_is_not_a_completion_source",
+          "no_duration_workload_or_preferences_in_source_data",
+          "nonexistent_monthly_and_yearly_dates_are_omitted",
+          "recorded_step_completion_is_self_report"
+        ]
+      },
+      "constraints": {
+        "dailyWorkloadLimitMinutes": 60
+      },
+      "requiredRecovery": []
+    }
+  ]
+}

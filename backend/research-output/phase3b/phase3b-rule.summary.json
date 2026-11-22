@@ -1,0 +1,35 @@
+{
+  "experimentId": "phase3b-rule",
+  "method": "RULE_BASED",
+  "recordedAt": "2026-11-22T00:35:00.000Z",
+  "unknownCountedAsPass": false,
+  "scenarios": 13,
+  "planner": {
+    "PLAN_GENERATED": 2,
+    "INSUFFICIENT_INFORMATION": 11,
+    "INFEASIBLE": 0,
+    "SEARCH_FAILED": 0
+  },
+  "verifier": {
+    "PASS": 2,
+    "FAIL": 0,
+    "UNKNOWN": 0,
+    "notRun": 11
+  },
+  "recoveryClass": {
+    "FULL_RECOVERY": 2,
+    "PARTIAL_RECOVERY": 0,
+    "NO_RECOVERY": 0,
+    "NOT_GENERATED": 11
+  },
+  "rawCoverage": {
+    "covered": 0,
+    "required": 19,
+    "percentage": 0
+  },
+  "verifiedCoverage": {
+    "covered": 0,
+    "required": 19,
+    "percentage": 0
+  }
+}

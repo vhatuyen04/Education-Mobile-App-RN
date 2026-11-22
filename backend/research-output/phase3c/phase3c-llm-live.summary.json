@@ -1,0 +1,114 @@
+{
+  "experimentId": "phase3c-llm-live",
+  "recordedAt": "2026-11-22T01:25:00.000Z",
+  "datasetId": "frozen-phase3a-scenarios",
+  "source": "live_openai",
+  "promptVersion": "tdk-recovery-prompt-v2",
+  "temperature": 0,
+  "jsonObject": true,
+  "maxOutputTokens": 2000,
+  "provider": "openai",
+  "model": "gpt-4o-mini",
+  "scenarios": [
+    "goal-d-ambiguous-schedule",
+    "goal-b-workload"
+  ],
+  "modelCalls": 4,
+  "firstGenerationReused": true,
+  "tokenAccounting": "The shared first completion is copied into both methods. Adding the two method token totals double-counts that first call. modelCalls is the number of client completions.",
+  "estimatedCostUsd": null,
+  "unknownCountedAsPass": false,
+  "notRequiredCountedAsRecoverySuccess": false,
+  "methods": {
+    "DIRECT_CONTEXT_LLM": {
+      "scenarios": 2,
+      "outcomes": {
+        "VERIFIED_FULL_RECOVERY": 0,
+        "VERIFIED_PARTIAL_RECOVERY": 0,
+        "NO_RECOVERY": 0,
+        "NOT_REQUIRED": 0,
+        "NO_VERIFIED_PLAN": 1,
+        "INSUFFICIENT_INFORMATION": 1,
+        "INFEASIBLE": 0
+      },
+      "recoverySuccesses": 0,
+      "initialVerifier": {
+        "PASS": 0,
+        "FAIL": 0,
+        "UNKNOWN": 2,
+        "notRun": 0
+      },
+      "finalVerifier": {
+        "PASS": 0,
+        "FAIL": 0,
+        "UNKNOWN": 2,
+        "notRun": 0
+      },
+      "rawCoverage": {
+        "covered": 1,
+        "required": 1,
+        "percentage": 1
+      },
+      "verifiedCoverage": {
+        "covered": 0,
+        "required": 1,
+        "percentage": 0
+      },
+      "averageAttempts": 1,
+      "averagePlanningLatencyMs": 6360.4066,
+      "tokenUsage": {
+        "inputTokens": 2455,
+        "outputTokens": 370,
+        "complete": true
+      },
+      "estimatedCostUsd": null,
+      "unknownCountedAsPass": false,
+      "notRequiredCountedAsRecoverySuccess": false
+    },
+    "DIRECT_CONTEXT_LLM_VERIFIED": {
+      "scenarios": 2,
+      "outcomes": {
+        "VERIFIED_FULL_RECOVERY": 1,
+        "VERIFIED_PARTIAL_RECOVERY": 0,
+        "NO_RECOVERY": 0,
+        "NOT_REQUIRED": 0,
+        "NO_VERIFIED_PLAN": 0,
+        "INSUFFICIENT_INFORMATION": 1,
+        "INFEASIBLE": 0
+      },
+      "recoverySuccesses": 1,
+      "initialVerifier": {
+        "PASS": 0,
+        "FAIL": 0,
+        "UNKNOWN": 2,
+        "notRun": 0
+      },
+      "finalVerifier": {
+        "PASS": 1,
+        "FAIL": 0,
+        "UNKNOWN": 1,
+        "notRun": 0
+      },
+      "rawCoverage": {
+        "covered": 1,
+        "required": 1,
+        "percentage": 1
+      },
+      "verifiedCoverage": {
+        "covered": 1,
+        "required": 1,
+        "percentage": 1
+      },
+      "averageAttempts": 2,
+      "averagePlanningLatencyMs": 12811.4098,
+      "tokenUsage": {
+        "inputTokens": 6686,
+        "outputTokens": 922,
+        "complete": true
+      },
+      "estimatedCostUsd": null,
+      "unknownCountedAsPass": false,
+      "notRequiredCountedAsRecoverySuccess": false
+    }
+  }
+}

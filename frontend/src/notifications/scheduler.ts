@@ -4,6 +4,7 @@ import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 
 import * as authApi from '../api/auth';
+import { nextReminderOccurrence, occurrenceIsOnOrBeforeGoalDue } from '../utils/recurrence';
 import { appendInbox, rememberUnseen, getInbox } from './inbox';
 
 type CompoundBefore = { days?: number; hours?: number; minutes?: number };
@@ -176,56 +177,6 @@ export async function flushDueReminders() {
   await writePending(keep);
 }
 
-function nextOccurrenceFromRepeat(params: { repeat?: string | null; repeatDay?: number | null; repeatMonth?: number | null }): Date | null {
-  const repeat = String(params.repeat ?? '').trim().toLowerCase();
-  const now = new Date();
-  if (!repeat) return null;
-
-  if (repeat === 'daily') {
-    const d = new Date(now);
-    d.setHours(23, 59, 59, 999);
-    return d;
-  }
-
-  if (repeat === 'weekly') {
-    const target = params.repeatDay;
-    if (target === null || target === undefined) return null;
-    const t = Number(target);
-    if (!Number.isFinite(t) || t < 0 || t > 6) return null;
-    const d = new Date(now);
-    const diff = (t - d.getDay() + 7) % 7;
-    d.setDate(d.getDate() + (diff === 0 ? 7 : diff));
-    d.setHours(23, 59, 59, 999);
-    return d;
-  }
-
-  if (repeat === 'monthly') {
-    const target = params.repeatDay;
-    if (target === null || target === undefined) return null;
-    const day = Number(target);
-    if (!Number.isFinite(day) || day < 1 || day > 31) return null;
-    const d = new Date(now);
-    d.setMonth(d.getMonth() + 1, Math.min(day, 28));
-    d.setHours(23, 59, 59, 999);
-    return d;
-  }
-
-  if (repeat === 'yearly') {
-    const m = params.repeatMonth;
-    const day = params.repeatDay;
-    if (m === null || m === undefined || day === null || day === undefined) return null;
-    const mm = Number(m);
-    const dd = Number(day);
-    if (!Number.isFinite(mm) || !Number.isFinite(dd)) return null;
-    const d = new Date(now);
-    d.setFullYear(d.getFullYear() + 1, Math.max(0, mm - 1), Math.min(dd, 28));
-    d.setHours(23, 59, 59, 999);
-    return d;
-  }
-
-  return null;
-}
-
 async function readBefore(key: string, fallback: CompoundBefore): Promise<CompoundBefore> {
   try {
     const raw = await AsyncStorage.getItem(key);
@@ -369,7 +320,7 @@ export async function autoScheduleRemindersFromDashboard(dash: authApi.Dashboard
       if (step.doneToday) continue;
       const due = step.dueAt
         ? new Date(String(step.dueAt))
-        : nextOccurrenceFromRepeat({ repeat: step.repeat, repeatDay: step.repeatDay, repeatMonth: step.repeatMonth });
+        : nextReminderOccurrence({ repeat: step.repeat, repeatDay: step.repeatDay, repeatMonth: step.repeatMonth });
       if (!due || Number.isNaN(due.getTime())) continue;
       const fireAt = due.getTime() - compoundToMs(stepBefore);
       reminders.push(makeReminder({
@@ -423,9 +374,15 @@ export async function autoScheduleRemindersForSignedInUser(opts?: { minIntervalM
         steps.map(step => {
           const rawDue = step.dueAt ? new Date(step.dueAt) : null;
           const repeatDue = !rawDue || rawDue.getTime() <= Date.now()
-            ? nextOccurrenceFromRepeat({ repeat: step.repeat, repeatDay: step.repeatDay, repeatMonth: step.repeatMonth })
+            ? nextReminderOccurrence({
+                repeat: step.repeat,
+                repeatDay: step.repeatDay,
+                repeatMonth: step.repeatMonth,
+                goalDueAt: goal.dueAt,
+              })
             : null;
-          const due = repeatDue ?? rawDue;
+          const picked = repeatDue ?? rawDue;
+          const due = picked && occurrenceIsOnOrBeforeGoalDue(picked, goal.dueAt) ? picked : null;
           return {
             id: step.id,
             goalId: goal.id,

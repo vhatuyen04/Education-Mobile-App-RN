@@ -1,0 +1,125 @@
+{
+  "experimentId": "phase3c-llm-mock",
+  "recordedAt": "2026-11-22T00:57:00.000Z",
+  "datasetId": "frozen-phase3a-scenarios",
+  "source": "mock_empty_plan",
+  "promptVersion": "tdk-recovery-prompt-v2",
+  "temperature": 0,
+  "jsonObject": true,
+  "maxOutputTokens": 2000,
+  "provider": "mock",
+  "model": "deterministic-empty-plan",
+  "scenarios": [
+    "goal-a-valid-recovery",
+    "goal-a-after-deadline",
+    "goal-a-past-date",
+    "goal-a-done-dropped",
+    "goal-a-unknown-step",
+    "goal-a-duplicate-activity",
+    "goal-b-workload",
+    "goal-b-time-conflict",
+    "goal-a-missing-constraints",
+    "goal-d-ambiguous-schedule",
+    "goal-a-constraints-without-recovery",
+    "goal-c-off-schedule-completion",
+    "goal-e-synthetic-conflict"
+  ],
+  "modelCalls": 23,
+  "firstGenerationReused": true,
+  "tokenAccounting": "The shared first completion is copied into both methods. Adding the two method token totals double-counts that first call. modelCalls is the number of client completions.",
+  "estimatedCostUsd": null,
+  "unknownCountedAsPass": false,
+  "notRequiredCountedAsRecoverySuccess": false,
+  "methods": {
+    "DIRECT_CONTEXT_LLM": {
+      "scenarios": 13,
+      "outcomes": {
+        "VERIFIED_FULL_RECOVERY": 0,
+        "VERIFIED_PARTIAL_RECOVERY": 0,
+        "NO_RECOVERY": 10,
+        "NOT_REQUIRED": 2,
+        "NO_VERIFIED_PLAN": 0,
+        "INSUFFICIENT_INFORMATION": 1,
+        "INFEASIBLE": 0
+      },
+      "recoverySuccesses": 0,
+      "initialVerifier": {
+        "PASS": 12,
+        "FAIL": 0,
+        "UNKNOWN": 1,
+        "notRun": 0
+      },
+      "finalVerifier": {
+        "PASS": 12,
+        "FAIL": 0,
+        "UNKNOWN": 1,
+        "notRun": 0
+      },
+      "rawCoverage": {
+        "covered": 0,
+        "required": 19,
+        "percentage": 0
+      },
+      "verifiedCoverage": {
+        "covered": 0,
+        "required": 19,
+        "percentage": 0
+      },
+      "averageAttempts": 1,
+      "averagePlanningLatencyMs": 0.12136923076923704,
+      "tokenUsage": {
+        "inputTokens": null,
+        "outputTokens": null,
+        "complete": false
+      },
+      "estimatedCostUsd": null,
+      "unknownCountedAsPass": false,
+      "notRequiredCountedAsRecoverySuccess": false
+    },
+    "DIRECT_CONTEXT_LLM_VERIFIED": {
+      "scenarios": 13,
+      "outcomes": {
+        "VERIFIED_FULL_RECOVERY": 0,
+        "VERIFIED_PARTIAL_RECOVERY": 0,
+        "NO_RECOVERY": 10,
+        "NOT_REQUIRED": 2,
+        "NO_VERIFIED_PLAN": 0,
+        "INSUFFICIENT_INFORMATION": 1,
+        "INFEASIBLE": 0
+      },
+      "recoverySuccesses": 0,
+      "initialVerifier": {
+        "PASS": 12,
+        "FAIL": 0,
+        "UNKNOWN": 1,
+        "notRun": 0
+      },
+      "finalVerifier": {
+        "PASS": 12,
+        "FAIL": 0,
+        "UNKNOWN": 1,
+        "notRun": 0
+      },
+      "rawCoverage": {
+        "covered": 0,
+        "required": 19,
+        "percentage": 0
+      },
+      "verifiedCoverage": {
+        "covered": 0,
+        "required": 19,
+        "percentage": 0
+      },
+      "averageAttempts": 1.7692307692307692,
+      "averagePlanningLatencyMs": 0.1559923076923068,
+      "tokenUsage": {
+        "inputTokens": null,
+        "outputTokens": null,
+        "complete": false
+      },
+      "estimatedCostUsd": null,
+      "unknownCountedAsPass": false,
+      "notRequiredCountedAsRecoverySuccess": false
+    }
+  }
+}

@@ -13,6 +13,8 @@ import { useSettings } from '../settings/SettingsContext';
 import * as authApi from '../api/auth';
 import { markAppGoal } from '../motivation/appGoals';
 import { previewRewardsForDeadline } from '../motivation/deadlineDifficulty';
+import { countRepeatOccurrencesUntilDeadline } from '../utils/recurrence';
+import { scheduleDraftError, storedScheduleError } from '../utils/stepSchedule';
 
 type Props = {
   visible: boolean;
@@ -211,12 +213,7 @@ function parseScheduleShortText(input: string): authApi.AiGoalStepSchedule {
     return { type: 'repeat', repeat: 'yearly' };
   }
 
-  if (lower.startsWith('repeat:')) {
-    const repeat = raw.slice(7).trim();
-    return repeat ? { type: 'repeat', repeat } : { type: 'none' };
-  }
-
-  return { type: 'repeat', repeat: raw };
+  return { type: 'none' };
 }
 
 function formatDateYmd(d: Date) {
@@ -244,120 +241,8 @@ function parseDmy(raw: string): Date | null {
   return d;
 }
 
-function toEndOfDay(d: Date) {
-  const x = new Date(d);
-  x.setHours(23, 59, 59, 999);
-  return x;
-}
-
 function clampToDeadline(d: Date, deadline: Date) {
   return d.getTime() > deadline.getTime() ? new Date(deadline) : d;
-}
-
-function nextOrSameWeekday(from: Date, targetDow: number) {
-  const base = new Date(from);
-  base.setHours(0, 0, 0, 0);
-  const cur = base.getDay();
-  const delta = (targetDow - cur + 7) % 7;
-  const out = new Date(base);
-  out.setDate(out.getDate() + delta);
-  return out;
-}
-
-function countRepeatOccurrencesUntilDeadline(params: {
-  repeat: string;
-  repeatDay?: number;
-  repeatMonth?: number;
-  start: Date;
-  deadline: Date;
-}): { count: number; lastOccurrence: Date | null } {
-  const repeat = params.repeat.trim().toLowerCase();
-  const start0 = new Date(params.start);
-  start0.setHours(0, 0, 0, 0);
-  const dl0 = toEndOfDay(params.deadline);
-
-  if (dl0.getTime() < start0.getTime()) return { count: 0, lastOccurrence: null };
-
-  if (repeat === 'daily') {
-    const dayMs = 24 * 60 * 60 * 1000;
-    const days = Math.floor((dl0.getTime() - start0.getTime()) / dayMs) + 1;
-    const last = new Date(start0.getTime() + (days - 1) * dayMs);
-    return { count: Math.max(0, days), lastOccurrence: last };
-  }
-
-  if (repeat === 'weekly') {
-    const dow = params.repeatDay;
-    if (dow === undefined || dow === null || !Number.isFinite(Number(dow))) return { count: 0, lastOccurrence: null };
-    const target = Number(dow);
-    if (target < 0 || target > 6) return { count: 0, lastOccurrence: null };
-
-    let first = nextOrSameWeekday(start0, target);
-    if (first.getTime() < start0.getTime()) first = nextOrSameWeekday(new Date(start0.getTime() + 24 * 60 * 60 * 1000), target);
-    if (first.getTime() > dl0.getTime()) return { count: 0, lastOccurrence: null };
-
-    const weekMs = 7 * 24 * 60 * 60 * 1000;
-    const diff = dl0.getTime() - first.getTime();
-    const n = Math.floor(diff / weekMs) + 1;
-    const last = new Date(first.getTime() + (n - 1) * weekMs);
-    return { count: Math.max(0, n), lastOccurrence: last };
-  }
-
-  if (repeat === 'monthly') {
-    const day = params.repeatDay;
-    if (day === undefined || day === null || !Number.isFinite(Number(day))) return { count: 0, lastOccurrence: null };
-    const targetDay = Math.max(1, Math.min(31, Number(day)));
-
-    let y = start0.getFullYear();
-    let m = start0.getMonth();
-    let cand = new Date(y, m, targetDay);
-    if (cand.getTime() < start0.getTime()) {
-      m += 1;
-      cand = new Date(y, m, targetDay);
-    }
-    if (cand.getTime() > dl0.getTime()) return { count: 0, lastOccurrence: null };
-
-    let count = 0;
-    let last: Date | null = null;
-    while (cand.getTime() <= dl0.getTime() && count < 400) {
-      count += 1;
-      last = new Date(cand);
-      m += 1;
-      cand = new Date(y, m, targetDay);
-      y = cand.getFullYear();
-    }
-    return { count, lastOccurrence: last };
-  }
-
-  if (repeat === 'yearly') {
-    const mm = params.repeatMonth;
-    const dd = params.repeatDay;
-    if (mm === undefined || mm === null || dd === undefined || dd === null) return { count: 0, lastOccurrence: null };
-    const month = Number(mm);
-    const day = Number(dd);
-    if (!Number.isFinite(month) || !Number.isFinite(day)) return { count: 0, lastOccurrence: null };
-    if (month < 1 || month > 12) return { count: 0, lastOccurrence: null };
-    if (day < 1 || day > 31) return { count: 0, lastOccurrence: null };
-
-    let y = start0.getFullYear();
-    let cand = new Date(y, month - 1, day);
-    if (cand.getTime() < start0.getTime()) {
-      y += 1;
-      cand = new Date(y, month - 1, day);
-    }
-    if (cand.getTime() > dl0.getTime()) return { count: 0, lastOccurrence: null };
-
-    let count = 0;
-    let last: Date | null = null;
-    while (cand.getTime() <= dl0.getTime() && count < 50) {
-      count += 1;
-      last = new Date(cand);
-      y += 1;
-      cand = new Date(y, month - 1, day);
-    }
-    return { count, lastOccurrence: last };
-  }
-
-  return { count: 0, lastOccurrence: null };
 }
 
 function normalizeAiStepSchedule(schedule: authApi.AiGoalStepSchedule | undefined, deadlineYmd: string) {
@@ -724,6 +609,22 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
     if (!token) {
       toast('Not signed in');
       return;
+    }
+
+    for (const step of nonEmptySteps) {
+      const scheduleError =
+        scheduleDraftError(String(step.scheduleText ?? '')) ??
+        (step.schedule?.type === 'repeat'
+          ? storedScheduleError({
+              repeat: step.schedule.repeat,
+              repeatDay: step.schedule.repeatDay ?? null,
+              repeatMonth: step.schedule.repeatMonth ?? null,
+            })
+          : null);
+      if (scheduleError) {
+        toast(scheduleError);
+        return;
+      }
     }
 
     if (loading) return;

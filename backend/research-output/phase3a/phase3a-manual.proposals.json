@@ -1,0 +1,408 @@
+{
+  "experimentId": "phase3a-manual",
+  "recordedAt": "2026-11-22T00:18:00.000Z",
+  "proposals": [
+    {
+      "scenarioId": "goal-a-valid-recovery",
+      "planId": "manual:goal-a-valid-recovery",
+      "method": "manual",
+      "plan": {
+        "goalId": "11111111-1111-4111-8111-111111111111",
+        "activities": [
+          {
+            "activityId": "study-done-1",
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-16",
+            "durationMinutes": 30,
+            "startMinuteOfDay": 1080
+          },
+          {
+            "activityId": "study-done-2",
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-17",
+            "durationMinutes": 30,
+            "startMinuteOfDay": 1080
+          },
+          {
+            "activityId": "study-done-3",
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-18",
+            "durationMinutes": 30,
+            "startMinuteOfDay": 1080
+          },
+          {
+            "activityId": "study-recover-19",
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-22",
+            "durationMinutes": 30,
+            "startMinuteOfDay": 480
+          },
+          {
+            "activityId": "study-recover-20",
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-23",
+            "durationMinutes": 30,
+            "startMinuteOfDay": 480
+          }
+        ]
+      }
+    },
+    {
+      "scenarioId": "goal-a-after-deadline",
+      "planId": "manual:goal-a-after-deadline",
+      "method": "manual",
+      "plan": {
+        "goalId": "11111111-1111-4111-8111-111111111111",
+        "activities": [
+          {
+            "activityId": "study-done-1",
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-16",
+            "durationMinutes": 30,
+            "startMinuteOfDay": 1080
+          },
+          {
+            "activityId": "study-done-2",
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-17",
+            "durationMinutes": 30,
+            "startMinuteOfDay": 1080
+          },
+          {
+            "activityId": "study-done-3",
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-18",
+            "durationMinutes": 30,
+            "startMinuteOfDay": 1080
+          },
+          {
+            "activityId": "study-late",
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-29",
+            "durationMinutes": 30,
+            "startMinuteOfDay": 480
+          }
+        ]
+      }
+    },
+    {
+      "scenarioId": "goal-a-past-date",
+      "planId": "manual:goal-a-past-date",
+      "method": "manual",
+      "plan": {
+        "goalId": "11111111-1111-4111-8111-111111111111",
+        "activities": [
+          {
+            "activityId": "study-done-1",
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-16",
+            "durationMinutes": 30,
+            "startMinuteOfDay": 1080
+          },
+          {
+            "activityId": "study-done-2",
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-17",
+            "durationMinutes": 30,
+            "startMinuteOfDay": 1080
+          },
+          {
+            "activityId": "study-done-3",
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-18",
+            "durationMinutes": 30,
+            "startMinuteOfDay": 1080
+          },
+          {
+            "activityId": "study-past",
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-20",
+            "durationMinutes": 30,
+            "startMinuteOfDay": 480
+          }
+        ]
+      }
+    },
+    {
+      "scenarioId": "goal-a-done-dropped",
+      "planId": "manual:goal-a-done-dropped",
+      "method": "manual",
+      "plan": {
+        "goalId": "11111111-1111-4111-8111-111111111111",
+        "activities": [
+          {
+            "activityId": "study-only-future",
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-22",
+            "durationMinutes": 30,
+            "startMinuteOfDay": 480
+          }
+        ]
+      }
+    },
+    {
+      "scenarioId": "goal-a-unknown-step",
+      "planId": "manual:goal-a-unknown-step",
+      "method": "manual",
+      "plan": {
+        "goalId": "11111111-1111-4111-8111-111111111111",
+        "activities": [
+          {
+            "activityId": "study-done-1",
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-16",
+            "durationMinutes": 30,
+            "startMinuteOfDay": 1080
+          },
+          {
+            "activityId": "study-done-2",
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-17",
+            "durationMinutes": 30,
+            "startMinuteOfDay": 1080
+          },
+          {
+            "activityId": "study-done-3",
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-18",
+            "durationMinutes": 30,
+            "startMinuteOfDay": 1080
+          },
+          {
+            "activityId": "invented",
+            "stepId": "99999999-9999-4999-8999-999999999999",
+            "date": "2026-11-22",
+            "durationMinutes": 30,
+            "startMinuteOfDay": 480
+          }
+        ]
+      }
+    },
+    {
+      "scenarioId": "goal-a-duplicate-activity",
+      "planId": "manual:goal-a-duplicate-activity",
+      "method": "manual",
+      "plan": {
+        "goalId": "11111111-1111-4111-8111-111111111111",
+        "activities": [
+          {
+            "activityId": "study-done-1",
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-16",
+            "durationMinutes": 30,
+            "startMinuteOfDay": 1080
+          },
+          {
+            "activityId": "study-done-2",
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-17",
+            "durationMinutes": 30,
+            "startMinuteOfDay": 1080
+          },
+          {
+            "activityId": "study-done-3",
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-18",
+            "durationMinutes": 30,
+            "startMinuteOfDay": 1080
+          },
+          {
+            "activityId": "study-done-1",
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-22",
+            "durationMinutes": 30,
+            "startMinuteOfDay": 480
+          }
+        ]
+      }
+    },
+    {
+      "scenarioId": "goal-b-workload",
+      "planId": "manual:goal-b-workload",
+      "method": "manual",
+      "plan": {
+        "goalId": "22222222-2222-4222-8222-222222222222",
+        "activities": [
+          {
+            "activityId": "diagram-done",
+            "stepId": "22222222-2222-4222-8222-2222222222b1",
+            "date": "2026-11-18",
+            "durationMinutes": 20,
+            "startMinuteOfDay": 600
+          },
+          {
+            "activityId": "implement-moved",
+            "stepId": "22222222-2222-4222-8222-2222222222b2",
+            "date": "2026-11-22",
+            "durationMinutes": 40,
+            "startMinuteOfDay": 480
+          },
+          {
+            "activityId": "tests-moved",
+            "stepId": "22222222-2222-4222-8222-2222222222b3",
+            "date": "2026-11-22",
+            "durationMinutes": 40,
+            "startMinuteOfDay": 1080
+          }
+        ]
+      }
+    },
+    {
+      "scenarioId": "goal-b-time-conflict",
+      "planId": "manual:goal-b-time-conflict",
+      "method": "manual",
+      "plan": {
+        "goalId": "22222222-2222-4222-8222-222222222222",
+        "activities": [
+          {
+            "activityId": "diagram-done",
+            "stepId": "22222222-2222-4222-8222-2222222222b1",
+            "date": "2026-11-18",
+            "durationMinutes": 20,
+            "startMinuteOfDay": 600
+          },
+          {
+            "activityId": "implement-moved",
+            "stepId": "22222222-2222-4222-8222-2222222222b2",
+            "date": "2026-11-22",
+            "durationMinutes": 60,
+            "startMinuteOfDay": 480
+          },
+          {
+            "activityId": "tests-moved",
+            "stepId": "22222222-2222-4222-8222-2222222222b3",
+            "date": "2026-11-22",
+            "durationMinutes": 60,
+            "startMinuteOfDay": 510
+          }
+        ]
+      }
+    },
+    {
+      "scenarioId": "goal-a-missing-constraints",
+      "planId": "manual:goal-a-missing-constraints",
+      "method": "manual",
+      "plan": {
+        "goalId": "11111111-1111-4111-8111-111111111111",
+        "activities": [
+          {
+            "activityId": "study-open-1",
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-16"
+          },
+          {
+            "activityId": "study-open-2",
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-17"
+          },
+          {
+            "activityId": "study-open-3",
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-18"
+          },
+          {
+            "activityId": "study-open-future",
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-22"
+          }
+        ]
+      }
+    },
+    {
+      "scenarioId": "goal-d-ambiguous-schedule",
+      "planId": "manual:goal-d-ambiguous-schedule",
+      "method": "manual",
+      "plan": {
+        "goalId": "44444444-4444-4444-8444-444444444444",
+        "activities": [
+          {
+            "activityId": "notes-once",
+            "stepId": "44444444-4444-4444-8444-4444444444d1",
+            "date": "2026-11-23",
+            "durationMinutes": 30,
+            "startMinuteOfDay": 480
+          }
+        ]
+      }
+    },
+    {
+      "scenarioId": "goal-a-constraints-without-recovery",
+      "planId": "manual:goal-a-constraints-without-recovery",
+      "method": "manual",
+      "plan": {
+        "goalId": "11111111-1111-4111-8111-111111111111",
+        "activities": [
+          {
+            "activityId": "study-done-1",
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-16",
+            "durationMinutes": 30,
+            "startMinuteOfDay": 1080
+          },
+          {
+            "activityId": "study-done-2",
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-17",
+            "durationMinutes": 30,
+            "startMinuteOfDay": 1080
+          },
+          {
+            "activityId": "study-done-3",
+            "stepId": "11111111-1111-4111-8111-1111111111a1",
+            "date": "2026-11-18",
+            "durationMinutes": 30,
+            "startMinuteOfDay": 1080
+          }
+        ]
+      }
+    },
+    {
+      "scenarioId": "goal-c-off-schedule-completion",
+      "planId": "manual:goal-c-off-schedule-completion",
+      "method": "manual",
+      "plan": {
+        "goalId": "33333333-3333-4333-8333-333333333333",
+        "activities": [
+          {
+            "activityId": "mon-done",
+            "stepId": "33333333-3333-4333-8333-3333333333c1",
+            "date": "2026-11-16",
+            "durationMinutes": 25,
+            "startMinuteOfDay": 480
+          },
+          {
+            "activityId": "wed-done",
+            "stepId": "33333333-3333-4333-8333-3333333333c2",
+            "date": "2026-11-18",
+            "durationMinutes": 25,
+            "startMinuteOfDay": 480
+          },
+          {
+            "activityId": "fri-recovered",
+            "stepId": "33333333-3333-4333-8333-3333333333c3",
+            "date": "2026-11-23",
+            "durationMinutes": 25,
+            "startMinuteOfDay": 600
+          }
+        ]
+      }
+    },
+    {
+      "scenarioId": "goal-e-synthetic-conflict",
+      "planId": "manual:goal-e-synthetic-conflict",
+      "method": "manual",
+      "plan": {
+        "goalId": "55555555-5555-4555-8555-555555555555",
+        "activities": [
+          {
+            "activityId": "conflict-hour",
+            "stepId": "55555555-5555-4555-8555-5555555555e1",
+            "date": "2026-11-23",
+            "durationMinutes": 60,
+            "startMinuteOfDay": 480
+          }
+        ]
+      }
+    }
+  ]
+}
