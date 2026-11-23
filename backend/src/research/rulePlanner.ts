@@ -111,6 +111,15 @@ export function planRuleRecovery(input: {
       countBoundFeasible: false,
     };
   }
+  if (scheduleProblems.archived.length > 0) {
+    return {
+      ...base,
+      outcome: 'INFEASIBLE',
+      reasons: ['archived_step'],
+      missing: [],
+      countBoundFeasible: false,
+    };
+  }
   if (deadline == null || limit == null || duration == null) {
     return { ...base, outcome: 'INSUFFICIENT_INFORMATION', reasons: missing, missing };
   }
@@ -269,12 +278,18 @@ function scheduleBlockers(snapshot: ProgressSnapshot, required: RequiredRecovery
   const steps = new Map(snapshot.steps.map(step => [step.id, step]));
   const ambiguous: string[] = [];
   const unknown: string[] = [];
+  const archived: string[] = [];
   for (const item of required) {
     const step = steps.get(item.stepId);
     if (!step) unknown.push(item.stepId);
+    else if (step.lifecycle === 'archived') archived.push(item.stepId);
     else if (step.occurrenceStatus !== 'scheduled') ambiguous.push(item.stepId);
   }
-  return { ambiguous: [...new Set(ambiguous)].sort(), unknown: [...new Set(unknown)].sort() };
+  return {
+    ambiguous: [...new Set(ambiguous)].sort(),
+    unknown: [...new Set(unknown)].sort(),
+    archived: [...new Set(archived)].sort(),
+  };
 }
 
 function preservedByStep(snapshot: ProgressSnapshot): Map<string, string[]> {

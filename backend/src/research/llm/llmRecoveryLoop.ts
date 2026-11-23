@@ -328,6 +328,8 @@ function outcomeForPass(required: number, covered: number): FinalOutcome {
 function proveInfeasible(task: RecoveryTaskView): string | null {
   const stepIds = new Set(task.snapshot.steps.map(step => step.id));
   if (task.requiredRecovery.some(item => !stepIds.has(item.stepId))) return 'infeasible_unknown_step';
+  const archived = new Set(task.snapshot.steps.filter(step => step.lifecycle === 'archived').map(step => step.id));
+  if (task.requiredRecovery.some(item => archived.has(item.stepId))) return 'infeasible_archived_step';
   const deadline = task.snapshot.goal.deadline;
   if (task.requiredRecovery.length > 0 && deadline != null && deadline < task.snapshot.asOf) return 'infeasible_deadline';
   return null;

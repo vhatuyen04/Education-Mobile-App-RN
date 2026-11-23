@@ -93,6 +93,8 @@ export const AiGoalSuggestSchema = z.object({
   intensity: z.enum(['Light', 'Normal', 'Hard']).optional(),
 });
 
+const durationMinutes = z.number().int().positive().optional().nullable();
+
 export const CreateGoalStepSchema = z.object({
   text: z.string().min(1),
   description: z.string().optional().nullable(),
@@ -101,6 +103,8 @@ export const CreateGoalStepSchema = z.object({
   repeat: z.string().min(1).optional().nullable(),
   repeatDay: z.coerce.number().int().optional().nullable(),
   repeatMonth: z.coerce.number().int().optional().nullable(),
+  durationMinutes,
+  timeZone: z.string().min(1).max(80).optional(),
 });
 
 export const UpdateGoalStepSchema = z.object({
@@ -111,7 +115,10 @@ export const UpdateGoalStepSchema = z.object({
   repeat: z.string().min(1).optional().nullable(),
   repeatDay: z.coerce.number().int().optional().nullable(),
   repeatMonth: z.coerce.number().int().optional().nullable(),
+  durationMinutes,
 });
+
+export const ReplaceGoalStepSchema = CreateGoalStepSchema;
 
 export const ToggleGoalStepCompletionSchema = z.object({
   date: z.string().datetime(),

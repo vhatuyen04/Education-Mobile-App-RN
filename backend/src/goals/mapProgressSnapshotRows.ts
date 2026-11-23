@@ -37,6 +37,9 @@ export type StoredStepRow = {
   repeatDay: number | null;
   repeatMonth: number | null;
   createdAt?: Date | null;
+  archivedAt?: Date | null;
+  effectiveFrom?: Date | null;
+  effectiveUntil?: Date | null;
 };
 
 export type StoredCompletionRow = {
@@ -72,6 +75,9 @@ export function mapStoredGoalToSnapshotInput(input: {
       repeatDay: step.repeatDay,
       repeatMonth: step.repeatMonth,
       createdAt: step.createdAt ? civilDateInTimeZone(step.createdAt, timeZone) : null,
+      ...(step.effectiveFrom ? { effectiveFrom: storedInstantCivilDate(step.effectiveFrom, timeZone) } : {}),
+      ...(step.effectiveUntil ? { effectiveUntil: storedInstantCivilDate(step.effectiveUntil, timeZone) } : {}),
+      ...(step.archivedAt ? { archivedOn: civilDateInTimeZone(step.archivedAt, timeZone) } : {}),
     })),
     completions: input.completions.map(completion => ({
       stepId: completion.stepId,

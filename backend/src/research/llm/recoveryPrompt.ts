@@ -11,7 +11,7 @@ import type { RecoveryConstraints, RecoveryPlan } from '../../goals/verifyRecove
 import type { RequiredRecoveryItem } from '../experiment/requiredRecovery.js';
 import type { LlmMessage } from './llmClient.js';
 
-export const PROMPT_VERSION = 'tdk-recovery-prompt-v2';
+export const PROMPT_VERSION = 'tdk-recovery-prompt-v3';
 
 export type RecoveryTaskView = {
   scenarioId: string;
@@ -24,6 +24,7 @@ const SYSTEM_PROMPT = [
   'You propose a RecoveryPlan for one goal. Return only one JSON object.',
   'Schema: {"goalId":"string","activities":[{"activityId":"string","stepId":"string","date":"YYYY-MM-DD","durationMinutes":number|null,"startMinuteOfDay":number|null}]}',
   'Copy goalId and stepId values exactly from the input.',
+  'Do not schedule a new activity on a step whose lifecycle is archived. Do not treat two steps as the same step because their titles or descriptions match.',
   'Hard constraints are binding: asOf, the goal deadline, the explicit dailyWorkloadLimitMinutes when it is a number, and every DONE date of a step you edit.',
   'durationMinutes and startMinuteOfDay are proposals you may include. They are not confirmed user facts. Omit them rather than pretending the user supplied them.',
   'Do not invent a daily workload limit, a deadline, a weekday for an ambiguous step, or a natural-language preference. optionalPreferences is null when the task has none.',

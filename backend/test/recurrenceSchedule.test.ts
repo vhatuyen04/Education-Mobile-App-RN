@@ -4,11 +4,14 @@ import test from 'node:test';
 import {
   countRepeatOccurrencesBetween,
   dashboardProgressPercent,
+  todayOccurrencePercent,
   expectedRepeatOccurrences,
   isDeterminateRepeat,
   isStepScheduledOnCivilDay,
   isStepScheduledOnDay,
   scheduleWriteError,
+  stepLaterThanGoalError,
+  stepOutsideActiveRangeError,
   storedInstantCivilDate,
   utcMidnightFromCivil,
 } from '../src/goals/recurrenceSchedule.ts';
@@ -73,6 +76,29 @@ test('daily recurrence stays inside the goal date range', () => {
     countRepeatOccurrencesBetween({ repeat: 'weekly', repeatDay: 1 }, new Date(2026, 10, 17), new Date(2026, 10, 22)),
     0
   );
+});
+
+test('a one-time step cannot be dated after the goal deadline', () => {
+  const goalDue = '2026-11-27T00:00:00.000Z';
+  assert.equal(stepLaterThanGoalError('2026-11-27T00:00:00.000Z', goalDue), null);
+  assert.equal(stepLaterThanGoalError(null, goalDue), null);
+  assert.match(stepLaterThanGoalError('2026-11-28T00:00:00.000Z', goalDue) ?? '', /cannot be later than the goal deadline/);
+  assert.match(stepLaterThanGoalError('2026-11-28T00:00:00.000Z', goalDue) ?? '', /2026-11-27/);
+});
+
+test('a new step must occur from today through the goal deadline', () => {
+  const goalDue = '2026-11-27T00:00:00.000Z';
+  const today = '2026-11-23';
+  const past = stepOutsideActiveRangeError({ step: { dueAt: '2026-11-22T00:00:00.000Z' }, todayCivil: today, goalDueAt: goalDue });
+  assert.match(past ?? '', /from 2026-11-23 through 2026-11-27/);
+  assert.equal(stepOutsideActiveRangeError({ step: { dueAt: '2026-11-23T00:00:00.000Z' }, todayCivil: today, goalDueAt: goalDue }), null);
+  assert.equal(stepOutsideActiveRangeError({ step: { dueAt: '2026-11-27T00:00:00.000Z' }, todayCivil: today, goalDueAt: goalDue }), null);
+  assert.equal(stepOutsideActiveRangeError({ step: { repeat: 'daily' }, todayCivil: today, goalDueAt: goalDue }), null);
+  assert.match(stepOutsideActiveRangeError({ step: { repeat: 'weekly', repeatDay: 0 }, todayCivil: today, goalDueAt: '2026-11-24T00:00:00.000Z' }) ?? '', /through 2026-11-24/);
+  assert.equal(stepOutsideActiveRangeError({ step: { repeat: 'weekly', repeatDay: 1 }, todayCivil: today, goalDueAt: '2026-11-24T00:00:00.000Z' }), null);
+  assert.match(stepOutsideActiveRangeError({ step: { dueAt: '2026-11-22T00:00:00.000Z' }, todayCivil: today }) ?? '', /on or after 2026-11-23/);
+  assert.equal(stepOutsideActiveRangeError({ step: { repeat: 'daily' }, todayCivil: today }), null);
+  assert.equal(stepOutsideActiveRangeError({ step: { dueAt: null, repeat: null }, todayCivil: today, goalDueAt: goalDue }), null);
 });
 
 test('a one-time step is due only on its date', () => {
@@ -161,6 +187,66 @@ test('a daily step added later is not expected before it existed', () => {
     11
   );
   assert.equal(percent, Number(((1 / 11) * 100).toFixed(2)));
+});
+
+test('todo today counts every occurrence scheduled today, including an archived step', () => {
+  const steps = [
+    { id: 'daily', repeat: 'daily', createdAt: '2026-11-23T02:19:47.114Z' },
+    {
+      id: 'old',
+      dueAt: '2026-11-23T00:00:00.000Z',
+      createdAt: '2026-11-23T02:07:54.732Z',
+      archivedAt: '2026-11-23T03:01:55.228Z',
+      effectiveUntil: '2026-11-23T00:00:00.000Z',
+    },
+    {
+      id: 'next',
+      dueAt: '2026-11-23T00:00:00.000Z',
+      createdAt: '2026-11-23T03:01:55.231Z',
+      effectiveFrom: '2026-11-23T00:00:00.000Z',
+    },
+    {
+      id: 'outside',
+      dueAt: '2026-11-30T00:00:00.000Z',
+      createdAt: '2026-11-23T02:54:18.850Z',
+      archivedAt: '2026-11-23T02:54:40.163Z',
+      effectiveUntil: '2026-11-22T00:00:00.000Z',
+    },
+  ];
+  const base = {
+    steps,
+    goalCreatedAt: new Date('2026-11-21T00:12:33.200Z'),
+    goalDueAt: '2026-11-27T00:00:00.000Z',
+    civilToday: '2026-11-23',
+    legacyTimeZone: 'Europe/Budapest',
+  };
+  assert.equal(
+    todayOccurrencePercent({
+      ...base,
+      completions: [
+        { stepId: 'daily', date: '2026-11-23T00:00:00.000Z' },
+        { stepId: 'old', date: '2026-11-23T00:00:00.000Z' },
+      ],
+    }),
+    66.67
+  );
+  assert.equal(
+    todayOccurrencePercent({
+      ...base,
+      completions: [
+        { stepId: 'daily', date: '2026-11-23T00:00:00.000Z' },
+        { stepId: 'old', date: '2026-11-23T00:00:00.000Z' },
+        { stepId: 'next', date: '2026-11-23T00:00:00.000Z' },
+        { stepId: 'next', date: '2026-11-23T00:00:00.000Z' },
+      ],
+    }),
+    100
+  );
+  assert.equal(todayOccurrencePercent({ ...base, civilToday: '2026-11-22', completions: [] }), null);
+  assert.equal(
+    todayOccurrencePercent({ ...base, civilToday: '2026-11-24', completions: [{ stepId: 'daily', date: '2026-11-23T00:00:00.000Z' }] }),
+    0
+  );
 });
 
 test('a goal without a deadline does not show the 100-occurrence horizon as progress', () => {

@@ -569,7 +569,15 @@ export async function failGoal(accessToken: string, goalId: string, body: { reas
 }
 
 export async function getGoal(accessToken: string, id: string): Promise<{ goal: GoalItem }> {
-  return getJsonAuth<{ goal: GoalItem }>(`/auth/goals/${id}`, accessToken);
+  const sp = new URLSearchParams();
+  try {
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    if (timeZone) sp.set('timeZone', timeZone);
+  } catch {
+    // The server uses its own calendar day when the device zone is unavailable.
+  }
+  const qs = sp.toString();
+  return getJsonAuth<{ goal: GoalItem }>(`/auth/goals/${encodeURIComponent(id)}${qs ? `?${qs}` : ''}`, accessToken);
 }
 
 export async function createGoal(
@@ -604,6 +612,7 @@ export async function createGoalStep(
     repeat?: string | null;
     repeatDay?: number | null;
     repeatMonth?: number | null;
+    durationMinutes?: number | null;
   }
 ): Promise<{ step: { id: string } }>
 {
@@ -620,8 +629,35 @@ export type GoalStepItem = {
   repeat: string | null;
   repeatDay: number | null;
   repeatMonth: number | null;
+  durationMinutes?: number | null;
   createdAt?: string | null;
+  archivedAt?: string | null;
+  effectiveFrom?: string | null;
+  effectiveUntil?: string | null;
+  replacesStepId?: string | null;
 };
+
+export type StepHistory = {
+  step: GoalStepItem;
+  goalEditable: boolean;
+  today: string;
+  scheduledToday: boolean;
+  doneToday: boolean;
+  replacementStartsOn: string;
+  archiveEffectiveUntil: string;
+  effectiveStart: string;
+  effectiveEnd: string | null;
+  occurrences: Array<{ date: string; status: 'DONE' | 'MISSED' | 'TODO' | 'FUTURE' }>;
+  completionDates?: string[];
+};
+
+function deviceTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  } catch {
+    return '';
+  }
+}
 
 export async function listGoalSteps(accessToken: string, goalId: string): Promise<{ steps: GoalStepItem[] }> {
   return getJsonAuth<{ steps: GoalStepItem[] }>(`/auth/goals/${encodeURIComponent(goalId)}/steps`, accessToken);
@@ -645,10 +681,36 @@ export async function deleteGoalStep(
   params: { goalId: string; stepId: string }
 ): Promise<{ ok: true }>
 {
+  const zone = deviceTimeZone();
+  const query = zone ? `?timeZone=${encodeURIComponent(zone)}` : '';
   return deleteJsonAuth<{ ok: true }>(
-    `/auth/goals/${encodeURIComponent(params.goalId)}/steps/${encodeURIComponent(params.stepId)}`,
+    `/auth/goals/${encodeURIComponent(params.goalId)}/steps/${encodeURIComponent(params.stepId)}${query}`,
     accessToken
   );
+}
+
+export async function replaceGoalStep(
+  accessToken: string,
+  params: { goalId: string; stepId: string },
+  body: {
+    text: string;
+    description?: string | null;
+    order?: number;
+    dueAt?: string | null;
+    repeat?: string | null;
+    repeatDay?: number | null;
+    repeatMonth?: number | null;
+    durationMinutes?: number | null;
+  }
+): Promise<{ step: GoalStepItem; archivedStepId: string }> {
+  const zone = deviceTimeZone();
+  return postJsonAuth(`/auth/goals/${encodeURIComponent(params.goalId)}/steps/${encodeURIComponent(params.stepId)}/replace`, { ...body, ...(zone ? { timeZone: zone } : null) }, accessToken);
+}
+
+export async function getStepHistory(accessToken: string, params: { goalId: string; stepId: string }): Promise<StepHistory> {
+  const zone = deviceTimeZone();
+  const query = zone ? `?timeZone=${encodeURIComponent(zone)}` : '';
+  return getJsonAuth<StepHistory>(`/auth/goals/${encodeURIComponent(params.goalId)}/steps/${encodeURIComponent(params.stepId)}/history${query}`, accessToken);
 }
 
 export async function updateGoal(

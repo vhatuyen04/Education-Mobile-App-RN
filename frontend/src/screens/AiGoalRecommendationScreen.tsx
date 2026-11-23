@@ -16,7 +16,7 @@ import { removeInboxItemsByRecoId } from '../notifications/inbox';
 import { markAppGoal } from '../motivation/appGoals';
 import { previewRewardsForDeadline } from '../motivation/deadlineDifficulty';
 import { deadlineError, deadlineRetryMessage, utcMidnightIsoFromCivilText } from '../utils/recurrence';
-import { scheduleDraftError, storedScheduleError } from '../utils/stepSchedule';
+import { scheduleDraftError, stepDateAfterGoalError, stepOutsideActiveRangeError, storedScheduleError } from '../utils/stepSchedule';
 
 type RouteParams = { id: string };
 
@@ -347,6 +347,14 @@ export function AiGoalRecommendationScreen() {
     if (deadlineProblem || !dueIso) {
       toast(deadlineProblem ?? deadlineRetryMessage());
       return;
+    }
+    for (const step of nextRec.suggestion.steps ?? []) {
+      const schedule = (step.schedule ?? {}) as { dueAt?: string | null; repeat?: string | null; repeatDay?: number | null; repeatMonth?: number | null };
+      const later = stepDateAfterGoalError(schedule.dueAt, dueIso) ?? stepOutsideActiveRangeError(schedule, dueIso);
+      if (later) {
+        toast(later);
+        return;
+      }
     }
 
     if (loading) return;

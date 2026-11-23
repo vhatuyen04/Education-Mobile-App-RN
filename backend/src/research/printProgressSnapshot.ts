@@ -62,6 +62,9 @@ async function main() {
       repeatDay: true,
       repeatMonth: true,
       createdAt: true,
+      archivedAt: true,
+      effectiveFrom: true,
+      effectiveUntil: true,
     },
   });
   const completions = steps.length

@@ -1,4 +1,5 @@
 import type { GoalStepItem } from '../api/auth';
+import { countRepeatOccurrencesUntilDeadline, deviceCivilDate } from './recurrence';
 
 export type StepScheduleFields = {
   dueAt?: string | null;
@@ -179,6 +180,61 @@ export function storedScheduleError(fields: StepScheduleFields): string | null {
     if (!yearlyMonthDayCanOccur(Number(fields.repeatMonth), Number(fields.repeatDay))) return YEARLY_SCHEDULE_RETRY;
   }
   return null;
+}
+
+/** A one-time step may fall on the goal deadline, but not after it. */
+export function stepDateAfterGoalError(stepDueAt?: string | null, goalDueAt?: string | null): string | null {
+  const stepDay = civilDay(stepDueAt);
+  const goalDay = civilDay(goalDueAt);
+  if (!stepDay || !goalDay || stepDay <= goalDay) return null;
+  return `The step date cannot be later than the goal deadline. Pick a date on or before ${goalDay}, and try again.`;
+}
+
+/** A new step must occur today or on a later day through the goal deadline. */
+export function stepOutsideActiveRangeError(
+  step: StepScheduleFields,
+  goalDueAt?: string | null,
+  todayCivil: string = deviceCivilDate()
+): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(todayCivil)) return null;
+  const repeat = String(step.repeat ?? '').trim().toLowerCase();
+  const due = civilDay(step.dueAt);
+  const goalDay = civilDay(goalDueAt);
+  const message = goalDay
+    ? `The step date must fall between today and the goal deadline. Pick a date from ${todayCivil} through ${goalDay}, and try again.`
+    : `The step date cannot be earlier than today. Pick a date on or after ${todayCivil}, and try again.`;
+  if (due && (!repeat || repeat === 'once')) return due < todayCivil ? message : null;
+  if (!goalDay || !['daily', 'weekly', 'monthly', 'yearly'].includes(repeat)) return null;
+  if (goalDay < todayCivil) return message;
+  const start = civilToLocalDate(todayCivil);
+  const end = civilToLocalDate(goalDay);
+  if (!start || !end) return null;
+  const counted = countRepeatOccurrencesUntilDeadline({
+    repeat,
+    repeatDay: step.repeatDay,
+    repeatMonth: step.repeatMonth,
+    start,
+    deadline: end,
+  });
+  return counted.count > 0 ? null : message;
+}
+
+function civilToLocalDate(civil: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(civil);
+  if (!match) return null;
+  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+}
+
+function civilDay(value?: string | null): string | null {
+  const raw = String(value ?? '').trim();
+  const match = /^(\d{4}-\d{2}-\d{2})/.exec(raw);
+  if (!match) return null;
+  if (!raw.includes('T') || /T00:00:00/.test(raw)) return match[1];
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return null;
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
 }
 
 export function scheduleDraftError(input: string): string | null {

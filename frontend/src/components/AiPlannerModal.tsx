@@ -14,7 +14,7 @@ import * as authApi from '../api/auth';
 import { markAppGoal } from '../motivation/appGoals';
 import { previewRewardsForDeadline } from '../motivation/deadlineDifficulty';
 import { countRepeatOccurrencesUntilDeadline, deadlineRetryMessage, realCivilDate } from '../utils/recurrence';
-import { scheduleDraftError, storedScheduleError } from '../utils/stepSchedule';
+import { scheduleDraftError, stepDateAfterGoalError, stepOutsideActiveRangeError, storedScheduleError } from '../utils/stepSchedule';
 
 type Props = {
   visible: boolean;
@@ -660,6 +660,13 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
       if (!dueIso) {
         toast(deadlineRetryMessage());
         return;
+      }
+      for (const step of stepWrites) {
+        const later = stepDateAfterGoalError(step.body?.dueAt, dueIso) ?? stepOutsideActiveRangeError(step.body ?? {}, dueIso);
+        if (later) {
+          toast(later);
+          return;
+        }
       }
 
       const created = await authApi.createGoal(token, {

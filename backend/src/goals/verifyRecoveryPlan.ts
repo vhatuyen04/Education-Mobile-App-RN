@@ -52,6 +52,7 @@ export type VerificationViolation = {
     | 'DUPLICATE_ACTIVITY'
     | 'DUPLICATE_OCCURRENCE'
     | 'UNKNOWN_STEP'
+    | 'ARCHIVED_STEP'
     | 'DONE_DROPPED'
     | 'PAST_DATE'
     | 'AFTER_DEADLINE'
@@ -167,6 +168,14 @@ export function verifyRecoveryPlan(
         code: 'UNKNOWN_STEP',
         path: `activities[${activity.index}].stepId`,
         message: `Step ${activity.stepId} is not on this goal.`,
+      });
+      continue;
+    }
+    if (stepById.get(activity.stepId)?.lifecycle === 'archived' && !isPreservedDone(snapshot, activity.stepId, activity.date)) {
+      violations.push({
+        code: 'ARCHIVED_STEP',
+        path: `activities[${activity.index}].stepId`,
+        message: `Step ${activity.stepId} is archived. A new recovery activity cannot use it.`,
       });
     }
   }
@@ -312,10 +321,12 @@ export function verifyRecoveryPlan(
     },
     {
       code: 'STEP_IDS',
-      status: violations.some(item => item.code === 'UNKNOWN_STEP') ? 'FAIL' : 'PASS',
-      message: violations.some(item => item.code === 'UNKNOWN_STEP')
-        ? 'The plan names a step that is not on this goal.'
-        : 'Every proposed step id belongs to this goal.',
+      status: violations.some(item => item.code === 'UNKNOWN_STEP' || item.code === 'ARCHIVED_STEP') ? 'FAIL' : 'PASS',
+      message: violations.some(item => item.code === 'ARCHIVED_STEP')
+        ? 'The plan schedules a new activity on an archived step.'
+        : violations.some(item => item.code === 'UNKNOWN_STEP')
+          ? 'The plan names a step that is not on this goal.'
+          : 'Every proposed step id belongs to this goal.',
     },
     {
       code: 'PRESERVE_DONE',

@@ -20,8 +20,9 @@ import { isAppGoal, markAppGoal, unmarkAppGoal } from '../motivation/appGoals';
 import { getFailedReason, type FailedReason } from '../motivation/failedGoals';
 import { appendScorePoint } from '../motivation/scoreHistory';
 import type { RootStackParamList } from '../navigation/types';
-import { legacyScheduleNote, parseScheduleShortText, scheduleDraftError, scheduleToShortText, storedScheduleError } from '../utils/stepSchedule';
+import { legacyScheduleNote, parseScheduleShortText, scheduleDraftError, scheduleToShortText, stepDateAfterGoalError, stepOutsideActiveRangeError, storedScheduleError } from '../utils/stepSchedule';
 import { civilLabel, deadlineError, deadlineRetryMessage, utcMidnightIsoFromCivilText } from '../utils/recurrence';
+import { DELETE_STEP_MESSAGE, readDurationMinutes, schedulePhrase } from '../utils/stepLifecycle';
 import { autoScheduleRemindersForSignedInUser } from '../notifications/scheduler';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -31,6 +32,11 @@ function stripLegacyStepsFromGoalTitle(raw: string): string {
   const s = String(raw ?? '');
   const idx = s.toLowerCase().indexOf('steps:');
   return (idx >= 0 ? s.slice(0, idx) : s).trim();
+}
+
+function shownDuration(value: string): string | null {
+  const minutes = readDurationMinutes(value);
+  return typeof minutes === 'number' ? `${minutes} min` : null;
 }
 
 function makeId() {
@@ -50,6 +56,8 @@ type UiStep = {
   scheduleBaseline: string;
   scheduleWarning: string | null;
   preserveStoredSchedule: boolean;
+  durationText: string;
+  archivedAt: string | null;
 };
 
 export function GoalDetailScreen() {
@@ -84,6 +92,8 @@ export function GoalDetailScreen() {
   const [deadlineDraft, setDeadlineDraft] = useState('');
 
   const [completeConfirmOpen, setCompleteConfirmOpen] = useState(false);
+  const [stepConfirmOpen, setStepConfirmOpen] = useState(false);
+  const [deleteStepId, setDeleteStepId] = useState<string | null>(null);
 
   const completeConfirmKey = useMemo(() => {
     const id = String(goalId ?? '').trim();
@@ -176,6 +186,8 @@ export function GoalDetailScreen() {
         scheduleBaseline: scheduleToShortText(s),
         scheduleWarning: legacyScheduleNote(s),
         preserveStoredSchedule: !!legacyScheduleNote(s),
+        durationText: s.durationMinutes ? String(s.durationMinutes) : '',
+        archivedAt: s.archivedAt ?? null,
       }));
       setSteps(uiSteps);
     } catch (e: any) {
@@ -191,7 +203,7 @@ export function GoalDetailScreen() {
 
   function addStep() {
     if (completed) return;
-    setSteps(prev => [...prev, { id: makeId(), text: 'New step', description: '', scheduleText: '', scheduleBaseline: '', scheduleWarning: null, preserveStoredSchedule: false }]);
+    setSteps(prev => [...prev, { id: makeId(), text: 'New step', description: '', scheduleText: '', scheduleBaseline: '', scheduleWarning: null, preserveStoredSchedule: false, durationText: '', archivedAt: null }]);
   }
 
   function removeStep(id: string) {
@@ -212,6 +224,11 @@ export function GoalDetailScreen() {
   function setStepScheduleText(id: string, scheduleText: string) {
     if (completed) return;
     setSteps(prev => prev.map(s => (s.id === id ? { ...s, scheduleText, scheduleWarning: legacyScheduleNote(parseScheduleShortText(scheduleText)) } : s)));
+  }
+
+  function setStepDuration(id: string, durationText: string) {
+    if (completed) return;
+    setSteps(prev => prev.map(s => (s.id === id ? { ...s, durationText } : s)));
   }
 
   function openDeadlineEditor() {
@@ -274,9 +291,13 @@ export function GoalDetailScreen() {
     }
 
     for (const s of steps) {
-      if (!s.text.trim()) continue;
+      if (!s.text.trim() || s.serverId) continue;
+      if (readDurationMinutes(s.durationText) === 'invalid') {
+        toast('Duration must be a positive number of minutes');
+        return;
+      }
       const parsedSchedule = parseScheduleShortText(s.scheduleText);
-      const scheduleError = scheduleDraftError(s.scheduleText) ?? storedScheduleError(parsedSchedule);
+      const scheduleError = scheduleDraftError(s.scheduleText) ?? storedScheduleError(parsedSchedule) ?? stepDateAfterGoalError(parsedSchedule.dueAt, dueAt) ?? stepOutsideActiveRangeError(parsedSchedule, dueAt);
       const unchangedLegacy = !!s.serverId && s.preserveStoredSchedule && s.scheduleText.trim() === s.scheduleBaseline.trim();
       if (scheduleError && !unchangedLegacy) {
         toast(scheduleError);
@@ -313,7 +334,6 @@ export function GoalDetailScreen() {
       }
 
       const serverSteps = effectiveGoalId ? await authApi.listGoalSteps(token, effectiveGoalId) : { steps: [] as authApi.GoalStepItem[] };
-      const existingById = new Map(serverSteps.steps.map(s => [s.id, s] as const));
 
       const updatedSteps = steps.map(s => ({ ...s }));
 
@@ -327,21 +347,19 @@ export function GoalDetailScreen() {
       for (let i = 0; i < steps.length; i++) {
         const s = updatedSteps[i];
         const text = s.text.trim();
-        if (!text) continue;
+        if (!text || s.serverId) continue;
         const schedule = parseScheduleShortText(s.scheduleText);
         const description = s.description.trim() ? s.description.trim() : null;
-        const unchangedLegacy = !!s.serverId && s.preserveStoredSchedule && s.scheduleText.trim() === s.scheduleBaseline.trim();
-
-        if (s.serverId && existingById.has(s.serverId)) {
-          await authApi.updateGoalStep(
-            token,
-            { goalId: effectiveGoalId!, stepId: s.serverId },
-            unchangedLegacy ? { text, description, order: i } : { text, description, order: i, ...schedule }
-          );
-        } else {
-          const created = await authApi.createGoalStep(token, effectiveGoalId!, { text, description, order: i, ...schedule });
-          s.serverId = created.step.id;
-        }
+        const minutes = readDurationMinutes(s.durationText);
+        const created = await authApi.createGoalStep(token, effectiveGoalId!, {
+          text,
+          description,
+          order: i,
+          durationMinutes: minutes === 'invalid' ? null : minutes,
+          ...schedule,
+        });
+        s.serverId = created.step.id;
+        s.archivedAt = null;
       }
 
       setSteps(updatedSteps);
@@ -371,7 +389,32 @@ export function GoalDetailScreen() {
   }
 
   async function save() {
+    const fresh = steps.filter(step => !step.serverId && step.text.trim());
+    if (fresh.length) {
+      setStepConfirmOpen(true);
+      return;
+    }
     await saveImpl({ finish: false });
+  }
+
+  async function confirmDeleteStep() {
+    const localId = deleteStepId;
+    const step = steps.find(item => item.id === localId);
+    setDeleteStepId(null);
+    if (!step) return;
+    if (!step.serverId) {
+      setSteps(prev => prev.filter(item => item.id !== step.id));
+      return;
+    }
+    const token = state.accessToken;
+    if (!token || !goalId) return;
+    try {
+      await authApi.deleteGoalStep(token, { goalId, stepId: step.serverId });
+      setSteps(prev => prev.map(item => (item.id === step.id ? { ...item, archivedAt: new Date().toISOString() } : item)));
+      toast('Step archived');
+    } catch (error: any) {
+      toast(String(error?.message ?? 'Could not delete the step'));
+    }
   }
 
   async function finish() {
@@ -540,48 +583,33 @@ export function GoalDetailScreen() {
               {steps.map((s, idx) => (
                 <View key={s.id} style={styles.stepRow}>
                   <View style={styles.stepMain}>
-                    <Text style={styles.stepLabel}>Step {idx + 1}</Text>
-                    <Text style={[styles.stepLabel, { marginTop: 6 }]}>Title</Text>
-                    <TextInput
-                      value={s.text}
-                      onChangeText={t2 => setStepText(s.id, t2)}
-                      editable={!completed}
-                      placeholder=""
-                      placeholderTextColor={colors.muted}
-                      multiline
-                      textAlignVertical="top"
-                      style={styles.stepInput}
-                    />
-
-                    <Text style={[styles.stepLabel, { marginTop: 6 }]}>Description</Text>
-                    <TextInput
-                      value={s.description}
-                      onChangeText={t2 => setStepDescription(s.id, t2)}
-                      editable={!completed}
-                      placeholder="Optional"
-                      placeholderTextColor={colors.muted}
-                      multiline
-                      textAlignVertical="top"
-                      style={styles.stepInput}
-                    />
-
-                    <Text style={[styles.stepLabel, { marginTop: 6 }]}>Schedule</Text>
-                    <TextInput
-                      value={s.scheduleText}
-                      onChangeText={t2 => setStepScheduleText(s.id, t2)}
-                      editable={!completed}
-                      placeholder="once:YYYY-MM-DD"
-                      placeholderTextColor={colors.muted}
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      style={styles.stepScheduleInput}
-                    />
-                    {s.scheduleWarning ? <Text style={[styles.stepLabel, { marginTop: 4 }]}>{s.scheduleWarning}</Text> : null}
-                    <Text style={styles.meta}>{'One full value:\ndaily\nweekly:Mon\nmonthly:DD\nyearly:MM-DD\nonce:YYYY-MM-DD'}</Text>
+                    <Text style={styles.stepLabel}>{s.archivedAt ? 'Archived' : `Step ${idx + 1}`}</Text>
+                    {s.serverId ? (
+                      <Pressable onPress={() => goalId ? nav.navigate('StepDetail', { goalId, stepId: s.serverId! }) : undefined}>
+                        <Text style={styles.stepInput}>{s.text}</Text>
+                        {s.description ? <Text style={styles.meta}>{s.description}</Text> : null}
+                        <Text style={styles.meta}>{schedulePhrase({ ...parseScheduleShortText(s.scheduleText), scheduleText: s.scheduleText })}</Text>
+                        {shownDuration(s.durationText) ? <Text style={styles.meta}>{shownDuration(s.durationText)}</Text> : null}
+                        {s.archivedAt ? <Text style={styles.meta}>History is read only</Text> : null}
+                      </Pressable>
+                    ) : (
+                      <>
+                        <Text style={[styles.stepLabel, { marginTop: 6 }]}>Title</Text>
+                        <TextInput value={s.text} onChangeText={t2 => setStepText(s.id, t2)} editable={!completed} placeholderTextColor={colors.muted} multiline textAlignVertical="top" style={styles.stepInput} />
+                        <Text style={[styles.stepLabel, { marginTop: 6 }]}>Description</Text>
+                        <TextInput value={s.description} onChangeText={t2 => setStepDescription(s.id, t2)} editable={!completed} placeholder="Optional" placeholderTextColor={colors.muted} multiline textAlignVertical="top" style={styles.stepInput} />
+                        <Text style={[styles.stepLabel, { marginTop: 6 }]}>Schedule</Text>
+                        <TextInput value={s.scheduleText} onChangeText={t2 => setStepScheduleText(s.id, t2)} editable={!completed} placeholder="once:YYYY-MM-DD" placeholderTextColor={colors.muted} autoCapitalize="none" autoCorrect={false} style={styles.stepScheduleInput} />
+                        <Text style={[styles.stepLabel, { marginTop: 6 }]}>Minutes (optional)</Text>
+                        <TextInput value={s.durationText} onChangeText={t2 => setStepDuration(s.id, t2)} editable={!completed} placeholder="25" placeholderTextColor={colors.muted} keyboardType="number-pad" style={styles.stepScheduleInput} />
+                        {s.scheduleWarning ? <Text style={[styles.stepLabel, { marginTop: 4 }]}>{s.scheduleWarning}</Text> : null}
+                        <Text style={styles.meta}>{[s.text.trim() || 'Untitled', s.description.trim() || 'No description', s.scheduleText.trim() || 'No schedule', shownDuration(s.durationText)].filter(Boolean).join(' · ')}</Text>
+                      </>
+                    )}
                   </View>
 
-                  {!completed ? (
-                    <Pressable onPress={() => removeStep(s.id)} hitSlop={10} style={styles.stepTrash}>
+                  {!completed && !s.archivedAt ? (
+                    <Pressable onPress={() => (s.serverId ? setDeleteStepId(s.id) : removeStep(s.id))} hitSlop={10} style={styles.stepTrash}>
                       <Text style={{ color: colors.danger, fontWeight: '900' }}>🗑</Text>
                     </Pressable>
                   ) : null}
@@ -600,6 +628,37 @@ export function GoalDetailScreen() {
           ) : null}
         </Card>
       </ScrollView>
+
+      <Modal visible={stepConfirmOpen} transparent animationType="fade" onRequestClose={() => setStepConfirmOpen(false)}>
+        <View style={styles.backdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setStepConfirmOpen(false)} />
+          <View style={styles.sheet}>
+            <Text style={styles.sheetTitle}>Save new steps</Text>
+            <Text style={styles.meta}>These fields stay as entered. Replacing a saved step later archives it and starts a new one.</Text>
+            {steps.filter(step => !step.serverId && step.text.trim()).map(step => (
+              <Text key={step.id} style={styles.meta}>{[step.text.trim(), step.description.trim() || 'No description', step.scheduleText.trim() || 'No schedule', shownDuration(step.durationText)].filter(Boolean).join(' · ')}</Text>
+            ))}
+            <View style={styles.rowEnd}>
+              <Button title="Cancel" onPress={() => setStepConfirmOpen(false)} />
+              <Button title="Save" variant="primary" onPress={() => { setStepConfirmOpen(false); void saveImpl({ finish: false }); }} />
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={deleteStepId != null} transparent animationType="fade" onRequestClose={() => setDeleteStepId(null)}>
+        <View style={styles.backdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setDeleteStepId(null)} />
+          <View style={styles.sheet}>
+            <Text style={styles.sheetTitle}>Delete step</Text>
+            <Text style={styles.meta}>{DELETE_STEP_MESSAGE}</Text>
+            <View style={styles.rowEnd}>
+              <Button title="Cancel" onPress={() => setDeleteStepId(null)} />
+              <Button title="Delete" variant="danger" onPress={() => void confirmDeleteStep()} />
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <Modal visible={completeConfirmOpen} transparent animationType="fade" onRequestClose={() => setCompleteConfirmOpen(false)}>
         <View style={styles.backdrop}>

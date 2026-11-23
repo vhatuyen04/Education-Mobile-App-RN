@@ -79,6 +79,12 @@ export type ProgressSnapshotStep = {
   repeatMonth: number | null;
   /** Civil creation date. Omitted means the goal creation date is the start. */
   createdAt?: CivilDateString | null;
+  /** Inclusive first civil date for a replacement. Omitted on an ordinary step. */
+  effectiveFrom?: CivilDateString | null;
+  /** Inclusive last civil date after archive. */
+  effectiveUntil?: CivilDateString | null;
+  /** Civil date of the archive instant. A later asOf is required before it applies. */
+  archivedOn?: CivilDateString | null;
 };
 
 export type ProgressSnapshotCompletion = {
@@ -112,6 +118,7 @@ export type SnapshotStep = {
   schedule: SnapshotSchedule;
   occurrenceStatus: StepOccurrenceStatus;
   ambiguity: string | null;
+  lifecycle?: 'active' | 'archived';
 };
 
 export type UnscheduledCompletion = {
@@ -182,6 +189,8 @@ export type ProgressSnapshot = {
   };
   missing: string[];
   limitations: string[];
+  /** Present when a step carries archive or replacement bounds. */
+  lifecyclePolicy?: 'immutable-step-archive-v1';
 };
 
 type Civil = { y: number; m: number; d: number };
@@ -269,7 +278,8 @@ export function buildProgressSnapshot(input: BuildProgressSnapshotInput): Progre
       });
       continue;
     }
-    if (!scheduledOn(owner.schedule, date, effectiveStart(owner.step, createdAt), deadline)) {
+    const ownerLife = lifecycleBounds(owner.step, createdAt, deadline, asOf);
+    if (!knownAt(owner.step, asOf) || !scheduledOn(owner.schedule, date, ownerLife.start, ownerLife.end) || (hasLifecycle(owner.step) && ((compareCivil(date, ownerLife.start) < 0) || (!!ownerLife.end && compareCivil(date, ownerLife.end) > 0)))) {
       unscheduled.push({
         stepId: completion.stepId,
         date: formatCivil(date),
@@ -290,13 +300,20 @@ export function buildProgressSnapshot(input: BuildProgressSnapshotInput): Progre
     for (const date of eachDate(windowFrom, windowTo)) {
       for (const item of classified) {
         if (!item.schedule || !byId.get(item.step.id) || byId.get(item.step.id) !== item) continue;
-        if (!scheduledOn(item.schedule, date, effectiveStart(item.step, createdAt), deadline)) continue;
+        if (!knownAt(item.step, asOf)) continue;
+        const life = lifecycleBounds(item.step, createdAt, deadline, asOf);
+        if (!scheduledOn(item.schedule, date, life.start, life.end)) continue;
+        if (hasLifecycle(item.step)) {
+          if (compareCivil(date, life.start) < 0) continue;
+          if (life.end && compareCivil(date, life.end) > 0) continue;
+        }
         const dateText = formatCivil(date);
         const done = doneKeys.has(`${item.step.id}|${dateText}`);
+        const finalizedMiss = !done && life.archived && !!life.end && sameCivil(date, life.end);
         occurrences.push({
           stepId: item.step.id,
           date: dateText,
-          status: done ? 'DONE' : statusFor(date, asOf),
+          status: done ? 'DONE' : finalizedMiss ? 'MISSED' : statusFor(date, asOf),
           evidence: done ? 'self_report' : 'no_completion_row',
         });
       }
@@ -312,8 +329,9 @@ export function buildProgressSnapshot(input: BuildProgressSnapshotInput): Progre
   };
 
   const steps = classified
-    .filter(item => byId.get(item.step.id) === item)
-    .map(item => toSnapshotStep(item));
+    .filter(item => byId.get(item.step.id) === item && knownAt(item.step, asOf))
+    .map(item => toSnapshotStep(item, createdAt, deadline, asOf));
+  const lifecyclePolicy = input.steps.some(hasLifecycle) ? 'immutable-step-archive-v1' as const : undefined;
   const ambiguousSteps = steps
     .filter(step => step.ambiguity)
     .map(step => ({ stepId: step.id, reason: step.ambiguity as string }))
@@ -365,6 +383,7 @@ export function buildProgressSnapshot(input: BuildProgressSnapshotInput): Progre
     },
     missing: [...MISSING_FIELDS],
     limitations: [...limitations].sort(),
+    ...(lifecyclePolicy ? { lifecyclePolicy } : {}),
   };
 }
 
@@ -437,6 +456,35 @@ function effectiveStart(step: ProgressSnapshotStep, goalCreated: Civil): Civil {
   return compareCivil(created, goalCreated) > 0 ? created : goalCreated;
 }
 
+function hasLifecycle(step: ProgressSnapshotStep): boolean {
+  return Boolean(step.effectiveFrom || step.effectiveUntil || step.archivedOn);
+}
+
+function knownAt(step: ProgressSnapshotStep, asOf: Civil): boolean {
+  if (!step.createdAt) return true;
+  const created = parseCivil(step.createdAt);
+  if (!created) return true;
+  return compareCivil(created, asOf) <= 0;
+}
+
+function lifecycleBounds(step: ProgressSnapshotStep, goalCreated: Civil, deadline: Civil | null, asOf: Civil): {
+  start: Civil;
+  end: Civil | null;
+  archived: boolean;
+} {
+  let start = effectiveStart(step, goalCreated);
+  const from = step.effectiveFrom ? parseCivil(step.effectiveFrom) : null;
+  if (from && compareCivil(from, start) > 0) start = from;
+  const archivedOn = step.archivedOn ? parseCivil(step.archivedOn) : null;
+  const archived = !!archivedOn && compareCivil(archivedOn, asOf) <= 0;
+  let end = deadline;
+  if (archived) {
+    const until = step.effectiveUntil ? parseCivil(step.effectiveUntil) : archivedOn;
+    if (until) end = end ? minCivil(end, until) : until;
+  }
+  return { start, end, archived };
+}
+
 function scheduledOn(schedule: DefiniteSchedule, date: Civil, createdAt: Civil, deadline: Civil | null): boolean {
   if (schedule.kind === 'once') return sameCivil(schedule.due, date);
   if (compareCivil(date, createdAt) < 0) return false;
@@ -447,8 +495,8 @@ function scheduledOn(schedule: DefiniteSchedule, date: Civil, createdAt: Civil, 
   return date.m === schedule.repeatMonth && date.d === clampedMonthDay(date.y, date.m, schedule.repeatDay);
 }
 
-function toSnapshotStep(item: ClassifiedStep): SnapshotStep {
-  return {
+function toSnapshotStep(item: ClassifiedStep, goalCreated: Civil, deadline: Civil | null, asOf: Civil): SnapshotStep {
+  const step = {
     id: item.step.id,
     order: item.step.order,
     text: item.step.text,
@@ -457,6 +505,8 @@ function toSnapshotStep(item: ClassifiedStep): SnapshotStep {
     occurrenceStatus: item.occurrenceStatus,
     ambiguity: item.ambiguity,
   };
+  if (!hasLifecycle(item.step)) return step;
+  return { ...step, lifecycle: lifecycleBounds(item.step, goalCreated, deadline, asOf).archived ? 'archived' as const : 'active' as const };
 }
 
 function toPublicSchedule(item: ClassifiedStep): SnapshotSchedule {

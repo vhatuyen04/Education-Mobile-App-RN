@@ -5,6 +5,7 @@ import type { RootStackParamList } from './types';
 import { BottomTabs } from './BottomTabs';
 import { AuthStack } from './AuthStack';
 import { GoalDetailScreen } from '../screens/GoalDetailScreen';
+import { StepDetailScreen } from '../screens/StepDetailScreen';
 import { TodayDetailsScreen } from '../screens/TodayDetailsScreen';
 import { ScheduleWeekScreen } from '../screens/ScheduleWeekScreen';
 import { AiGoalRecommendationScreen } from '../screens/AiGoalRecommendationScreen';
@@ -38,6 +39,7 @@ export function RootStack() {
         <>
           <Stack.Screen name="Tabs" component={BottomTabs} options={{ headerShown: false }} />
           <Stack.Screen name="GoalDetail" component={GoalDetailScreen} options={{ title: 'Goal detail', headerShown: false }} />
+          <Stack.Screen name="StepDetail" component={StepDetailScreen} options={{ title: 'Step', headerShown: false }} />
           <Stack.Screen name="TodayDetails" component={TodayDetailsScreen} options={{ title: 'Details', headerShown: false }} />
           <Stack.Screen name="ScheduleWeek" component={ScheduleWeekScreen} options={{ title: 'Modify schedule', headerShown: false }} />
           <Stack.Screen name="NotificationList" component={NotificationListScreen} options={{ title: 'Notifications', headerShown: false }} />

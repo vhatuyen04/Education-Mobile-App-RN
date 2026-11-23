@@ -158,18 +158,27 @@ model GoalStep {
   repeat    String?
   repeatDay Int?
   repeatMonth Int?
+  durationMinutes Int?
   done      Boolean  @default(false)
+  archivedAt DateTime?
+  effectiveFrom DateTime?
+  effectiveUntil DateTime?
+  replacesStepId String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   goal        Goal                 @relation(fields: [goalId], references: [id], onDelete: Cascade)
   completions GoalStepCompletion[]
+  replacesStep GoalStep?  @relation("StepReplacement", fields: [replacesStepId], references: [id], onDelete: SetNull)
+  replacements GoalStep[] @relation("StepReplacement")
 
   @@index([goalId])
   @@index([goalId, order])
   @@index([dueAt])
   @@index([repeat])
   @@index([repeat, repeatDay])
+  @@index([archivedAt])
+  @@index([replacesStepId])
 }
 
 model GoalStepCompletion {

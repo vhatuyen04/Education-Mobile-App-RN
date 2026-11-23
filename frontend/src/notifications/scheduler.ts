@@ -380,9 +380,12 @@ export async function autoScheduleRemindersForSignedInUser(opts?: { minIntervalM
       todayEvents: eventResp.events?.length ? eventResp.events : dash.todayEvents,
       nextEvent: dash.nextEvent,
       todaySteps: stepGroups.flatMap(({ goal, steps }) =>
-        steps.map(step => {
+        steps.filter(step => !step.archivedAt).map(step => {
           const conflicting = !!step.dueAt && !!(step.repeat && step.repeat.trim());
-          const notBeforeCivil = laterDeviceCivil(goal.createdAt, step.createdAt);
+          const notBeforeCivil = [laterDeviceCivil(goal.createdAt, step.createdAt), step.effectiveFrom ? String(step.effectiveFrom).slice(0, 10) : null]
+            .filter((value): value is string => !!value)
+            .sort()
+            .at(-1) ?? null;
           const rawCandidate = step.dueAt ? localReminderInstant(new Date(step.dueAt)) : null;
           const rawDue = rawCandidate && (!notBeforeCivil || civilLabel(rawCandidate) >= notBeforeCivil) ? rawCandidate : null;
           const repeatDue = !rawDue || rawDue.getTime() <= Date.now()

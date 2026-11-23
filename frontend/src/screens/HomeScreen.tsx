@@ -145,7 +145,7 @@ export function HomeScreen() {
           goalTitle: g.title,
           completed: !!g.completed,
           dueAt: g.dueAt ?? null,
-          steps: stepResp.steps ?? [],
+          steps: (stepResp.steps ?? []).filter(step => !step.archivedAt),
         });
       }
 
@@ -425,7 +425,7 @@ export function HomeScreen() {
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: nextGoal.dueAt ? 8 : 0 }}>
                     <Text style={styles.muted12}>{goalProgressLabel(nextGoal)}</Text>
                     <Text style={styles.muted12}>
-                      Today: {nextGoal.todayPct === null || nextGoal.todayPct === undefined ? '—' : `${nextGoal.todayPct.toFixed(2)}%`}
+                      Done today: {nextGoal.todayPct === null || nextGoal.todayPct === undefined ? '—' : `${nextGoal.todayPct.toFixed(2)}%`}
                     </Text>
                   </View>
                 </View>

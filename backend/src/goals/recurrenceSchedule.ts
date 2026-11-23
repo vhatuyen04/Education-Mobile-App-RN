@@ -106,6 +106,54 @@ export function scheduleWriteError(step: StoredSchedule): string | null {
   return null;
 }
 
+/** A one-time step date may fall on the goal deadline, but not after it. */
+export function stepLaterThanGoalError(
+  stepDueAt: Date | string | null | undefined,
+  goalDueAt: Date | string | null | undefined,
+  timeZone?: string | null
+): string | null {
+  if (stepDueAt == null || stepDueAt === '' || goalDueAt == null || goalDueAt === '') return null;
+  const stepDate = new Date(stepDueAt);
+  const goalDate = new Date(goalDueAt);
+  if (Number.isNaN(stepDate.getTime()) || Number.isNaN(goalDate.getTime())) return null;
+  const stepDay = storedInstantCivilDate(stepDate, timeZone);
+  const goalDay = storedInstantCivilDate(goalDate, timeZone);
+  if (stepDay <= goalDay) return null;
+  return `The step date cannot be later than the goal deadline. Pick a date on or before ${goalDay}, and try again.`;
+}
+
+/** A new step must have an occurrence on today or between today and the goal deadline. */
+export function stepOutsideActiveRangeError(args: {
+  step: StoredSchedule;
+  todayCivil: string;
+  goalDueAt?: Date | string | null;
+  timeZone?: string | null;
+}): string | null {
+  if (!utcMidnightFromCivil(args.todayCivil) || hasScheduleConflict(args.step)) return null;
+  const repeat = normalizeRepeat(args.step.repeat);
+  const hasDue = args.step.dueAt != null && args.step.dueAt !== '';
+  const goalDay = args.goalDueAt ? storedInstantCivilDate(new Date(args.goalDueAt), args.timeZone) : null;
+  const bounded = goalDay && utcMidnightFromCivil(goalDay) ? goalDay : null;
+  const message = bounded
+    ? `The step date must fall between today and the goal deadline. Pick a date from ${args.todayCivil} through ${bounded}, and try again.`
+    : `The step date cannot be earlier than today. Pick a date on or after ${args.todayCivil}, and try again.`;
+
+  if (hasDue && (!repeat || repeat === 'once')) {
+    const stepDate = new Date(args.step.dueAt as string);
+    if (Number.isNaN(stepDate.getTime())) return null;
+    if (storedInstantCivilDate(stepDate, args.timeZone) < args.todayCivil) return message;
+    return null;
+  }
+
+  if (!isDeterminateRepeat(args.step) || !bounded) return null;
+  if (bounded < args.todayCivil) return message;
+  const start = civilToLocalDay(args.todayCivil);
+  const end = civilToLocalDay(bounded);
+  if (!start || !end) return null;
+  if (countRepeatOccurrencesBetween(args.step, start, end) > 0) return null;
+  return message;
+}
+
 /**
  * Expected progress occurrences.
  * A deadline-bounded goal uses the real count, including zero.
@@ -154,6 +202,22 @@ export function civilToLocalDay(civil: string): Date | null {
   return new Date(utc.getUTCFullYear(), utc.getUTCMonth(), utc.getUTCDate());
 }
 
+/**
+ * The civil day used to allow a completion toggle.
+ * No user timezone is stored. SCHEDULING_TIMEZONE is the authority when it is
+ * a valid IANA name. Otherwise the server process zone is the authority.
+ * A timezone sent by the client does not choose this day.
+ */
+export function authoritativeSchedulingTimeZone(configured?: string | null): string | null {
+  const fromEnv = tryTimeZone(configured === undefined ? process.env.SCHEDULING_TIMEZONE : configured);
+  if (fromEnv) return fromEnv;
+  try {
+    return tryTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone);
+  } catch {
+    return null;
+  }
+}
+
 export function tryTimeZone(timeZone: string | null | undefined): string | null {
   const zone = String(timeZone ?? '').trim();
   if (!zone) return null;
@@ -190,6 +254,35 @@ export function storedInstantCivilDate(value: Date, legacyTimeZone?: string | nu
 export function laterCivilDate(first: string, second: string | null | undefined): string {
   if (!second || !utcMidnightFromCivil(second)) return first;
   return second > first ? second : first;
+}
+
+export type LifecycleBoundsStep = StoredSchedule & {
+  createdAt?: Date | string | null;
+  archivedAt?: Date | string | null;
+  effectiveFrom?: Date | string | null;
+  effectiveUntil?: Date | string | null;
+};
+
+/** Inclusive civil window for one step. An archived step ends on effectiveUntil. */
+export function stepProgressBounds(args: {
+  step: LifecycleBoundsStep;
+  goalCreatedAt: Date;
+  goalDueAt?: Date | string | null;
+  legacyTimeZone?: string | null;
+}): { start: string; end: string | null } | null {
+  const goalCreated = instantCivilDate(new Date(args.goalCreatedAt), args.legacyTimeZone);
+  const stepCreated = args.step.createdAt ? instantCivilDate(new Date(args.step.createdAt), args.legacyTimeZone) : null;
+  let start = laterCivilDate(goalCreated, stepCreated);
+  if (args.step.effectiveFrom) start = laterCivilDate(start, storedInstantCivilDate(new Date(args.step.effectiveFrom), args.legacyTimeZone));
+  const goalDue = args.goalDueAt ? storedInstantCivilDate(new Date(args.goalDueAt), args.legacyTimeZone) : null;
+  let end = goalDue;
+  if (args.step.archivedAt) {
+    const until = args.step.effectiveUntil ? storedInstantCivilDate(new Date(args.step.effectiveUntil), args.legacyTimeZone) : null;
+    if (!until) return null;
+    end = end ? (until < end ? until : end) : until;
+  }
+  if (end && end < start) return null;
+  return { start, end };
 }
 
 export function hasScheduleConflict(step: StoredSchedule): boolean {
@@ -319,38 +412,40 @@ export function countRepeatOccurrencesBetween(step: StoredSchedule, fromDay: Dat
  * This percentage is not the goal's completed flag.
  */
 export function dashboardProgressPercent(args: {
-  steps: Array<StoredSchedule & { id: string; createdAt?: Date | string | null }>;
+  steps: Array<LifecycleBoundsStep & { id: string }>;
   completions?: Array<{ stepId: string; date: Date | string }>;
   goalCreatedAt: Date;
   goalDueAt?: Date | string | null;
   legacyTimeZone?: string | null;
 }): number {
   if (!args.goalDueAt) return 0;
-  const goalDueCivil = storedInstantCivilDate(new Date(args.goalDueAt), args.legacyTimeZone);
-  const goalDueDay = civilToLocalDay(goalDueCivil);
-  if (!goalDueDay) return 0;
-  const goalCreatedCivil = instantCivilDate(new Date(args.goalCreatedAt), args.legacyTimeZone);
   const stepsById = new Map(args.steps.map(step => [step.id, step]));
   const bounds = new Map<string, { start: string; due: string }>();
   let totalExpected = 0;
 
   for (const step of args.steps) {
     if (hasScheduleConflict(step)) continue;
-    const stepCreatedCivil = step.createdAt ? instantCivilDate(new Date(step.createdAt), args.legacyTimeZone) : null;
-    const startCivil = laterCivilDate(goalCreatedCivil, stepCreatedCivil);
-    const startDay = civilToLocalDay(startCivil);
-    if (!startDay) continue;
+    const window = stepProgressBounds({
+      step,
+      goalCreatedAt: args.goalCreatedAt,
+      goalDueAt: args.goalDueAt,
+      legacyTimeZone: args.legacyTimeZone,
+    });
+    if (!window?.end) continue;
+    const startDay = civilToLocalDay(window.start);
+    const endDay = civilToLocalDay(window.end);
+    if (!startDay || !endDay) continue;
     const repeat = normalizeRepeat(step.repeat);
     let expected = 0;
     if (step.dueAt && !repeat) {
       const dueCivil = storedInstantCivilDate(new Date(step.dueAt), args.legacyTimeZone);
-      if (dueCivil >= startCivil && dueCivil <= goalDueCivil) expected = 1;
+      if (dueCivil >= window.start && dueCivil <= window.end) expected = 1;
     } else if (isDeterminateRepeat(step)) {
-      expected = expectedRepeatOccurrences(step, startDay, goalDueDay);
+      expected = expectedRepeatOccurrences(step, startDay, endDay);
     }
     if (expected <= 0) continue;
     totalExpected += expected;
-    bounds.set(step.id, { start: startCivil, due: goalDueCivil });
+    bounds.set(step.id, { start: window.start, due: window.end });
   }
 
   if (totalExpected <= 0) return 0;
@@ -372,6 +467,52 @@ export function dashboardProgressPercent(args: {
   }
 
   return Number((Math.min(totalDone / totalExpected, 1) * 100).toFixed(2));
+}
+
+/**
+ * Today's checklist uses the same occurrence rules as goal progress.
+ * Archived steps still count when today is inside their window.
+ * Null means nothing is scheduled today.
+ */
+export function todayOccurrencePercent(args: {
+  steps: Array<LifecycleBoundsStep & { id: string }>;
+  completions?: Array<{ stepId: string; date: Date | string }>;
+  goalCreatedAt: Date;
+  goalDueAt?: Date | string | null;
+  civilToday: string;
+  legacyTimeZone?: string | null;
+}): number | null {
+  if (!utcMidnightFromCivil(args.civilToday)) return null;
+  const doneToday = new Set<string>();
+  for (const row of args.completions ?? []) {
+    const date = new Date(row.date);
+    if (Number.isNaN(date.getTime())) continue;
+    if (storedInstantCivilDate(date, args.legacyTimeZone) !== args.civilToday) continue;
+    doneToday.add(row.stepId);
+  }
+
+  let expected = 0;
+  let done = 0;
+  for (const step of args.steps) {
+    if (hasScheduleConflict(step)) continue;
+    const window = stepProgressBounds({
+      step,
+      goalCreatedAt: args.goalCreatedAt,
+      goalDueAt: args.goalDueAt,
+      legacyTimeZone: args.legacyTimeZone,
+    });
+    if (!window || args.civilToday < window.start || (window.end && args.civilToday > window.end)) continue;
+    const repeat = normalizeRepeat(step.repeat);
+    const scheduled = step.dueAt && !repeat
+      ? storedInstantCivilDate(new Date(step.dueAt), args.legacyTimeZone) === args.civilToday
+      : isDeterminateRepeat(step) && isStepScheduledOnCivilDay(step, args.civilToday, args.legacyTimeZone);
+    if (!scheduled) continue;
+    expected += 1;
+    if (doneToday.has(step.id)) done += 1;
+  }
+
+  if (expected <= 0) return null;
+  return Number((Math.min(done / expected, 1) * 100).toFixed(2));
 }
 
 function startOfLocalDay(d: Date): Date {
