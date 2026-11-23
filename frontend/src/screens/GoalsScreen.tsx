@@ -10,6 +10,7 @@ import { colors } from '../theme/colors';
 import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
 import { toast } from '../utils/toast';
+import { goalProgressLabel } from '../utils/goalProgress';
 import { useAuth } from '../auth/AuthContext';
 import { useSettings } from '../settings/SettingsContext';
 import * as authApi from '../api/auth';
@@ -272,7 +273,7 @@ export function GoalsScreen() {
         >
           <View style={{ flex: 1 }}>
             <Text style={styles.name}>{displayGoalTitle(g.title)}</Text>
-            <Text style={styles.meta}>Completed: {g.progressPct}% steps</Text>
+            <Text style={styles.meta}>{goalProgressLabel(g)}</Text>
           </View>
 
           <View style={styles.goalActions}>
@@ -336,7 +337,7 @@ export function GoalsScreen() {
       >
         <View style={{ flex: 1 }}>
           <Text style={styles.name}>{displayGoalTitle(g.title)}</Text>
-          <Text style={styles.meta}>Completed: {g.progressPct}% steps</Text>
+          <Text style={styles.meta}>{goalProgressLabel(g)}</Text>
         </View>
 
         <View style={styles.goalActions}>

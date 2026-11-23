@@ -169,6 +169,20 @@ test('monthly and yearly short dates clamp to the last valid day', () => {
   assert.equal(statusOn('year-end', '2026-12-31', result.occurrences), 'FUTURE');
 });
 
+test('a repeating step added after the goal does not count earlier days', () => {
+  const result = snapshot({
+    goal: goal({ createdAt: '2026-11-01', deadline: '2026-11-30' }),
+    asOf: '2026-11-21',
+    pastHorizonDays: 40,
+    futureHorizonDays: 20,
+    steps: [step({ id: 'daily', repeat: 'daily', createdAt: '2026-11-20' })],
+  });
+  assert.equal(result.recurrenceStartPolicy, 'later-of-goal-and-step-created-at-v1');
+  assert.equal(result.occurrences[0]?.date, '2026-11-20');
+  assert.equal(result.occurrences.some(row => row.date < '2026-11-20'), false);
+  assert.equal(result.occurrences.length, 11);
+});
+
 test('an impossible yearly date stays ambiguous and a missing weekday is unchanged', () => {
   const impossible = snapshot({
     steps: [step({ id: 'bad-year', text: 'Bad year', repeat: 'yearly', repeatMonth: 2, repeatDay: 30 })],

@@ -20,7 +20,8 @@ import { isAppGoal, markAppGoal, unmarkAppGoal } from '../motivation/appGoals';
 import { getFailedReason, type FailedReason } from '../motivation/failedGoals';
 import { appendScorePoint } from '../motivation/scoreHistory';
 import type { RootStackParamList } from '../navigation/types';
-import { parseScheduleShortText, scheduleDraftError, scheduleToShortText } from '../utils/stepSchedule';
+import { legacyScheduleNote, parseScheduleShortText, scheduleDraftError, scheduleToShortText, storedScheduleError } from '../utils/stepSchedule';
+import { civilLabel, deadlineError, deadlineRetryMessage, utcMidnightIsoFromCivilText } from '../utils/recurrence';
 import { autoScheduleRemindersForSignedInUser } from '../notifications/scheduler';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -37,16 +38,7 @@ function makeId() {
 }
 
 function toYmdLocal(d: Date) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-
-function startOfLocalDayMs(ts: number) {
-  const d = new Date(ts);
-  d.setHours(0, 0, 0, 0);
-  return d.getTime();
+  return civilLabel(d);
 }
 
 type UiStep = {
@@ -55,6 +47,9 @@ type UiStep = {
   text: string;
   description: string;
   scheduleText: string;
+  scheduleBaseline: string;
+  scheduleWarning: string | null;
+  preserveStoredSchedule: boolean;
 };
 
 export function GoalDetailScreen() {
@@ -178,6 +173,9 @@ export function GoalDetailScreen() {
         text: s.text,
         description: s.description ?? '',
         scheduleText: scheduleToShortText(s),
+        scheduleBaseline: scheduleToShortText(s),
+        scheduleWarning: legacyScheduleNote(s),
+        preserveStoredSchedule: !!legacyScheduleNote(s),
       }));
       setSteps(uiSteps);
     } catch (e: any) {
@@ -193,7 +191,7 @@ export function GoalDetailScreen() {
 
   function addStep() {
     if (completed) return;
-    setSteps(prev => [...prev, { id: makeId(), text: 'New step', description: '', scheduleText: '' }]);
+    setSteps(prev => [...prev, { id: makeId(), text: 'New step', description: '', scheduleText: '', scheduleBaseline: '', scheduleWarning: null, preserveStoredSchedule: false }]);
   }
 
   function removeStep(id: string) {
@@ -213,7 +211,7 @@ export function GoalDetailScreen() {
 
   function setStepScheduleText(id: string, scheduleText: string) {
     if (completed) return;
-    setSteps(prev => prev.map(s => (s.id === id ? { ...s, scheduleText } : s)));
+    setSteps(prev => prev.map(s => (s.id === id ? { ...s, scheduleText, scheduleWarning: legacyScheduleNote(parseScheduleShortText(scheduleText)) } : s)));
   }
 
   function openDeadlineEditor() {
@@ -234,23 +232,17 @@ export function GoalDetailScreen() {
       closeDeadlineEditor();
       return;
     }
-    const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (!m) {
-      toast('Invalid deadline. Use YYYY-MM-DD');
+    const error = deadlineError(raw);
+    if (error) {
+      toast(error);
       return;
     }
-    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 23, 59, 59, 999);
-    const t = d.getTime();
-    if (!Number.isFinite(t)) {
-      toast('Invalid deadline');
+    const iso = utcMidnightIsoFromCivilText(raw);
+    if (!iso) {
+      toast(deadlineRetryMessage());
       return;
     }
-    const today0 = startOfLocalDayMs(Date.now());
-    if (startOfLocalDayMs(t) < today0) {
-      toast('Deadline cannot be in the past');
-      return;
-    }
-    setDueAt(d.toISOString());
+    setDueAt(iso);
     closeDeadlineEditor();
   }
 
@@ -267,9 +259,10 @@ export function GoalDetailScreen() {
     }
 
     if (!isSmartGoal && dueAt) {
-      const tDue = new Date(dueAt).getTime();
-      if (!Number.isFinite(tDue) || startOfLocalDayMs(tDue) < startOfLocalDayMs(Date.now())) {
-        toast('Deadline cannot be in the past');
+      const dueCivil = civilLabel(new Date(dueAt));
+      const error = !Number.isFinite(new Date(dueAt).getTime()) ? deadlineRetryMessage() : deadlineError(dueCivil);
+      if (error) {
+        toast(error);
         return;
       }
     }
@@ -282,14 +275,17 @@ export function GoalDetailScreen() {
 
     for (const s of steps) {
       if (!s.text.trim()) continue;
-      const scheduleError = scheduleDraftError(s.scheduleText);
-      if (scheduleError) {
+      const parsedSchedule = parseScheduleShortText(s.scheduleText);
+      const scheduleError = scheduleDraftError(s.scheduleText) ?? storedScheduleError(parsedSchedule);
+      const unchangedLegacy = !!s.serverId && s.preserveStoredSchedule && s.scheduleText.trim() === s.scheduleBaseline.trim();
+      if (scheduleError && !unchangedLegacy) {
         toast(scheduleError);
         return;
       }
     }
 
     setSaving(true);
+    let createdGoalId: string | null = null;
     try {
       let effectiveGoalId = goalId;
       const wasNew = !effectiveGoalId;
@@ -309,6 +305,7 @@ export function GoalDetailScreen() {
           requirement: requirement.trim() ? requirement.trim() : null,
           ...(isSmartGoal ? null : { dueAt: dueAt ? dueAt : undefined }),
         });
+        createdGoalId = created.goal.id;
         effectiveGoalId = created.goal.id;
 
         // Explicitly treat goals created from this screen as user custom goals.
@@ -333,12 +330,13 @@ export function GoalDetailScreen() {
         if (!text) continue;
         const schedule = parseScheduleShortText(s.scheduleText);
         const description = s.description.trim() ? s.description.trim() : null;
+        const unchangedLegacy = !!s.serverId && s.preserveStoredSchedule && s.scheduleText.trim() === s.scheduleBaseline.trim();
 
         if (s.serverId && existingById.has(s.serverId)) {
           await authApi.updateGoalStep(
             token,
             { goalId: effectiveGoalId!, stepId: s.serverId },
-            { text, description, order: i, ...schedule }
+            unchangedLegacy ? { text, description, order: i } : { text, description, order: i, ...schedule }
           );
         } else {
           const created = await authApi.createGoalStep(token, effectiveGoalId!, { text, description, order: i, ...schedule });
@@ -365,6 +363,7 @@ export function GoalDetailScreen() {
       void autoScheduleRemindersForSignedInUser({ minIntervalMs: 0 });
       nav.goBack();
     } catch (e: any) {
+      if (createdGoalId) await authApi.deleteGoal(token, createdGoalId).catch(() => undefined);
       toast(String(e?.message ?? 'Save failed'));
     } finally {
       setSaving(false);
@@ -577,6 +576,7 @@ export function GoalDetailScreen() {
                       autoCorrect={false}
                       style={styles.stepScheduleInput}
                     />
+                    {s.scheduleWarning ? <Text style={[styles.stepLabel, { marginTop: 4 }]}>{s.scheduleWarning}</Text> : null}
                     <Text style={styles.meta}>{'One full value:\ndaily\nweekly:Mon\nmonthly:DD\nyearly:MM-DD\nonce:YYYY-MM-DD'}</Text>
                   </View>
 

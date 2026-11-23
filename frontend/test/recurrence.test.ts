@@ -1,7 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { countRepeatOccurrencesUntilDeadline, nextReminderOccurrence } from '../src/utils/recurrence.ts';
+import {
+  countRepeatOccurrencesUntilDeadline,
+  deadlineError,
+  deadlineRetryMessage,
+  deviceCivilDate,
+  localReminderInstant,
+  nextReminderOccurrence,
+  occurrenceIsOnOrBeforeGoalDue,
+  realCivilDate,
+} from '../src/utils/recurrence.ts';
 
 test('a weekly reminder stays on today when that time has not passed', () => {
   const now = new Date(2026, 10, 16, 10, 0, 0, 0);
@@ -64,6 +73,33 @@ test('yearly February 29 uses the leap day and clamps a non-leap year', () => {
   assert.equal(nonLeap?.getDate(), 28);
 });
 
+test('a reminder does not fire before the step exists or after the goal deadline', () => {
+  const due = nextReminderOccurrence({
+    repeat: 'daily',
+    now: new Date(2026, 10, 1, 9, 0, 0, 0),
+    notBeforeCivil: '2026-11-20',
+    goalDueAt: '2026-11-30T00:00:00.000Z',
+  });
+  assert.equal(due?.getFullYear(), 2026);
+  assert.equal(due?.getMonth(), 10);
+  assert.equal(due?.getDate(), 20);
+
+  const afterDeadline = nextReminderOccurrence({
+    repeat: 'daily',
+    now: new Date(2026, 10, 20, 9, 0, 0, 0),
+    notBeforeCivil: '2026-12-01',
+    goalDueAt: '2026-11-30T00:00:00.000Z',
+  });
+  assert.equal(afterDeadline, null);
+
+  const once = localReminderInstant(new Date('2028-02-29T00:00:00.000Z'));
+  assert.equal(once.getFullYear(), 2028);
+  assert.equal(once.getMonth(), 1);
+  assert.equal(once.getDate(), 29);
+  assert.equal(once.getHours(), 23);
+  assert.equal(occurrenceIsOnOrBeforeGoalDue(new Date(2026, 10, 21, 23, 59, 59, 999), '2026-11-20T00:00:00.000Z'), false);
+});
+
 test('AI Planner occurrence dates do not overflow a short month', () => {
   const monthly = countRepeatOccurrencesUntilDeadline({
     repeat: 'monthly',
@@ -94,4 +130,17 @@ test('AI Planner occurrence dates do not overflow a short month', () => {
   });
   assert.equal(missing.count, 0);
   assert.equal(missing.lastOccurrence, null);
+});
+
+test('an impossible deadline is not turned into another day', () => {
+  assert.equal(realCivilDate('2026-11-31'), null);
+  assert.equal(realCivilDate('2026-02-31'), null);
+  assert.equal(realCivilDate('31.11.2026'), null);
+  assert.equal(realCivilDate('29.02.2028'), '2028-02-29');
+  assert.equal(realCivilDate('2026-11-22'), '2026-11-22');
+  assert.equal(deadlineRetryMessage(), `Pick a real deadline from today onward, such as ${deviceCivilDate()}, and try again.`);
+  assert.equal(deadlineError('2026-11-31'), deadlineRetryMessage());
+  assert.equal(deadlineError('2000-01-01'), deadlineRetryMessage());
+  assert.equal(deadlineError('2999-01-01'), null);
+  assert.equal(deadlineError(''), null);
 });

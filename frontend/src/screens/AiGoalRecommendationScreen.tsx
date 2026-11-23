@@ -15,7 +15,8 @@ import { getRecommendation, removeRecommendation, upsertRecommendation } from '.
 import { removeInboxItemsByRecoId } from '../notifications/inbox';
 import { markAppGoal } from '../motivation/appGoals';
 import { previewRewardsForDeadline } from '../motivation/deadlineDifficulty';
-import { scheduleDraftError } from '../utils/stepSchedule';
+import { deadlineError, deadlineRetryMessage, utcMidnightIsoFromCivilText } from '../utils/recurrence';
+import { scheduleDraftError, storedScheduleError } from '../utils/stepSchedule';
 
 type RouteParams = { id: string };
 
@@ -324,16 +325,27 @@ export function AiGoalRecommendationScreen() {
 
     for (const step of normalized) {
       if (!step.text.trim()) continue;
-      const scheduleError = scheduleDraftError(step.scheduleText);
+      const parsed = parseScheduleShortText(step.scheduleText);
+      const scheduleError =
+        scheduleDraftError(step.scheduleText) ??
+        (parsed.type === 'repeat'
+          ? storedScheduleError({
+              repeat: parsed.repeat,
+              repeatDay: parsed.repeatDay ?? null,
+              repeatMonth: parsed.repeatMonth ?? null,
+            })
+          : null);
       if (scheduleError) {
         toast(scheduleError);
         return;
       }
     }
 
-    const dueIso = parseDeadlineToISOEndOfDay(String(nextRec.suggestion?.deadline ?? ''));
-    if (!dueIso) {
-      toast('Missing/invalid deadline');
+    const deadlineText = String(nextRec.suggestion?.deadline ?? '').trim();
+    const deadlineProblem = !deadlineText ? deadlineRetryMessage() : deadlineError(deadlineText);
+    const dueIso = deadlineProblem ? null : utcMidnightIsoFromCivilText(deadlineText);
+    if (deadlineProblem || !dueIso) {
+      toast(deadlineProblem ?? deadlineRetryMessage());
       return;
     }
 
@@ -356,6 +368,7 @@ export function AiGoalRecommendationScreen() {
       });
 
       const goalId = created.goal.id;
+      try {
       await markAppGoal(goalId);
 
       for (let i = 0; i < (nextRec.suggestion.steps ?? []).length; i += 1) {
@@ -374,6 +387,10 @@ export function AiGoalRecommendationScreen() {
           body.repeatMonth = s.schedule.repeatMonth ?? null;
         }
         await authApi.createGoalStep(token, goalId, body);
+      }
+      } catch (stepError) {
+        await authApi.deleteGoal(token, goalId).catch(() => undefined);
+        throw stepError;
       }
 
       await removeRecommendation(rec.id);

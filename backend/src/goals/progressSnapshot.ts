@@ -5,8 +5,10 @@
  * calendar fields so the result does not depend on the host timezone.
  * Weekday index matches GoalStep.repeatDay: 0 = Sunday … 6 = Saturday.
  *
- * A repeating occurrence exists only on a date from goal.createdAt through
- * goal.deadline (inclusive). An open deadline has no end. The emitted window
+ * A repeating occurrence exists only from the later of goal.createdAt and
+ * step.createdAt through goal.deadline (inclusive). When step.createdAt is
+ * omitted, the goal creation date is used so older snapshots stay stable.
+ * An open deadline has no end. The emitted window
  * is further clipped by pastHorizonDays and futureHorizonDays (default 14)
  * so a long history cannot expand without bound. A completion on a real
  * scheduled date outside that window is kept in completionsOutsideWindow.
@@ -21,11 +23,16 @@
  * GoalStep.done is not an input and is never read.
  */
 
-import { RECURRENCE_POLICY_VERSION, clampedMonthDay, isCalendarMonthDay } from './recurrenceSchedule.js';
+import {
+  RECURRENCE_POLICY_VERSION,
+  RECURRENCE_START_POLICY,
+  clampedMonthDay,
+  isCalendarMonthDay,
+} from './recurrenceSchedule.js';
 
 export const SNAPSHOT_VERSION = '0.1' as const;
 export const DATE_CONVENTION = 'civil-date' as const;
-export { RECURRENCE_POLICY_VERSION };
+export { RECURRENCE_POLICY_VERSION, RECURRENCE_START_POLICY };
 export const DEFAULT_HORIZON_DAYS = 14;
 
 const WEEKDAY_INDEX = '0=Sunday..6=Saturday';
@@ -70,6 +77,8 @@ export type ProgressSnapshotStep = {
   repeat: string | null;
   repeatDay: number | null;
   repeatMonth: number | null;
+  /** Civil creation date. Omitted means the goal creation date is the start. */
+  createdAt?: CivilDateString | null;
 };
 
 export type ProgressSnapshotCompletion = {
@@ -127,6 +136,7 @@ export type AmbiguousStep = {
 export type ProgressSnapshot = {
   snapshotVersion: typeof SNAPSHOT_VERSION;
   recurrencePolicy: typeof RECURRENCE_POLICY_VERSION;
+  recurrenceStartPolicy: typeof RECURRENCE_START_POLICY;
   asOf: CivilDateString;
   dateConvention: typeof DATE_CONVENTION;
   weekdayIndex: typeof WEEKDAY_INDEX;
@@ -259,7 +269,7 @@ export function buildProgressSnapshot(input: BuildProgressSnapshotInput): Progre
       });
       continue;
     }
-    if (!scheduledOn(owner.schedule, date, createdAt, deadline)) {
+    if (!scheduledOn(owner.schedule, date, effectiveStart(owner.step, createdAt), deadline)) {
       unscheduled.push({
         stepId: completion.stepId,
         date: formatCivil(date),
@@ -280,7 +290,7 @@ export function buildProgressSnapshot(input: BuildProgressSnapshotInput): Progre
     for (const date of eachDate(windowFrom, windowTo)) {
       for (const item of classified) {
         if (!item.schedule || !byId.get(item.step.id) || byId.get(item.step.id) !== item) continue;
-        if (!scheduledOn(item.schedule, date, createdAt, deadline)) continue;
+        if (!scheduledOn(item.schedule, date, effectiveStart(item.step, createdAt), deadline)) continue;
         const dateText = formatCivil(date);
         const done = doneKeys.has(`${item.step.id}|${dateText}`);
         occurrences.push({
@@ -315,6 +325,7 @@ export function buildProgressSnapshot(input: BuildProgressSnapshotInput): Progre
   return {
     snapshotVersion: SNAPSHOT_VERSION,
     recurrencePolicy: RECURRENCE_POLICY_VERSION,
+    recurrenceStartPolicy: RECURRENCE_START_POLICY,
     asOf: formatCivil(asOf),
     dateConvention: DATE_CONVENTION,
     weekdayIndex: WEEKDAY_INDEX,
@@ -417,6 +428,13 @@ function classifySchedule(step: ProgressSnapshotStep): {
     };
   }
   return { schedule: null, ambiguity: 'unknown_repeat', occurrenceStatus: 'ambiguous' };
+}
+
+function effectiveStart(step: ProgressSnapshotStep, goalCreated: Civil): Civil {
+  if (!step.createdAt) return goalCreated;
+  const created = parseCivil(step.createdAt);
+  if (!created) return goalCreated;
+  return compareCivil(created, goalCreated) > 0 ? created : goalCreated;
 }
 
 function scheduledOn(schedule: DefiniteSchedule, date: Civil, createdAt: Civil, deadline: Civil | null): boolean {

@@ -116,4 +116,5 @@ export const UpdateGoalStepSchema = z.object({
 export const ToggleGoalStepCompletionSchema = z.object({
   date: z.string().datetime(),
   done: z.boolean(),
+  timeZone: z.string().min(1).max(80).optional(),
 });

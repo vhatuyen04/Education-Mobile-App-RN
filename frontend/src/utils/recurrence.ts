@@ -57,11 +57,79 @@ function addCalendarDays(d: Date, days: number): Date {
   return x;
 }
 
+export function isUtcMidnightInstant(value: Date): boolean {
+  return value.getUTCHours() === 0 && value.getUTCMinutes() === 0 && value.getUTCSeconds() === 0 && value.getUTCMilliseconds() === 0;
+}
+
+export function deadlineRetryMessage(): string {
+  return `Pick a real deadline from today onward, such as ${deviceCivilDate()}, and try again.`;
+}
+
+export function realCivilDate(value: string): string | null {
+  const raw = value.trim();
+  const ymd = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  const dmy = /^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/.exec(raw);
+  if (!ymd && !dmy) return null;
+  const year = ymd ? Number(ymd[1]) : Number(dmy?.[3]);
+  const month = ymd ? Number(ymd[2]) : Number(dmy?.[2]);
+  const day = ymd ? Number(ymd[3]) : Number(dmy?.[1]);
+  if (month < 1 || month > 12 || day < 1 || day > daysInMonth(year, month - 1)) return null;
+  return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+/** Empty is allowed. A typed deadline must be a real civil date from today onward. */
+export function deadlineError(value: string): string | null {
+  const raw = value.trim();
+  if (!raw) return null;
+  const civil = realCivilDate(raw);
+  if (!civil || civil < deviceCivilDate()) return deadlineRetryMessage();
+  return null;
+}
+
+export function utcMidnightIsoFromCivilText(value: string): string | null {
+  const civil = realCivilDate(value);
+  if (!civil) return null;
+  const [year, month, day] = civil.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day)).toISOString();
+}
+
+export function deviceCivilDate(value: Date = new Date()): string {
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${value.getFullYear()}-${month}-${day}`;
+}
+
+export function deviceTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  } catch {
+    return '';
+  }
+}
+
+export function utcMidnightIsoFromLocalCivil(value: Date = new Date()): string {
+  return new Date(Date.UTC(value.getFullYear(), value.getMonth(), value.getDate())).toISOString();
+}
+
+export function localReminderInstant(due: Date): Date {
+  if (!isUtcMidnightInstant(due)) return due;
+  return new Date(due.getUTCFullYear(), due.getUTCMonth(), due.getUTCDate(), 23, 59, 59, 999);
+}
+
+export function civilLabel(value: Date): string {
+  if (isUtcMidnightInstant(value)) {
+    const month = String(value.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(value.getUTCDate()).padStart(2, '0');
+    return `${value.getUTCFullYear()}-${month}-${day}`;
+  }
+  return deviceCivilDate(value);
+}
+
 export function occurrenceIsOnOrBeforeGoalDue(occurrence: Date, goalDueAt?: Date | string | null): boolean {
   if (goalDueAt == null || goalDueAt === '') return true;
   const due = new Date(goalDueAt);
   if (Number.isNaN(due.getTime())) return true;
-  return startOfLocalDay(occurrence).getTime() <= startOfLocalDay(due).getTime();
+  return civilLabel(occurrence) <= civilLabel(due);
 }
 
 function afterGoalDue(occurrence: Date, goalDueAt?: Date | string | null): boolean {
@@ -75,11 +143,16 @@ function afterGoalDue(occurrence: Date, goalDueAt?: Date | string | null): boole
  * A result after the goal deadline is omitted.
  */
 export function nextReminderOccurrence(
-  params: RepeatFields & { goalDueAt?: Date | string | null; now?: Date }
+  params: RepeatFields & { goalDueAt?: Date | string | null; notBeforeCivil?: string | null; now?: Date }
 ): Date | null {
   const repeat = normalizeRepeat(params.repeat);
   const now = params.now ? new Date(params.now) : new Date();
   if (Number.isNaN(now.getTime()) || !repeat) return null;
+  if (params.notBeforeCivil && deviceCivilDate(now) < params.notBeforeCivil) {
+    const [year, month, day] = params.notBeforeCivil.split('-').map(Number);
+    const start = new Date(year, (month ?? 1) - 1, day ?? 1, 0, 0, 0, 0);
+    return nextReminderOccurrence({ ...params, now: start, notBeforeCivil: null });
+  }
   const goalDueAt = params.goalDueAt;
 
   if (repeat === 'daily') {

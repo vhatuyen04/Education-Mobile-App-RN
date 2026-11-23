@@ -10,6 +10,7 @@ import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
 import { ProgressBar } from '../components/ProgressBar';
 import { toast } from '../utils/toast';
+import { goalProgressLabel } from '../utils/goalProgress';
 import { AiPlannerModal } from '../components/AiPlannerModal';
 import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
@@ -420,9 +421,9 @@ export function HomeScreen() {
 
               {nextGoal ? (
                 <View style={{ marginTop: 10 }}>
-                  <ProgressBar value={nextGoal.progressPct ?? 0} />
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 }}>
-                    <Text style={styles.muted12}>Overall: {(nextGoal.progressPct ?? 0).toFixed(2)}%</Text>
+                  {nextGoal.dueAt ? <ProgressBar value={nextGoal.progressPct ?? 0} /> : null}
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: nextGoal.dueAt ? 8 : 0 }}>
+                    <Text style={styles.muted12}>{goalProgressLabel(nextGoal)}</Text>
                     <Text style={styles.muted12}>
                       Today: {nextGoal.todayPct === null || nextGoal.todayPct === undefined ? '—' : `${nextGoal.todayPct.toFixed(2)}%`}
                     </Text>

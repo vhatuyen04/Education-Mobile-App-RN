@@ -103,13 +103,14 @@ test('an AI goal can be completed directly, and another user cannot claim it', (
 test('an approved ranking proof is kept when other proofs are cleared', () => {
   const rows = [
     { id: 'approved', status: 'APPROVED' },
-    { id: 'rejected', status: 'REJECTED' },
-    { id: 'pending', status: 'PENDING_REVIEW' },
+    { id: 'rejected', status: 'REJECTED', proofKey: 'proofs/rejected' },
+    { id: 'pending', status: 'PENDING_REVIEW', proofKey: null },
   ];
   assert.equal(approvedProofDeleteDenial('APPROVED')?.error, 'An approved ranking proof cannot be deleted');
   assert.equal(approvedProofDeleteDenial('REJECTED'), null);
   const removable = proofsEligibleForDeletion(rows);
   assert.deepEqual(removable.map(row => row.id), ['rejected', 'pending']);
+  assert.deepEqual(removable.map(row => row.proofKey), ['proofs/rejected', null]);
 });
 
 test('proof approval does not complete a goal, while the owner can still complete it once', () => {

@@ -2,21 +2,21 @@
  * Maps stored Goal, GoalStep, and GoalStepCompletion values into the pure
  * progress-snapshot input.
  *
- * PostgreSQL stores these columns as TIMESTAMP(3) without a time zone. Prisma
- * returns a JavaScript Date for the clock time that was written. SmartGoal
- * writes a completion with the server process's local midnight, and that zone
- * is not stored on the row. This mapper formats each instant in the IANA
- * timeZone argument. It does not read the host timezone, the system clock, or
- * the database.
- *
- * If timeZone is not the zone that was local at insert time, the civil date
- * can move by one day. That ambiguity cannot be repaired from the stored value.
+ * PostgreSQL stores these columns as TIMESTAMP(3) without a time zone.
+ * A value at UTC midnight is an explicit civil date (utc-midnight-civil-date-v1)
+ * and is read from its UTC year-month-day. Every other value is legacy: the
+ * civil date is the calendar day of that instant in the explicit timeZone.
+ * Legacy rows are not rewritten. The original write-time zone is not stored,
+ * so the wrong zone can still shift a legacy date by one day.
+ * Step and goal creation instants always use that zone. They are not treated
+ * as civil-date encodings.
  */
 
 import type { BuildProgressSnapshotInput } from './progressSnapshot.js';
+import { storedInstantCivilDate } from './recurrenceSchedule.js';
 
 export const STORED_TIMESTAMP_LIMITATION =
-  'TIMESTAMP(3) has no stored time zone. Civil dates are the calendar date of each instant in the explicit timeZone argument. The original write-time zone is not in the row, so the wrong zone can shift a date by one day.';
+  'TIMESTAMP(3) has no stored time zone. UTC midnight is an explicit civil date. Every other instant uses the explicit timeZone argument. The original write-time zone is not in the row, so the wrong zone can shift a legacy date by one day.';
 
 export type StoredGoalRow = {
   id: string;
@@ -36,6 +36,7 @@ export type StoredStepRow = {
   repeat: string | null;
   repeatDay: number | null;
   repeatMonth: number | null;
+  createdAt?: Date | null;
 };
 
 export type StoredCompletionRow = {
@@ -57,7 +58,7 @@ export function mapStoredGoalToSnapshotInput(input: {
       id: input.goal.id,
       title: input.goal.title,
       createdAt: civilDateInTimeZone(input.goal.createdAt, timeZone),
-      deadline: input.goal.dueAt ? civilDateInTimeZone(input.goal.dueAt, timeZone) : null,
+      deadline: input.goal.dueAt ? storedInstantCivilDate(input.goal.dueAt, timeZone) : null,
       completed: input.goal.completed,
       failedAt: input.goal.failedAt ? civilDateInTimeZone(input.goal.failedAt, timeZone) : null,
     },
@@ -66,14 +67,15 @@ export function mapStoredGoalToSnapshotInput(input: {
       order: step.order,
       text: step.text,
       description: step.description,
-      dueAt: step.dueAt ? civilDateInTimeZone(step.dueAt, timeZone) : null,
+      dueAt: step.dueAt ? storedInstantCivilDate(step.dueAt, timeZone) : null,
       repeat: step.repeat,
       repeatDay: step.repeatDay,
       repeatMonth: step.repeatMonth,
+      createdAt: step.createdAt ? civilDateInTimeZone(step.createdAt, timeZone) : null,
     })),
     completions: input.completions.map(completion => ({
       stepId: completion.stepId,
-      date: civilDateInTimeZone(completion.date, timeZone),
+      date: storedInstantCivilDate(completion.date, timeZone),
     })),
   };
 }

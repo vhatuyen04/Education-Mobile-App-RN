@@ -13,7 +13,7 @@ import { useSettings } from '../settings/SettingsContext';
 import * as authApi from '../api/auth';
 import { markAppGoal } from '../motivation/appGoals';
 import { previewRewardsForDeadline } from '../motivation/deadlineDifficulty';
-import { countRepeatOccurrencesUntilDeadline } from '../utils/recurrence';
+import { countRepeatOccurrencesUntilDeadline, deadlineRetryMessage, realCivilDate } from '../utils/recurrence';
 import { scheduleDraftError, storedScheduleError } from '../utils/stepSchedule';
 
 type Props = {
@@ -91,6 +91,34 @@ function isMeaningfulStepText(t: unknown) {
 type PlannerStep = Step & { schedule?: authApi.AiGoalStepSchedule; scheduleText?: string; description?: string };
 
 const SCHEDULE_FORMATS = 'One full value:\ndaily\nweekly:Mon\nmonthly:DD\nyearly:MM-DD\nonce:YYYY-MM-DD';
+
+function plannerStepWrite(step: PlannerStep, order: number): { error: string | null; body: any } {
+  const text = step.text.trim();
+  const description = String(step.description ?? '').trim() || null;
+  const scheduleText = String(step.scheduleText ?? '').trim();
+  const schedule = scheduleText ? parseScheduleShortText(scheduleText) : (step.schedule ?? { type: 'none' });
+  const body: any = { text, order, description };
+  if (schedule.type === 'once') {
+    const due = parseYmd(schedule.due);
+    if (due) {
+      due.setHours(23, 59, 59, 999);
+      body.dueAt = due.toISOString();
+    }
+  } else if (schedule.type === 'repeat') {
+    body.repeat = schedule.repeat ?? null;
+    body.repeatDay = schedule.repeatDay ?? null;
+    body.repeatMonth = schedule.repeatMonth ?? null;
+  }
+  const error =
+    (scheduleText ? scheduleDraftError(scheduleText) : null) ??
+    storedScheduleError({
+      dueAt: body.dueAt ?? null,
+      repeat: body.repeat ?? null,
+      repeatDay: body.repeatDay ?? null,
+      repeatMonth: body.repeatMonth ?? null,
+    });
+  return { error, body };
+}
 
 function sanitizePlannerSteps(input: PlannerStep[]) {
   const out = (Array.isArray(input) ? input : [])
@@ -223,22 +251,23 @@ function formatDateYmd(d: Date) {
   return `${y}-${m}-${day}`;
 }
 
+function dateFromRealCivil(civil: string): Date | null {
+  const [year, month, day] = civil.split('-').map(Number);
+  return new Date(year, month - 1, day);
+}
+
 function parseYmd(raw: string): Date | null {
-  const s = String(raw ?? '').trim();
-  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!m) return null;
-  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-  if (Number.isNaN(d.getTime())) return null;
-  return d;
+  const text = String(raw ?? '').trim();
+  if (!/^(\d{4})-(\d{2})-(\d{2})$/.test(text)) return null;
+  const civil = realCivilDate(text);
+  return civil ? dateFromRealCivil(civil) : null;
 }
 
 function parseDmy(raw: string): Date | null {
-  const s = String(raw ?? '').trim();
-  const m = s.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);
-  if (!m) return null;
-  const d = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
-  if (Number.isNaN(d.getTime())) return null;
-  return d;
+  const text = String(raw ?? '').trim();
+  if (!/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/.test(text)) return null;
+  const civil = realCivilDate(text);
+  return civil ? dateFromRealCivil(civil) : null;
 }
 
 function clampToDeadline(d: Date, deadline: Date) {
@@ -538,7 +567,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
 
     const dl = parseDeadlineToISOEndOfDay(resolvedDeadline, { mustBeFuture: true });
     if (!dl) {
-      toast('Please enter a valid future deadline');
+      toast(deadlineRetryMessage());
       return;
     }
 
@@ -611,18 +640,12 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
       return;
     }
 
-    for (const step of nonEmptySteps) {
-      const scheduleError =
-        scheduleDraftError(String(step.scheduleText ?? '')) ??
-        (step.schedule?.type === 'repeat'
-          ? storedScheduleError({
-              repeat: step.schedule.repeat,
-              repeatDay: step.schedule.repeatDay ?? null,
-              repeatMonth: step.schedule.repeatMonth ?? null,
-            })
-          : null);
-      if (scheduleError) {
-        toast(scheduleError);
+    const stepWrites = nonEmptySteps
+      .map((step, order) => plannerStepWrite(step, order))
+      .filter(step => step.body.text);
+    for (const step of stepWrites) {
+      if (step.error) {
+        toast(step.error);
         return;
       }
     }
@@ -635,7 +658,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
 
       const dueIso = parseDeadlineToISOEndOfDay(resolvedDeadline, { mustBeFuture: true });
       if (!dueIso) {
-        toast('Please enter a valid future deadline');
+        toast(deadlineRetryMessage());
         return;
       }
 
@@ -655,30 +678,14 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
       });
 
       const goalId = created.goal.id;
-      await markAppGoal(goalId);
-
-      const allSteps = nonEmptySteps
-        .map((s, idx) => ({ s, idx, text: s.text.trim() }))
-        .filter(x => x.text);
-
-      for (const { s, idx, text } of allSteps) {
-        const schedule = (s.schedule ?? { type: 'none' }) as authApi.AiGoalStepSchedule;
-        const description = String(s.description ?? '').trim();
-        const body: any = { text, order: idx, description: description || null };
-
-        if (schedule.type === 'once') {
-          const d = parseYmd(schedule.due);
-          if (d) {
-            d.setHours(23, 59, 59, 999);
-            body.dueAt = d.toISOString();
-          }
-        } else if (schedule.type === 'repeat') {
-          body.repeat = schedule.repeat;
-          body.repeatDay = schedule.repeatDay ?? null;
-          body.repeatMonth = schedule.repeatMonth ?? null;
+      try {
+        await markAppGoal(goalId);
+        for (const step of stepWrites) {
+          await authApi.createGoalStep(token, goalId, step.body);
         }
-
-        await authApi.createGoalStep(token, goalId, body);
+      } catch (stepError) {
+        await authApi.deleteGoal(token, goalId).catch(() => undefined);
+        throw stepError;
       }
 
       toast('Saved');

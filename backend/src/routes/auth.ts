@@ -38,9 +38,18 @@ import {
 } from '../goals/proofSampling.js';
 import { GoalLifecycleError, withLockedGoal } from '../goals/goalCriticalSection.js';
 import {
-  expectedRepeatOccurrences,
+  civilToLocalDay,
+  dashboardProgressPercent,
+  instantCivilDate,
+  isStepScheduledOnCivilDay,
   isStepScheduledOnDay,
+  isUtcMidnightInstant,
+  localCivilDate,
   scheduleWriteError,
+  storedInstantCivilDate,
+  tryTimeZone,
+  utcCivilDate,
+  utcMidnightFromCivil,
 } from '../goals/recurrenceSchedule.js';
 import { mockReviewAccess } from '../goals/mockReviewAccess.js';
 import { proofDecisionNotice } from '../goals/proofDecisionNotice.js';
@@ -540,6 +549,35 @@ async function deleteStoredProofObjects(keys: Array<string | null | undefined>) 
 
 function isStepScheduledToday(step: any, now: Date) {
   return isStepScheduledOnDay(step, now);
+}
+
+function stepIsDueOnCivilDay(step: any, goal: any, civilToday: string, timeZone: string | null): boolean {
+  if (goal?.dueAt && storedInstantCivilDate(new Date(goal.dueAt), timeZone) < civilToday) return false;
+  const goalCreated = goal?.createdAt ? instantCivilDate(new Date(goal.createdAt), timeZone) : civilToday;
+  const stepCreated = step?.createdAt ? instantCivilDate(new Date(step.createdAt), timeZone) : goalCreated;
+  if ((stepCreated > goalCreated ? stepCreated : goalCreated) > civilToday) return false;
+  return isStepScheduledOnCivilDay(step, civilToday, timeZone);
+}
+
+async function completionIdsOnCivilDay(stepIds: string[], civilToday: string, timeZone: string | null): Promise<Set<string>> {
+  if (!stepIds.length) return new Set();
+  const anchor = utcMidnightFromCivil(civilToday);
+  if (!anchor) return new Set();
+  const rows = await prismaAny.goalStepCompletion.findMany({
+    where: {
+      stepId: { in: stepIds },
+      date: {
+        gte: new Date(anchor.getTime() - 36 * 60 * 60 * 1000),
+        lte: new Date(anchor.getTime() + 36 * 60 * 60 * 1000),
+      },
+    },
+    select: { stepId: true, date: true },
+  });
+  const done = new Set<string>();
+  for (const row of rows as Array<{ stepId: string; date: Date }>) {
+    if (storedInstantCivilDate(new Date(row.date), timeZone) === civilToday) done.add(String(row.stepId));
+  }
+  return done;
 }
 
 function isRepeating(repeat: string | null | undefined) {
@@ -1994,22 +2032,39 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
   }
 
   const now = new Date();
+  const requestedToday = String((req.query as { clientToday?: unknown }).clientToday ?? '');
+  const timeZone = tryTimeZone(String((req.query as { timeZone?: unknown }).timeZone ?? ''));
+  const civilToday = utcMidnightFromCivil(requestedToday) ? requestedToday : localCivilDate(now);
+  const todayUtc = utcMidnightFromCivil(civilToday) as Date;
+  const dueLowerBound = new Date(todayUtc.getTime() - 36 * 60 * 60 * 1000);
   const startOfDay = startOfLocalDay(now);
   const endOfDay = endOfLocalDay(now);
 
-  const nextGoalWithDue = await prismaAny.goal.findFirst({
-    where: { userId, completed: false, deletedAt: null, failedAt: null, dueAt: { gte: startOfDay } },
+  const activeGoals = await prismaAny.goal.findMany({
+    where: {
+      userId,
+      completed: false,
+      deletedAt: null,
+      failedAt: null,
+      OR: [{ dueAt: null }, { dueAt: { gte: dueLowerBound } }],
+    },
     orderBy: [{ dueAt: 'asc' }, { createdAt: 'asc' }],
     select: { id: true, title: true, description: true, rankField: true, progressPct: true, dueAt: true, createdAt: true },
+    take: 50,
   });
-
-  const nextGoal =
-    nextGoalWithDue ??
-    (await prismaAny.goal.findFirst({
-      where: { userId, completed: false, deletedAt: null, failedAt: null, OR: [{ dueAt: null }, { dueAt: { gte: startOfDay } }] },
-      orderBy: [{ createdAt: 'asc' }],
-      select: { id: true, title: true, description: true, rankField: true, progressPct: true, dueAt: true, createdAt: true },
-    }));
+  const goalStillActive = (goal: { dueAt?: Date | string | null }) =>
+    !goal.dueAt || storedInstantCivilDate(new Date(goal.dueAt), timeZone) >= civilToday;
+  const activeNow = (activeGoals as Array<{
+    id: string;
+    title: string;
+    description: string | null;
+    rankField: string | null;
+    progressPct: number;
+    dueAt: Date | null;
+    createdAt: Date;
+  }>).filter(goalStillActive);
+  const nextGoalWithDue = activeNow.find(goal => goal.dueAt);
+  const nextGoal = nextGoalWithDue ?? activeNow.find(goal => !goal.dueAt) ?? null;
 
   // Compute progress for nextGoal:
   // - todayPct: how many of today's scheduled steps are done (per-day reset)
@@ -2018,57 +2073,37 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
   if (nextGoal?.id) {
     const goalSteps = await prismaAny.goalStep.findMany({
       where: { goalId: nextGoal.id },
-      select: { id: true, dueAt: true, repeat: true, repeatDay: true, repeatMonth: true },
+      select: { id: true, dueAt: true, repeat: true, repeatDay: true, repeatMonth: true, createdAt: true },
       take: 200,
     });
 
-    // Today progress
-    const scheduledToday = goalSteps.filter((s: any) => isStepScheduledToday(s, now));
+    const scheduledToday = (goalSteps as any[]).filter((step) => stepIsDueOnCivilDay(step, nextGoal, civilToday, timeZone));
     let todayPct: number | null = null;
     if (scheduledToday.length > 0) {
-      const completionsToday = await prismaAny.goalStepCompletion.findMany({
-        where: { stepId: { in: scheduledToday.map((s: any) => s.id) }, date: { gte: startOfDay, lte: endOfDay } },
-        select: { stepId: true },
-      });
-      const doneTodaySet = new Set(completionsToday.map((c: any) => String(c.stepId)));
-      const doneCount = scheduledToday.filter((s: any) => doneTodaySet.has(String(s.id))).length;
+      const doneTodaySet = await completionIdsOnCivilDay(
+        scheduledToday.map((step) => String(step.id)),
+        civilToday,
+        timeZone
+      );
+      const doneCount = scheduledToday.filter((step) => doneTodaySet.has(String(step.id))).length;
       todayPct = Number((((doneCount / scheduledToday.length) * 100) as number).toFixed(2));
     }
 
-    // Overall progress
     if (goalSteps.length > 0) {
-      const completionCounts = await prismaAny.goalStepCompletion.groupBy({
-        by: ['stepId'],
+      const completionRows = await prismaAny.goalStepCompletion.findMany({
         where: { stepId: { in: goalSteps.map((s: any) => s.id) } },
-        _count: { stepId: true },
+        select: { stepId: true, date: true },
       });
-      const countByStepId = new Map<string, number>(
-        (completionCounts as any[]).map((r: any) => [String(r.stepId), Number(r?._count?.stepId ?? 0)] as const)
-      );
-
-      const perStepWeight = 100 / goalSteps.length;
-      const goalStartDay = startOfLocalDay(new Date((nextGoal as any).createdAt ?? now));
-      const goalDueDay = nextGoal.dueAt ? startOfLocalDay(new Date(nextGoal.dueAt)) : null;
-
-      let overall = 0;
-      for (const s of goalSteps as any[]) {
-        const completedCount = Number(countByStepId.get(String(s.id)) ?? 0);
-        if (s.dueAt) {
-          // One-time step: any completion counts as done.
-          overall += completedCount > 0 ? perStepWeight : 0;
-          continue;
-        }
-
-        // Repeating step. Open-ended goals keep the 100-occurrence horizon.
-        // A deadline with no matching day stays at zero and adds no progress.
-        const expected = expectedRepeatOccurrences(s, goalStartDay, goalDueDay);
-        if (expected <= 0) continue;
-        const ratio = Math.min(Number(completedCount) / Number(expected), 1);
-        overall += ratio * perStepWeight;
-      }
-      computedNextGoal = { ...nextGoal, progressPct: Number((overall as number).toFixed(2)), todayPct } as any;
+      const progressPct = dashboardProgressPercent({
+        steps: goalSteps,
+        completions: completionRows,
+        goalCreatedAt: new Date(nextGoal.createdAt ?? now),
+        goalDueAt: nextGoal.dueAt,
+        legacyTimeZone: timeZone,
+      });
+      computedNextGoal = { ...nextGoal, progressPct, todayPct } as any;
     } else {
-      computedNextGoal = { ...nextGoal, todayPct } as any;
+      computedNextGoal = { ...nextGoal, progressPct: 0, todayPct } as any;
     }
   }
 
@@ -2098,9 +2133,9 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
         completed: false,
         deletedAt: null,
         failedAt: null,
-        OR: [{ dueAt: null }, { dueAt: { gte: startOfDay } }],
+        OR: [{ dueAt: null }, { dueAt: { gte: dueLowerBound } }],
       },
-      OR: [{ dueAt: { gte: startOfDay, lte: endOfDay } }, { repeat: { not: null } }],
+      OR: [{ dueAt: { not: null } }, { repeat: { not: null } }],
     },
     select: {
       id: true,
@@ -2111,19 +2146,18 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
       repeat: true,
       repeatDay: true,
       repeatMonth: true,
-      goal: { select: { id: true, title: true } },
+      createdAt: true,
+      goal: { select: { id: true, title: true, dueAt: true, createdAt: true } },
     },
     take: 200,
   });
 
-  const scheduledSteps = candidateSteps.filter((s: any) => isStepScheduledToday(s, now));
-  const stepCompletions = scheduledSteps.length
-    ? await prismaAny.goalStepCompletion.findMany({
-        where: { stepId: { in: scheduledSteps.map((s: any) => s.id) }, date: { gte: startOfDay, lte: endOfDay } },
-        select: { stepId: true },
-      })
-    : [];
-  const stepDoneSet = new Set(stepCompletions.map((c: any) => String(c.stepId)));
+  const scheduledSteps = candidateSteps.filter((s: any) => stepIsDueOnCivilDay(s, s.goal, civilToday, timeZone));
+  const stepDoneSet = await completionIdsOnCivilDay(
+    scheduledSteps.map((s: any) => String(s.id)),
+    civilToday,
+    timeZone
+  );
   const todaySteps = scheduledSteps
     .sort((a: any, b: any) => (String(a.goalId) + '_' + String(a.order)).localeCompare(String(b.goalId) + '_' + String(b.order)))
     .map((s: any) => ({
@@ -2194,7 +2228,7 @@ authRouter.get('/goals/:id/steps', async (req: Request, res: Response) => {
   const steps = await prismaAny.goalStep.findMany({
     where: { goalId },
     orderBy: [{ order: 'asc' }, { createdAt: 'asc' }],
-    select: { id: true, goalId: true, text: true, description: true, order: true, dueAt: true, repeat: true, repeatDay: true, repeatMonth: true },
+    select: { id: true, goalId: true, text: true, description: true, order: true, dueAt: true, repeat: true, repeatDay: true, repeatMonth: true, createdAt: true },
     take: 200,
   });
 
@@ -2523,14 +2557,14 @@ authRouter.delete('/goals/:id/proof-attempts', async (req: Request, res: Respons
   const goal = await prismaAny.goal.findFirst({ where: { id: goalId, userId }, select: { id: true } });
   if (!goal) return res.status(404).json({ error: 'Not found' });
 
-  const attempts = await prismaAny.smartGoalProofAttempt.findMany({
+  const attempts: Array<{ id: string; status: string; proofKey: string | null }> = await prismaAny.smartGoalProofAttempt.findMany({
     where: { userId, goalId },
     select: { id: true, status: true, proofKey: true },
   });
   const removable = proofsEligibleForDeletion(attempts);
-  await deleteStoredProofObjects(removable.map((attempt: { proofKey: string | null }) => attempt.proofKey));
+  await deleteStoredProofObjects(removable.map(attempt => attempt.proofKey));
   if (removable.length > 0) {
-    await prismaAny.smartGoalProofAttempt.deleteMany({ where: { id: { in: removable.map((attempt: { id: string }) => attempt.id) } } });
+    await prismaAny.smartGoalProofAttempt.deleteMany({ where: { id: { in: removable.map(attempt => attempt.id) } } });
   }
   return res.json({ ok: true, deleted: removable.length, keptApproved: attempts.length - removable.length });
 });
@@ -2919,8 +2953,14 @@ authRouter.post('/goals/:goalId/steps/:stepId/completion', async (req: Request, 
   const goalId = String(req.params.goalId);
   const stepId = String(req.params.stepId);
 
-  const date = startOfLocalDay(new Date(parsed.data.date));
-  if (!Number.isFinite(date.getTime())) return res.status(400).json({ error: 'Invalid payload' });
+  const rawDate = new Date(parsed.data.date);
+  if (!Number.isFinite(rawDate.getTime())) return res.status(400).json({ error: 'Invalid payload' });
+  const completionZone = tryTimeZone(parsed.data.timeZone);
+  const completionCivil = isUtcMidnightInstant(rawDate)
+    ? utcCivilDate(rawDate)
+    : instantCivilDate(startOfLocalDay(rawDate), completionZone);
+  const date = utcMidnightFromCivil(completionCivil);
+  if (!date) return res.status(400).json({ error: 'Invalid payload' });
 
   try {
     await prisma.$transaction((tx) =>
@@ -2929,15 +2969,17 @@ authRouter.post('/goals/:goalId/steps/:stepId/completion', async (req: Request, 
         async () => {
           const step = await tx.goalStep.findFirst({ where: { id: stepId, goalId }, select: { id: true } });
           if (!step) throw new GoalLifecycleError(404, 'Not found');
+          const existing = await tx.goalStepCompletion.findMany({
+            where: { stepId },
+            select: { id: true, date: true },
+          });
+          const matches = existing.filter(row => storedInstantCivilDate(new Date(row.date), completionZone) === completionCivil);
           if (parsed.data.done) {
-            await tx.goalStepCompletion.upsert({
-              where: { stepId_date: { stepId, date } },
-              update: {},
-              create: { stepId, date },
-              select: { id: true },
-            });
-          } else {
-            await tx.goalStepCompletion.deleteMany({ where: { stepId, date } });
+            if (matches.length === 0) {
+              await tx.goalStepCompletion.create({ data: { stepId, date }, select: { id: true } });
+            }
+          } else if (matches.length > 0) {
+            await tx.goalStepCompletion.deleteMany({ where: { id: { in: matches.map(row => row.id) } } });
           }
         },
         'edit'
@@ -3169,6 +3211,7 @@ authRouter.get('/goals', async (req: Request, res: Response) => {
       deletedAt: true,
       failedAt: true,
       failedReason: true,
+      createdAt: true,
       difficultyScore: true,
       pointsAwarded: true,
       xpAwarded: true,
@@ -3178,7 +3221,56 @@ authRouter.get('/goals', async (req: Request, res: Response) => {
     take: 200,
   });
 
-  return res.json({ goals });
+  const goalIds = goals.map((goal: { id: string }) => goal.id);
+  const steps: Array<{
+    id: string;
+    goalId: string;
+    dueAt: Date | null;
+    repeat: string | null;
+    repeatDay: number | null;
+    repeatMonth: number | null;
+    createdAt: Date;
+  }> = goalIds.length
+    ? await prismaAny.goalStep.findMany({
+        where: { goalId: { in: goalIds } },
+        select: { id: true, goalId: true, dueAt: true, repeat: true, repeatDay: true, repeatMonth: true, createdAt: true },
+      })
+    : [];
+  const stepIds = steps.map(step => step.id);
+  const completions: Array<{ stepId: string; date: Date }> = stepIds.length
+    ? await prismaAny.goalStepCompletion.findMany({
+        where: { stepId: { in: stepIds } },
+        select: { stepId: true, date: true },
+      })
+    : [];
+  const stepsByGoal = new Map<string, typeof steps>();
+  for (const step of steps) {
+    const rows = stepsByGoal.get(step.goalId) ?? [];
+    rows.push(step);
+    stepsByGoal.set(step.goalId, rows);
+  }
+  const goalIdByStep = new Map(steps.map((step: { id: string; goalId: string }) => [step.id, step.goalId]));
+  const completionsByGoal = new Map<string, Array<{ stepId: string; date: Date }>>();
+  for (const row of completions) {
+    const goalId = goalIdByStep.get(row.stepId);
+    if (!goalId) continue;
+    const rows = completionsByGoal.get(goalId) ?? [];
+    rows.push(row);
+    completionsByGoal.set(goalId, rows);
+  }
+  const listTimeZone = tryTimeZone(String((req.query as { timeZone?: unknown }).timeZone ?? ''));
+  const goalsWithProgress = goals.map((goal: { id: string; createdAt: Date; dueAt: Date | null }) => ({
+    ...goal,
+    progressPct: dashboardProgressPercent({
+      steps: stepsByGoal.get(goal.id) ?? [],
+      completions: completionsByGoal.get(goal.id) ?? [],
+      goalCreatedAt: goal.createdAt,
+      goalDueAt: goal.dueAt,
+      legacyTimeZone: listTimeZone,
+    }),
+  }));
+
+  return res.json({ goals: goalsWithProgress });
 });
 
 authRouter.get('/goals/:id', async (req: Request, res: Response) => {

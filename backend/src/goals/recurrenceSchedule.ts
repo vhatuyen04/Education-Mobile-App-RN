@@ -22,7 +22,20 @@
  */
 
 export const RECURRENCE_POLICY_VERSION = 'clamp-last-valid-day-v1' as const;
+export const RECURRENCE_START_POLICY = 'later-of-goal-and-step-created-at-v1' as const;
+export const CALENDAR_POLICY_VERSION = 'utc-midnight-civil-date-v1' as const;
 export const OPEN_ENDED_REPEAT_HORIZON = 100;
+
+/**
+ * Calendar-day policy utc-midnight-civil-date-v1:
+ * A new date-only value is stored as UTC midnight of that civil date.
+ * Readers take the UTC year-month-day and do not pass it through another zone.
+ * Any other timestamp is legacy. Its civil date is the calendar day in the
+ * caller-supplied zone, or the server-local calendar day when no zone is known.
+ * Legacy rows are not rewritten. An exact UTC midnight creation instant is
+ * indistinguishable from a civil-date encoding; application clocks almost
+ * never land on that millisecond.
+ */
 
 export type StoredSchedule = {
   dueAt?: Date | string | null;
@@ -77,11 +90,19 @@ export function scheduleWriteError(step: StoredSchedule): string | null {
   const repeat = normalizeRepeat(step.repeat);
   const hasDue = step.dueAt != null && step.dueAt !== '';
   if (hasDue && repeat && repeat !== 'once') return 'A step cannot have both a due date and a repeat';
-  if (repeat && !SUPPORTED_REPEATS.has(repeat)) return 'Use daily, weekly, monthly, yearly, or once';
-  if (repeat === 'once' && !hasDue) return 'A one-time step needs a due date';
-  if (repeat === 'weekly' && !isWeekdayIndex(step.repeatDay)) return 'Weekly steps need a weekday from Sun through Sat';
-  if (repeat === 'monthly' && !isMonthDayIndex(step.repeatDay)) return 'Monthly steps need a day from 1 through 31';
-  if (repeat === 'yearly' && !isCalendarMonthDay(step.repeatMonth, step.repeatDay)) return 'Yearly steps need a real month and day';
+  if (repeat && !SUPPORTED_REPEATS.has(repeat)) {
+    return 'Use daily, weekly:Mon, monthly:15, yearly:02-29, or once:2026-11-22, and try again.';
+  }
+  if (repeat === 'once' && !hasDue) return 'Pick a real date, such as once:2026-11-22, and try again.';
+  if (repeat === 'weekly' && !isWeekdayIndex(step.repeatDay)) {
+    return 'Pick a weekday from Monday through Sunday, such as weekly:Mon, and try again.';
+  }
+  if (repeat === 'monthly' && !isMonthDayIndex(step.repeatDay)) {
+    return 'Pick a day from 1 through 31, such as monthly:15, and try again.';
+  }
+  if (repeat === 'yearly' && !isCalendarMonthDay(step.repeatMonth, step.repeatDay)) {
+    return 'Pick a real month and day, such as yearly:02-29, and try again.';
+  }
   return null;
 }
 
@@ -96,7 +117,104 @@ export function expectedRepeatOccurrences(step: StoredSchedule, goalStart: Date,
   return countRepeatOccurrencesBetween(step, goalStart, goalDue);
 }
 
+export function isUtcMidnightInstant(value: Date): boolean {
+  return (
+    value.getUTCHours() === 0 &&
+    value.getUTCMinutes() === 0 &&
+    value.getUTCSeconds() === 0 &&
+    value.getUTCMilliseconds() === 0
+  );
+}
+
+export function utcMidnightFromCivil(civil: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(civil);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (month < 1 || month > 12 || day < 1 || day > daysInCivilMonth(year, month)) return null;
+  return new Date(Date.UTC(year, month - 1, day));
+}
+
+export function utcCivilDate(value: Date): string {
+  const month = String(value.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(value.getUTCDate()).padStart(2, '0');
+  return `${String(value.getUTCFullYear()).padStart(4, '0')}-${month}-${day}`;
+}
+
+export function localCivilDate(value: Date): string {
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${String(value.getFullYear()).padStart(4, '0')}-${month}-${day}`;
+}
+
+export function civilToLocalDay(civil: string): Date | null {
+  const utc = utcMidnightFromCivil(civil);
+  if (!utc) return null;
+  return new Date(utc.getUTCFullYear(), utc.getUTCMonth(), utc.getUTCDate());
+}
+
+export function tryTimeZone(timeZone: string | null | undefined): string | null {
+  const zone = String(timeZone ?? '').trim();
+  if (!zone) return null;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: zone }).format(new Date(0));
+  } catch {
+    return null;
+  }
+  return zone;
+}
+
+export function instantCivilDate(value: Date, timeZone?: string | null): string {
+  const zone = tryTimeZone(timeZone);
+  if (!zone) return localCivilDate(value);
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: zone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(value);
+  const year = parts.find(part => part.type === 'year')?.value;
+  const month = parts.find(part => part.type === 'month')?.value;
+  const day = parts.find(part => part.type === 'day')?.value;
+  if (!year || !month || !day) return localCivilDate(value);
+  return `${year.padStart(4, '0')}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+}
+
+/** Explicit civil dates stay on their UTC day. Legacy instants use the supplied zone. */
+export function storedInstantCivilDate(value: Date, legacyTimeZone?: string | null): string {
+  if (isUtcMidnightInstant(value)) return utcCivilDate(value);
+  return instantCivilDate(value, legacyTimeZone);
+}
+
+export function laterCivilDate(first: string, second: string | null | undefined): string {
+  if (!second || !utcMidnightFromCivil(second)) return first;
+  return second > first ? second : first;
+}
+
+export function hasScheduleConflict(step: StoredSchedule): boolean {
+  const repeat = normalizeRepeat(step.repeat);
+  const hasDue = step.dueAt != null && step.dueAt !== '';
+  return hasDue && !!repeat && repeat !== 'once';
+}
+
+export function isStepScheduledOnCivilDay(step: StoredSchedule, civilToday: string, legacyTimeZone?: string | null): boolean {
+  if (!utcMidnightFromCivil(civilToday) || hasScheduleConflict(step)) return false;
+  const repeat = normalizeRepeat(step.repeat);
+  if (!repeat || repeat === 'once') {
+    if (!step.dueAt) return false;
+    const due = new Date(step.dueAt);
+    if (Number.isNaN(due.getTime())) return false;
+    return storedInstantCivilDate(due, legacyTimeZone) === civilToday;
+  }
+  const noon = civilToLocalDay(civilToday);
+  if (!noon) return false;
+  noon.setHours(12, 0, 0, 0);
+  return isStepScheduledOnDay(step, noon);
+}
+
 export function isStepScheduledOnDay(step: StoredSchedule, now: Date): boolean {
+  if (hasScheduleConflict(step)) return false;
   const todayStart = startOfLocalDay(now);
   const todayEnd = endOfLocalDay(now);
   const repeat = normalizeRepeat(step.repeat);
@@ -189,6 +307,71 @@ export function countRepeatOccurrencesBetween(step: StoredSchedule, fromDay: Dat
   }
 
   return 0;
+}
+
+/**
+ * Goal progress is done occurrences divided by expected occurrences.
+ * Each scheduled day has equal weight. A goal with no deadline does not use
+ * this percentage. The 100-occurrence horizon stays inside
+ * expectedRepeatOccurrences for other callers.
+ * Edited schedules are read as they are saved now. There is no schedule history,
+ * so an older completion is judged against the latest saved schedule.
+ * This percentage is not the goal's completed flag.
+ */
+export function dashboardProgressPercent(args: {
+  steps: Array<StoredSchedule & { id: string; createdAt?: Date | string | null }>;
+  completions?: Array<{ stepId: string; date: Date | string }>;
+  goalCreatedAt: Date;
+  goalDueAt?: Date | string | null;
+  legacyTimeZone?: string | null;
+}): number {
+  if (!args.goalDueAt) return 0;
+  const goalDueCivil = storedInstantCivilDate(new Date(args.goalDueAt), args.legacyTimeZone);
+  const goalDueDay = civilToLocalDay(goalDueCivil);
+  if (!goalDueDay) return 0;
+  const goalCreatedCivil = instantCivilDate(new Date(args.goalCreatedAt), args.legacyTimeZone);
+  const stepsById = new Map(args.steps.map(step => [step.id, step]));
+  const bounds = new Map<string, { start: string; due: string }>();
+  let totalExpected = 0;
+
+  for (const step of args.steps) {
+    if (hasScheduleConflict(step)) continue;
+    const stepCreatedCivil = step.createdAt ? instantCivilDate(new Date(step.createdAt), args.legacyTimeZone) : null;
+    const startCivil = laterCivilDate(goalCreatedCivil, stepCreatedCivil);
+    const startDay = civilToLocalDay(startCivil);
+    if (!startDay) continue;
+    const repeat = normalizeRepeat(step.repeat);
+    let expected = 0;
+    if (step.dueAt && !repeat) {
+      const dueCivil = storedInstantCivilDate(new Date(step.dueAt), args.legacyTimeZone);
+      if (dueCivil >= startCivil && dueCivil <= goalDueCivil) expected = 1;
+    } else if (isDeterminateRepeat(step)) {
+      expected = expectedRepeatOccurrences(step, startDay, goalDueDay);
+    }
+    if (expected <= 0) continue;
+    totalExpected += expected;
+    bounds.set(step.id, { start: startCivil, due: goalDueCivil });
+  }
+
+  if (totalExpected <= 0) return 0;
+  const seen = new Set<string>();
+  let totalDone = 0;
+  for (const row of args.completions ?? []) {
+    const step = stepsById.get(row.stepId);
+    const window = bounds.get(row.stepId);
+    if (!step || !window) continue;
+    const date = new Date(row.date);
+    if (Number.isNaN(date.getTime())) continue;
+    const civil = storedInstantCivilDate(date, args.legacyTimeZone);
+    if (civil < window.start || civil > window.due) continue;
+    if (!isStepScheduledOnCivilDay(step, civil, args.legacyTimeZone)) continue;
+    const key = `${row.stepId}|${civil}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    totalDone += 1;
+  }
+
+  return Number((Math.min(totalDone / totalExpected, 1) * 100).toFixed(2));
 }
 
 function startOfLocalDay(d: Date): Date {

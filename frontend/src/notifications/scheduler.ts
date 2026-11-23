@@ -4,7 +4,16 @@ import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 
 import * as authApi from '../api/auth';
-import { nextReminderOccurrence, occurrenceIsOnOrBeforeGoalDue } from '../utils/recurrence';
+import { civilLabel, deviceCivilDate, localReminderInstant, nextReminderOccurrence, occurrenceIsOnOrBeforeGoalDue } from '../utils/recurrence';
+
+function laterDeviceCivil(goalCreatedAt?: string | null, stepCreatedAt?: string | null): string | null {
+  const labels = [goalCreatedAt, stepCreatedAt]
+    .filter((value): value is string => !!value)
+    .map(value => deviceCivilDate(new Date(value)))
+    .filter(value => /^\d{4}-\d{2}-\d{2}$/.test(value));
+  if (!labels.length) return null;
+  return labels.sort()[labels.length - 1];
+}
 import { appendInbox, rememberUnseen, getInbox } from './inbox';
 
 type CompoundBefore = { days?: number; hours?: number; minutes?: number };
@@ -302,7 +311,7 @@ export async function autoScheduleRemindersFromDashboard(dash: authApi.Dashboard
       }));
     }
     if (dash?.nextGoal?.dueAt) {
-      const due = new Date(dash.nextGoal.dueAt);
+      const due = localReminderInstant(new Date(dash.nextGoal.dueAt));
       if (!Number.isNaN(due.getTime())) {
         const fireAt = due.getTime() - compoundToMs(goalBefore);
         reminders.push(makeReminder({
@@ -319,7 +328,7 @@ export async function autoScheduleRemindersFromDashboard(dash: authApi.Dashboard
     for (const step of dash?.todaySteps ?? []) {
       if (step.doneToday) continue;
       const due = step.dueAt
-        ? new Date(String(step.dueAt))
+        ? localReminderInstant(new Date(String(step.dueAt)))
         : nextReminderOccurrence({ repeat: step.repeat, repeatDay: step.repeatDay, repeatMonth: step.repeatMonth });
       if (!due || Number.isNaN(due.getTime())) continue;
       const fireAt = due.getTime() - compoundToMs(stepBefore);
@@ -372,16 +381,20 @@ export async function autoScheduleRemindersForSignedInUser(opts?: { minIntervalM
       nextEvent: dash.nextEvent,
       todaySteps: stepGroups.flatMap(({ goal, steps }) =>
         steps.map(step => {
-          const rawDue = step.dueAt ? new Date(step.dueAt) : null;
+          const conflicting = !!step.dueAt && !!(step.repeat && step.repeat.trim());
+          const notBeforeCivil = laterDeviceCivil(goal.createdAt, step.createdAt);
+          const rawCandidate = step.dueAt ? localReminderInstant(new Date(step.dueAt)) : null;
+          const rawDue = rawCandidate && (!notBeforeCivil || civilLabel(rawCandidate) >= notBeforeCivil) ? rawCandidate : null;
           const repeatDue = !rawDue || rawDue.getTime() <= Date.now()
             ? nextReminderOccurrence({
                 repeat: step.repeat,
                 repeatDay: step.repeatDay,
                 repeatMonth: step.repeatMonth,
                 goalDueAt: goal.dueAt,
+                notBeforeCivil,
               })
             : null;
-          const picked = repeatDue ?? rawDue;
+          const picked = conflicting ? null : (repeatDue ?? rawDue);
           const due = picked && occurrenceIsOnOrBeforeGoalDue(picked, goal.dueAt) ? picked : null;
           return {
             id: step.id,
@@ -389,7 +402,7 @@ export async function autoScheduleRemindersForSignedInUser(opts?: { minIntervalM
             goalTitle: goal.title,
             text: step.text,
             dueAt: due ? due.toISOString() : null,
-            repeat: (step.repeat ?? null) as any,
+            repeat: conflicting ? null : (step.repeat ?? null) as any,
             repeatDay: step.repeatDay ?? null,
             repeatMonth: step.repeatMonth ?? null,
             doneToday: doneStepIds.has(step.id),

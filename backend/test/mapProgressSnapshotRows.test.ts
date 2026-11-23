@@ -91,3 +91,36 @@ test('stored rows become the regression snapshot only in the write-time zone', (
   assert.notEqual(utc.goal.createdAt, budapest.goal.createdAt);
   assert.match(STORED_TIMESTAMP_LIMITATION, /no stored time zone/i);
 });
+
+test('new date-only values stay on the written civil day in another zone', () => {
+  const mapped = mapStoredGoalToSnapshotInput({
+    goal: {
+      id: 'goal-1',
+      title: 'Date only',
+      createdAt: at('2026-11-22T00:00:00.000Z'),
+      dueAt: at('2026-11-30T00:00:00.000Z'),
+      completed: false,
+      failedAt: null,
+    },
+    steps: [
+      {
+        id: 'once',
+        order: 0,
+        text: 'Once',
+        description: null,
+        dueAt: at('2026-11-22T00:00:00.000Z'),
+        repeat: null,
+        repeatDay: null,
+        repeatMonth: null,
+        createdAt: at('2026-11-22T00:00:00.000Z'),
+      },
+    ],
+    completions: [{ stepId: 'once', date: at('2026-11-22T00:00:00.000Z') }],
+    timeZone: 'America/Los_Angeles',
+  });
+  assert.equal(mapped.goal.createdAt, '2026-11-21');
+  assert.equal(mapped.steps[0]?.createdAt, '2026-11-21');
+  assert.equal(mapped.goal.deadline, '2026-11-30');
+  assert.equal(mapped.steps[0]?.dueAt, '2026-11-22');
+  assert.equal(mapped.completions[0]?.date, '2026-11-22');
+});

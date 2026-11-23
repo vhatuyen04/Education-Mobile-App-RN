@@ -215,6 +215,7 @@ export type GoalItem = {
   rankField?: LeaderboardField | null;
   progressPct: number;
   dueAt: string | null;
+  createdAt?: string | null;
   completed: boolean;
   pointsAwarded?: number | null;
   xpAwarded?: number | null;
@@ -494,16 +495,28 @@ export type LeaderboardResponse = {
 };
 
 export async function getDashboard(accessToken: string): Promise<DashboardResponse> {
-  return getJsonAuth<DashboardResponse>('/auth/dashboard', accessToken);
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const clientToday = `${now.getFullYear()}-${month}-${day}`;
+  let timeZone = '';
+  try {
+    timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  } catch {
+    timeZone = '';
+  }
+  const params = new URLSearchParams({ clientToday });
+  if (timeZone) params.set('timeZone', timeZone);
+  return getJsonAuth<DashboardResponse>(`/auth/dashboard?${params.toString()}`, accessToken);
 }
 
 export async function toggleGoalStepCompletion(
   accessToken: string,
-  params: { goalId: string; stepId: string; dateIso: string; done: boolean }
+  params: { goalId: string; stepId: string; dateIso: string; done: boolean; timeZone?: string }
 ): Promise<{ ok: true }> {
   return postJsonAuth<{ ok: true }>(
     `/auth/goals/${encodeURIComponent(params.goalId)}/steps/${encodeURIComponent(params.stepId)}/completion`,
-    { date: params.dateIso, done: params.done },
+    { date: params.dateIso, done: params.done, ...(params.timeZone ? { timeZone: params.timeZone } : null) },
     accessToken
   );
 }
@@ -541,6 +554,12 @@ export async function listGoals(accessToken: string, opts?: { includeDeleted?: b
   const sp = new URLSearchParams();
   if (opts?.includeDeleted) sp.set('includeDeleted', '1');
   if (opts?.includeFailed) sp.set('includeFailed', '1');
+  try {
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    if (timeZone) sp.set('timeZone', timeZone);
+  } catch {
+    // The server uses its own calendar day when the device zone is unavailable.
+  }
   const qs = sp.toString();
   return getJsonAuth<{ goals: GoalItem[] }>(`/auth/goals${qs ? `?${qs}` : ''}`, accessToken);
 }
@@ -601,6 +620,7 @@ export type GoalStepItem = {
   repeat: string | null;
   repeatDay: number | null;
   repeatMonth: number | null;
+  createdAt?: string | null;
 };
 
 export async function listGoalSteps(accessToken: string, goalId: string): Promise<{ steps: GoalStepItem[] }> {

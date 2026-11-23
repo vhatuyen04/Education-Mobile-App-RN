@@ -200,7 +200,8 @@ export function TodayDetailsScreen() {
       await authApi.toggleGoalStepCompletion(token, {
         goalId: item.goalId,
         stepId: item.id,
-        dateIso: new Date().toISOString(),
+        dateIso: new Date(Date.UTC(new Date().getFullYear(), new Date().getMonth(), new Date().getDate())).toISOString(),
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         done: !item.doneToday,
       });
       await refresh();
