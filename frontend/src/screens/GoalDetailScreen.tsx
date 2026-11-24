@@ -20,7 +20,10 @@ import { isAppGoal, markAppGoal, unmarkAppGoal } from '../motivation/appGoals';
 import { getFailedReason, type FailedReason } from '../motivation/failedGoals';
 import { appendScorePoint } from '../motivation/scoreHistory';
 import type { RootStackParamList } from '../navigation/types';
+import { ScheduleField } from '../components/ScheduleField';
+import { SchedulePickerModal } from '../components/SchedulePickerModal';
 import { legacyScheduleNote, parseScheduleShortText, scheduleDraftError, scheduleToShortText, stepDateAfterGoalError, stepOutsideActiveRangeError, storedScheduleError } from '../utils/stepSchedule';
+import { compactScheduleLabel, scheduleRange } from '../utils/schedulePicker';
 import { civilLabel, deadlineError, deadlineRetryMessage, utcMidnightIsoFromCivilText } from '../utils/recurrence';
 import { DELETE_STEP_MESSAGE, readDurationMinutes, schedulePhrase } from '../utils/stepLifecycle';
 import { autoScheduleRemindersForSignedInUser } from '../notifications/scheduler';
@@ -94,6 +97,7 @@ export function GoalDetailScreen() {
   const [completeConfirmOpen, setCompleteConfirmOpen] = useState(false);
   const [stepConfirmOpen, setStepConfirmOpen] = useState(false);
   const [deleteStepId, setDeleteStepId] = useState<string | null>(null);
+  const [scheduleEditId, setScheduleEditId] = useState<string | null>(null);
 
   const completeConfirmKey = useMemo(() => {
     const id = String(goalId ?? '').trim();
@@ -598,12 +602,11 @@ export function GoalDetailScreen() {
                         <TextInput value={s.text} onChangeText={t2 => setStepText(s.id, t2)} editable={!completed} placeholderTextColor={colors.muted} multiline textAlignVertical="top" style={styles.stepInput} />
                         <Text style={[styles.stepLabel, { marginTop: 6 }]}>Description</Text>
                         <TextInput value={s.description} onChangeText={t2 => setStepDescription(s.id, t2)} editable={!completed} placeholder="Optional" placeholderTextColor={colors.muted} multiline textAlignVertical="top" style={styles.stepInput} />
-                        <Text style={[styles.stepLabel, { marginTop: 6 }]}>Schedule</Text>
-                        <TextInput value={s.scheduleText} onChangeText={t2 => setStepScheduleText(s.id, t2)} editable={!completed} placeholder="once:YYYY-MM-DD" placeholderTextColor={colors.muted} autoCapitalize="none" autoCorrect={false} style={styles.stepScheduleInput} />
+                        <ScheduleField value={s.scheduleText} onPress={() => setScheduleEditId(s.id)} editable={!completed} />
                         <Text style={[styles.stepLabel, { marginTop: 6 }]}>Minutes (optional)</Text>
                         <TextInput value={s.durationText} onChangeText={t2 => setStepDuration(s.id, t2)} editable={!completed} placeholder="25" placeholderTextColor={colors.muted} keyboardType="number-pad" style={styles.stepScheduleInput} />
                         {s.scheduleWarning ? <Text style={[styles.stepLabel, { marginTop: 4 }]}>{s.scheduleWarning}</Text> : null}
-                        <Text style={styles.meta}>{[s.text.trim() || 'Untitled', s.description.trim() || 'No description', s.scheduleText.trim() || 'No schedule', shownDuration(s.durationText)].filter(Boolean).join(' · ')}</Text>
+                        <Text style={styles.meta}>{[s.text.trim() || 'Untitled', s.description.trim() || 'No description', compactScheduleLabel(s.scheduleText), shownDuration(s.durationText)].filter(Boolean).join(' · ')}</Text>
                       </>
                     )}
                   </View>
@@ -636,7 +639,7 @@ export function GoalDetailScreen() {
             <Text style={styles.sheetTitle}>Save new steps</Text>
             <Text style={styles.meta}>These fields stay as entered. Replacing a saved step later archives it and starts a new one.</Text>
             {steps.filter(step => !step.serverId && step.text.trim()).map(step => (
-              <Text key={step.id} style={styles.meta}>{[step.text.trim(), step.description.trim() || 'No description', step.scheduleText.trim() || 'No schedule', shownDuration(step.durationText)].filter(Boolean).join(' · ')}</Text>
+              <Text key={step.id} style={styles.meta}>{[step.text.trim(), step.description.trim() || 'No description', compactScheduleLabel(step.scheduleText), shownDuration(step.durationText)].filter(Boolean).join(' · ')}</Text>
             ))}
             <View style={styles.rowEnd}>
               <Button title="Cancel" onPress={() => setStepConfirmOpen(false)} />
@@ -713,6 +716,16 @@ export function GoalDetailScreen() {
           </View>
         </View>
       </Modal>
+      <SchedulePickerModal
+        visible={scheduleEditId != null}
+        initialText={steps.find(step => step.id === scheduleEditId)?.scheduleText ?? ''}
+        range={scheduleRange(dueAt)}
+        onCancel={() => setScheduleEditId(null)}
+        onConfirm={text => {
+          if (scheduleEditId) setStepScheduleText(scheduleEditId, text);
+          setScheduleEditId(null);
+        }}
+      />
     </Screen>
   );
 }

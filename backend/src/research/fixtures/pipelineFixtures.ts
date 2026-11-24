@@ -184,6 +184,7 @@ function step(input: {
     effectiveFrom: null,
     effectiveUntil: null,
     replacesStepId: null,
+    customDates: [],
     done: false,
     createdAt,
     updatedAt: input.updatedAt ?? createdAt,

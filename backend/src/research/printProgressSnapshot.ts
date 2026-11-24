@@ -61,6 +61,7 @@ async function main() {
       repeat: true,
       repeatDay: true,
       repeatMonth: true,
+      customDates: true,
       createdAt: true,
       archivedAt: true,
       effectiveFrom: true,

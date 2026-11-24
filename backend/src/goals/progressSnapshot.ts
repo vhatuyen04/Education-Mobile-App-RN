@@ -28,6 +28,7 @@ import {
   RECURRENCE_START_POLICY,
   clampedMonthDay,
   isCalendarMonthDay,
+  prepareCustomDates,
 } from './recurrenceSchedule.js';
 
 export const SNAPSHOT_VERSION = '0.1' as const;
@@ -57,6 +58,7 @@ export type SnapshotSchedule =
   | { type: 'repeat'; repeat: 'weekly'; repeatDay: number }
   | { type: 'repeat'; repeat: 'monthly'; repeatDay: number }
   | { type: 'repeat'; repeat: 'yearly'; repeatMonth: number; repeatDay: number }
+  | { type: 'custom'; dates: CivilDateString[] }
   | { type: 'none' };
 
 export type ProgressSnapshotGoal = {
@@ -77,6 +79,8 @@ export type ProgressSnapshotStep = {
   repeat: string | null;
   repeatDay: number | null;
   repeatMonth: number | null;
+  /** Explicit YYYY-MM-DD occurrences when repeat is custom. */
+  customDates?: string[] | null;
   /** Civil creation date. Omitted means the goal creation date is the start. */
   createdAt?: CivilDateString | null;
   /** Inclusive first civil date for a replacement. Omitted on an ordinary step. */
@@ -200,7 +204,8 @@ type DefiniteSchedule =
   | { kind: 'daily' }
   | { kind: 'weekly'; repeatDay: number }
   | { kind: 'monthly'; repeatDay: number }
-  | { kind: 'yearly'; repeatMonth: number; repeatDay: number };
+  | { kind: 'yearly'; repeatMonth: number; repeatDay: number }
+  | { kind: 'custom'; dates: string[] };
 
 type ClassifiedStep = {
   step: ProgressSnapshotStep;
@@ -433,6 +438,13 @@ function classifySchedule(step: ProgressSnapshotStep): {
     }
     return { schedule: { kind: 'monthly', repeatDay: step.repeatDay }, ambiguity: null, occurrenceStatus: 'scheduled' };
   }
+  if (repeat === 'custom') {
+    const prepared = prepareCustomDates(step.customDates ?? []);
+    if (!prepared.ok || prepared.dates.length === 0) {
+      return { schedule: null, ambiguity: 'custom_dates_invalid', occurrenceStatus: 'ambiguous' };
+    }
+    return { schedule: { kind: 'custom', dates: prepared.dates }, ambiguity: null, occurrenceStatus: 'scheduled' };
+  }
   if (repeat === 'yearly') {
     if (!isMonth(step.repeatMonth) || !isMonthDay(step.repeatDay)) {
       return { schedule: null, ambiguity: 'yearly_missing_month_or_day', occurrenceStatus: 'ambiguous' };
@@ -487,6 +499,12 @@ function lifecycleBounds(step: ProgressSnapshotStep, goalCreated: Civil, deadlin
 
 function scheduledOn(schedule: DefiniteSchedule, date: Civil, createdAt: Civil, deadline: Civil | null): boolean {
   if (schedule.kind === 'once') return sameCivil(schedule.due, date);
+  if (schedule.kind === 'custom') {
+    if (!schedule.dates.includes(formatCivil(date))) return false;
+    if (compareCivil(date, createdAt) < 0) return false;
+    if (deadline && compareCivil(date, deadline) > 0) return false;
+    return true;
+  }
   if (compareCivil(date, createdAt) < 0) return false;
   if (deadline && compareCivil(date, deadline) > 0) return false;
   if (schedule.kind === 'daily') return true;
@@ -516,6 +534,7 @@ function toPublicSchedule(item: ClassifiedStep): SnapshotSchedule {
   if (schedule.kind === 'daily') return { type: 'repeat', repeat: 'daily' };
   if (schedule.kind === 'weekly') return { type: 'repeat', repeat: 'weekly', repeatDay: schedule.repeatDay };
   if (schedule.kind === 'monthly') return { type: 'repeat', repeat: 'monthly', repeatDay: schedule.repeatDay };
+  if (schedule.kind === 'custom') return { type: 'custom', dates: schedule.dates };
   return { type: 'repeat', repeat: 'yearly', repeatMonth: schedule.repeatMonth, repeatDay: schedule.repeatDay };
 }
 

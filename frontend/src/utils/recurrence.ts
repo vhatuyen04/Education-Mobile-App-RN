@@ -13,6 +13,7 @@ export type RepeatFields = {
   repeat?: string | null;
   repeatDay?: number | null;
   repeatMonth?: number | null;
+  customDates?: string[] | null;
 };
 
 const MONTH_MAX_DAY = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
@@ -203,6 +204,17 @@ export function nextReminderOccurrence(
       if (afterGoalDue(cand, goalDueAt)) return null;
       if (cand.getTime() > now.getTime()) return cand;
       year += 1;
+    }
+    return null;
+  }
+
+  if (repeat === 'custom') {
+    const dates = [...(params.customDates ?? [])].filter(date => /^\d{4}-\d{2}-\d{2}$/.test(date)).sort();
+    for (const date of dates) {
+      const [year, month, day] = date.split('-').map(Number);
+      const cand = endOfCivilDay(year, (month ?? 1) - 1, day ?? 1);
+      if (cand.getTime() <= now.getTime()) continue;
+      return afterGoalDue(cand, goalDueAt) ? null : cand;
     }
     return null;
   }

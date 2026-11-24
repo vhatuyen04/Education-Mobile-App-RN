@@ -36,6 +36,7 @@ export type StoredStepRow = {
   repeat: string | null;
   repeatDay: number | null;
   repeatMonth: number | null;
+  customDates?: string[] | null;
   createdAt?: Date | null;
   archivedAt?: Date | null;
   effectiveFrom?: Date | null;
@@ -74,6 +75,7 @@ export function mapStoredGoalToSnapshotInput(input: {
       repeat: step.repeat,
       repeatDay: step.repeatDay,
       repeatMonth: step.repeatMonth,
+      ...(step.customDates && step.customDates.length ? { customDates: [...step.customDates] } : {}),
       createdAt: step.createdAt ? civilDateInTimeZone(step.createdAt, timeZone) : null,
       ...(step.effectiveFrom ? { effectiveFrom: storedInstantCivilDate(step.effectiveFrom, timeZone) } : {}),
       ...(step.effectiveUntil ? { effectiveUntil: storedInstantCivilDate(step.effectiveUntil, timeZone) } : {}),

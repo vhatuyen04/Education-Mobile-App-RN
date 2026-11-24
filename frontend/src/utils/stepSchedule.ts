@@ -6,7 +6,13 @@ export type StepScheduleFields = {
   repeat?: string | null;
   repeatDay?: number | null;
   repeatMonth?: number | null;
+  customDates?: string[] | null;
 };
+
+export const CUSTOM_DATES_LIMIT = 2000;
+export const CUSTOM_DATES_EMPTY = 'Select at least one date, and try again.';
+export const CUSTOM_DATES_DUPLICATE = 'Each date can be selected only once. Remove the duplicate, and try again.';
+export const CUSTOM_DATES_INVALID = 'Pick a real calendar date, such as 2028-02-29, and try again.';
 
 export const DAILY_SCHEDULE_RETRY = 'Use daily by itself, with no extra text, and try again.';
 export const WEEKLY_SCHEDULE_RETRY = 'Pick a weekday from Monday through Sunday, such as weekly:Mon, and try again.';
@@ -32,7 +38,12 @@ function ymdFromStored(value: string): { y: number; m: number; d: number } | nul
   return { y: parsed.getFullYear(), m: parsed.getMonth() + 1, d: parsed.getDate() };
 }
 
-export function scheduleToShortText(step: Pick<GoalStepItem, 'dueAt' | 'repeat' | 'repeatDay' | 'repeatMonth'>): string {
+export function scheduleToShortText(step: Pick<GoalStepItem, 'dueAt' | 'repeat' | 'repeatDay' | 'repeatMonth'> & { customDates?: string[] | null }): string {
+  const repeatName = (step.repeat ?? '').trim().toLowerCase();
+  if (repeatName === 'custom') {
+    const dates = normalizedCustomDates(step.customDates);
+    return dates.length ? `custom:${dates.join(',')}` : 'custom:';
+  }
   if (step.dueAt) {
     const parts = ymdFromStored(step.dueAt);
     if (!parts) return 'once:';
@@ -92,6 +103,14 @@ export function parseScheduleShortText(input: string): StepScheduleFields {
     return { dueAt: null, repeat: 'monthly', repeatDay: Number.isFinite(day) ? day : null, repeatMonth: null };
   }
 
+  if (lower === 'custom' || lower === 'custom:') {
+    return { dueAt: null, repeat: 'custom', repeatDay: null, repeatMonth: null, customDates: [] };
+  }
+  if (lower.startsWith('custom:')) {
+    const dates = raw.slice(7).split(',').map(part => part.trim()).filter(Boolean);
+    return { dueAt: null, repeat: 'custom', repeatDay: null, repeatMonth: null, customDates: dates };
+  }
+
   if (lower === 'yearly') return { dueAt: null, repeat: 'yearly', repeatDay: null, repeatMonth: null };
   if (lower.startsWith('yearly:')) {
     const tok = raw.slice(7).trim();
@@ -129,6 +148,7 @@ export function describeStepSchedule(step: StepScheduleFields): string {
     }
     return 'Monthly, day missing';
   }
+  if (repeat === 'custom') return customDatesSummary(step.customDates ?? []);
   if (repeat === 'yearly') {
     if (yearlyMonthDayCanOccur(Number(step.repeatMonth), Number(step.repeatDay))) {
       return `Every year on ${String(step.repeatMonth).padStart(2, '0')}-${String(step.repeatDay).padStart(2, '0')}`;
@@ -149,7 +169,8 @@ export function legacyScheduleNote(step: StepScheduleFields & { dueAt?: string |
   if (repeat === 'yearly' && !yearlyMonthDayCanOccur(Number(step.repeatMonth), Number(step.repeatDay))) {
     return YEARLY_SCHEDULE_RETRY;
   }
-  if (!['daily', 'weekly', 'monthly', 'yearly', 'once'].includes(repeat)) {
+  if (repeat === 'custom') return customDatesError(step.customDates);
+  if (!['daily', 'weekly', 'monthly', 'yearly', 'once', 'custom'].includes(repeat)) {
     return SCHEDULE_FORMAT_RETRY;
   }
   return null;
@@ -162,10 +183,15 @@ function yearlyMonthDayCanOccur(month: number, day: number): boolean {
   return month >= 1 && month <= 12 && day >= 1 && day <= YEARLY_MAX_DAY[month - 1];
 }
 
-const SUPPORTED_REPEATS = new Set(['daily', 'weekly', 'monthly', 'yearly', 'once']);
+const SUPPORTED_REPEATS = new Set(['daily', 'weekly', 'monthly', 'yearly', 'once', 'custom']);
 
 export function storedScheduleError(fields: StepScheduleFields): string | null {
   const repeat = (fields.repeat ?? '').trim().toLowerCase();
+  const datesError = customDatesError(fields.customDates);
+  if (datesError && (repeat === 'custom' || (fields.customDates?.length ?? 0) > 0)) return datesError;
+  if ((fields.customDates?.length ?? 0) > 0 && repeat !== 'custom') return 'A step cannot combine custom dates with another schedule';
+  if (repeat === 'custom' && fields.dueAt) return 'A step cannot have both a due date and custom dates';
+  if (repeat === 'custom' && normalizedCustomDates(fields.customDates).length === 0) return CUSTOM_DATES_EMPTY;
   if (fields.dueAt && repeat && repeat !== 'once') return 'A step cannot have both a due date and a repeat';
   if (repeat && !SUPPORTED_REPEATS.has(repeat)) return SCHEDULE_FORMAT_RETRY;
   if (repeat === 'weekly') {
@@ -204,6 +230,19 @@ export function stepOutsideActiveRangeError(
     ? `The step date must fall between today and the goal deadline. Pick a date from ${todayCivil} through ${goalDay}, and try again.`
     : `The step date cannot be earlier than today. Pick a date on or after ${todayCivil}, and try again.`;
   if (due && (!repeat || repeat === 'once')) return due < todayCivil ? message : null;
+  if (repeat === 'custom') {
+    const dates = normalizedCustomDates(step.customDates);
+    if (!dates.length) return null;
+    const later = goalDay
+      ? `The step date cannot be later than the goal deadline. Pick a date on or before ${goalDay}, and try again.`
+      : null;
+    for (const date of dates) {
+      if (!isRealCivilDate(date)) return CUSTOM_DATES_INVALID;
+      if (date < todayCivil) return message;
+      if (later && goalDay && date > goalDay) return later;
+    }
+    return null;
+  }
   if (!goalDay || !['daily', 'weekly', 'monthly', 'yearly'].includes(repeat)) return null;
   if (goalDay < todayCivil) return message;
   const start = civilToLocalDate(todayCivil);
@@ -273,6 +312,11 @@ export function scheduleDraftError(input: string): string | null {
     return null;
   }
 
+  if (lower === 'custom' || lower === 'custom:') return CUSTOM_DATES_EMPTY;
+  if (lower.startsWith('custom:')) {
+    return customDatesError(raw.slice(7).split(',').map(part => part.trim()).filter(Boolean)) ?? (raw.slice(7).split(',').some(part => part.trim()) ? null : CUSTOM_DATES_EMPTY);
+  }
+
   if (lower.startsWith('yearly:')) {
     const m = raw.slice(7).trim().match(/^(\d{1,2})\s*[-/.,]\s*(\d{1,2})$/);
     if (!m) return YEARLY_SCHEDULE_RETRY;
@@ -285,4 +329,56 @@ export function scheduleDraftError(input: string): string | null {
   }
 
   return SCHEDULE_FORMAT_RETRY;
+}
+
+export function isRealCivilDate(value: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (month < 1 || month > 12) return false;
+  return day >= 1 && day <= new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+export function customDatesError(input?: string[] | null): string | null {
+  if (input == null) return null;
+  if (input.length > CUSTOM_DATES_LIMIT) return `Select at most ${CUSTOM_DATES_LIMIT} dates, and try again.`;
+  const seen = new Set<string>();
+  for (const value of input) {
+    const date = String(value ?? '').trim();
+    if (!isRealCivilDate(date)) return CUSTOM_DATES_INVALID;
+    if (seen.has(date)) return CUSTOM_DATES_DUPLICATE;
+    seen.add(date);
+  }
+  return null;
+}
+
+export function normalizedCustomDates(input?: string[] | null): string[] {
+  if (!input?.length || customDatesError(input)) return [];
+  return [...new Set(input.map(date => date.trim()))].sort();
+}
+
+export function toggleCustomDate(dates: string[], date: string): string[] {
+  if (!isRealCivilDate(date)) return normalizedCustomDates(dates);
+  const next = dates.includes(date) ? dates.filter(item => item !== date) : [...dates, date];
+  return normalizedCustomDates(next);
+}
+
+export function customDatesText(dates: string[]): string {
+  const clean = normalizedCustomDates(dates);
+  return clean.length ? `custom:${clean.join(',')}` : 'custom:';
+}
+
+export function isCustomDateDisabled(date: string, today: string, goalDue?: string | null): boolean {
+  if (!isRealCivilDate(date) || !isRealCivilDate(today)) return true;
+  if (date < today) return true;
+  return !!goalDue && isRealCivilDate(goalDue) && date > goalDue;
+}
+
+export function customDatesSummary(dates: string[]): string {
+  const clean = normalizedCustomDates(dates);
+  if (!clean.length) return 'Custom schedule · no dates';
+  if (clean.length === 1) return `Custom schedule · 1 date · ${clean[0]}`;
+  return `Custom schedule · ${clean.length} dates · ${clean[0]} – ${clean[clean.length - 1]}`;
 }

@@ -612,6 +612,7 @@ export async function createGoalStep(
     repeat?: string | null;
     repeatDay?: number | null;
     repeatMonth?: number | null;
+    customDates?: string[] | null;
     durationMinutes?: number | null;
   }
 ): Promise<{ step: { id: string } }>
@@ -629,6 +630,7 @@ export type GoalStepItem = {
   repeat: string | null;
   repeatDay: number | null;
   repeatMonth: number | null;
+  customDates?: string[] | null;
   durationMinutes?: number | null;
   createdAt?: string | null;
   archivedAt?: string | null;
@@ -700,6 +702,7 @@ export async function replaceGoalStep(
     repeat?: string | null;
     repeatDay?: number | null;
     repeatMonth?: number | null;
+    customDates?: string[] | null;
     durationMinutes?: number | null;
   }
 ): Promise<{ step: GoalStepItem; archivedStepId: string }> {

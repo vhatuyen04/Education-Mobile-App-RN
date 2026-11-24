@@ -5,6 +5,7 @@ export type ScheduleStep = {
   repeat?: string | null;
   repeatDay?: number | null;
   repeatMonth?: number | null;
+  customDates?: string[] | null;
 };
 
 export type OccurrenceWindow = {
@@ -96,6 +97,7 @@ function scheduledOnOrBefore(step: ScheduleStep, window: OccurrenceWindow, cap: 
   const end = window.end && window.end < cap ? window.end : cap;
   if (end < window.start) return null;
   const repeat = normalize(step.repeat);
+  if (repeat === 'custom') return lastCustomDate(step, window.start, end);
   if (!repeat || repeat === 'once') {
     const due = dueCivil(step.dueAt);
     return due && due >= window.start && due <= end ? due : null;
@@ -120,6 +122,7 @@ function scheduledOnOrAfter(step: ScheduleStep, window: OccurrenceWindow, floor:
   if (window.end && floor > window.end) return null;
   const start = floor < window.start ? window.start : floor;
   const repeat = normalize(step.repeat);
+  if (repeat === 'custom') return firstCustomDate(step, start, window.end);
   if (!repeat || repeat === 'once') {
     const due = dueCivil(step.dueAt);
     return due && due >= start && (window.end == null || due <= window.end) ? due : null;
@@ -199,6 +202,7 @@ function yearlyOnOrAfter(start: string, end: string | null, repeatMonth: number,
 function isScheduled(step: ScheduleStep, civilDate: string): boolean {
   if (!parseCivil(civilDate).year || hasConflict(step)) return false;
   const repeat = normalize(step.repeat);
+  if (repeat === 'custom') return customDateList(step).includes(civilDate);
   if (!repeat || repeat === 'once') return dueCivil(step.dueAt) === civilDate;
   if (repeat === 'daily') return true;
   if (repeat === 'weekly') return isWeekday(step.repeatDay) && weekday(civilDate) === step.repeatDay;
@@ -215,6 +219,30 @@ function isScheduled(step: ScheduleStep, civilDate: string): boolean {
     return parts.month === pair.month && parts.day === Math.min(pair.day, daysInMonth(parts.year, parts.month));
   }
   return false;
+}
+
+function customDateList(step: ScheduleStep): string[] {
+  if (normalize(step.repeat) !== 'custom' || !step.customDates) return [];
+  return [...new Set(step.customDates.filter(date => /^\d{4}-\d{2}-\d{2}$/.test(date)))].sort();
+}
+
+function lastCustomDate(step: ScheduleStep, start: string, end: string): string | null {
+  let pick: string | null = null;
+  for (const date of customDateList(step)) {
+    if (date < start) continue;
+    if (date > end) break;
+    pick = date;
+  }
+  return pick;
+}
+
+function firstCustomDate(step: ScheduleStep, start: string, end: string | null): string | null {
+  for (const date of customDateList(step)) {
+    if (date < start) continue;
+    if (end && date > end) return null;
+    return date;
+  }
+  return null;
 }
 
 function hasConflict(step: ScheduleStep): boolean {

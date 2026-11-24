@@ -1,3 +1,5 @@
+import { compactCustomLabel } from './schedulePicker';
+
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'] as const;
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'] as const;
 
@@ -27,9 +29,11 @@ export function schedulePhrase(step: {
   repeat?: string | null;
   repeatDay?: number | null;
   repeatMonth?: number | null;
+  customDates?: string[] | null;
   scheduleText?: string | null;
 }): string {
   const repeat = String(step.repeat ?? '').trim().toLowerCase();
+  if (repeat === 'custom') return compactCustomLabel(step.customDates ?? []);
   if (repeat === 'daily') return 'Every day';
   if (repeat === 'weekly' && step.repeatDay != null && step.repeatDay >= 0 && step.repeatDay <= 6) {
     return `Every ${WEEKDAYS[step.repeatDay]}`;
@@ -81,6 +85,7 @@ export function stepOverviewFacts(input: {
     repeat?: string | null;
     repeatDay?: number | null;
     repeatMonth?: number | null;
+    customDates?: string[] | null;
     durationMinutes?: number | null;
     scheduleText?: string | null;
   };

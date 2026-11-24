@@ -7,6 +7,8 @@ import { Button } from './Button';
 import { Card } from './Card';
 import { Pill } from './Pill';
 import { Step } from './StepEditorList';
+import { ScheduleField } from './ScheduleField';
+import { SchedulePickerModal } from './SchedulePickerModal';
 import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
 import { useSettings } from '../settings/SettingsContext';
@@ -14,7 +16,8 @@ import * as authApi from '../api/auth';
 import { markAppGoal } from '../motivation/appGoals';
 import { previewRewardsForDeadline } from '../motivation/deadlineDifficulty';
 import { countRepeatOccurrencesUntilDeadline, deadlineRetryMessage, realCivilDate } from '../utils/recurrence';
-import { scheduleDraftError, stepDateAfterGoalError, stepOutsideActiveRangeError, storedScheduleError } from '../utils/stepSchedule';
+import { parseScheduleShortText as parseStoredSchedule, scheduleDraftError, stepDateAfterGoalError, stepOutsideActiveRangeError, storedScheduleError } from '../utils/stepSchedule';
+import { scheduleRange } from '../utils/schedulePicker';
 
 type Props = {
   visible: boolean;
@@ -90,15 +93,17 @@ function isMeaningfulStepText(t: unknown) {
 
 type PlannerStep = Step & { schedule?: authApi.AiGoalStepSchedule; scheduleText?: string; description?: string };
 
-const SCHEDULE_FORMATS = 'One full value:\ndaily\nweekly:Mon\nmonthly:DD\nyearly:MM-DD\nonce:YYYY-MM-DD';
-
 function plannerStepWrite(step: PlannerStep, order: number): { error: string | null; body: any } {
   const text = step.text.trim();
   const description = String(step.description ?? '').trim() || null;
   const scheduleText = String(step.scheduleText ?? '').trim();
+  const stored = scheduleText ? parseStoredSchedule(scheduleText) : null;
   const schedule = scheduleText ? parseScheduleShortText(scheduleText) : (step.schedule ?? { type: 'none' });
   const body: any = { text, order, description };
-  if (schedule.type === 'once') {
+  if (stored?.repeat === 'custom') {
+    body.repeat = 'custom';
+    body.customDates = stored.customDates ?? [];
+  } else if (schedule.type === 'once') {
     const due = parseYmd(schedule.due);
     if (due) {
       due.setHours(23, 59, 59, 999);
@@ -116,6 +121,7 @@ function plannerStepWrite(step: PlannerStep, order: number): { error: string | n
       repeat: body.repeat ?? null,
       repeatDay: body.repeatDay ?? null,
       repeatMonth: body.repeatMonth ?? null,
+      customDates: body.customDates ?? null,
     });
   return { error, body };
 }
@@ -385,6 +391,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
   const [goalXpAwarded, setGoalXpAwarded] = useState<number | null>(null);
   const [goalRankingEligible, setGoalRankingEligible] = useState(false);
   const [steps, setSteps] = useState<PlannerStep[]>([]);
+  const [scheduleEditId, setScheduleEditId] = useState<string | null>(null);
 
   const displaySteps = useMemo(() => sanitizePlannerSteps(steps), [steps]);
   const stepCount = displaySteps.length;
@@ -436,6 +443,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
   }
 
   const closeModal = useCallback(() => {
+    setScheduleEditId(null);
     onClose();
   }, [onClose]);
 
@@ -706,8 +714,12 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
     }
   }
 
+  const editingStep = steps.find(step => step.id === scheduleEditId);
+  const scheduleDeadline = deadline.trim() || goalDeadline || null;
+
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={closeModal}>
+    <>
+    <Modal visible={visible && scheduleEditId == null} transparent animationType="slide" onRequestClose={closeModal}>
       <View style={styles.backdrop}>
         <Pressable style={StyleSheet.absoluteFill} onPress={closeModal} />
 
@@ -898,24 +910,10 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
                             multiline
                             style={styles.input}
                           />
-                          <Text style={styles.stepLabel}>Schedule</Text>
-                          <TextInput
+                          <ScheduleField
                             value={s.scheduleText ?? scheduleToShortText(s.schedule)}
-                            onChangeText={t => {
-                              setSteps(prev =>
-                                prev.map(p => {
-                                  if (p.id !== s.id) return p;
-                                  return { ...p, scheduleText: t, schedule: parseScheduleShortText(t) };
-                                })
-                              );
-                            }}
-                            placeholder="once:YYYY-MM-DD"
-                            placeholderTextColor={colors.muted}
-                            autoCapitalize="none"
-                            autoCorrect={false}
-                            style={styles.input}
+                            onPress={() => setScheduleEditId(s.id)}
                           />
-                          <Text style={styles.mutedSmall}>{SCHEDULE_FORMATS}</Text>
                         </View>
                       ))}
                     </View>
@@ -934,6 +932,24 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
         </View>
       </View>
     </Modal>
+    <SchedulePickerModal
+      visible={visible && scheduleEditId != null}
+      initialText={editingStep?.scheduleText ?? scheduleToShortText(editingStep?.schedule)}
+      range={scheduleRange(scheduleDeadline)}
+      onCancel={() => setScheduleEditId(null)}
+      onConfirm={text => {
+        if (scheduleEditId) {
+          setSteps(prev => prev.map(step => (
+            step.id === scheduleEditId
+              ? { ...step, scheduleText: text, schedule: parseScheduleShortText(text) }
+              : step
+          )));
+          setDirty(true);
+        }
+        setScheduleEditId(null);
+      }}
+    />
+    </>
   );
 }
 

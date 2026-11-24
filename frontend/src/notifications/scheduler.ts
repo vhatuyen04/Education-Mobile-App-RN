@@ -393,6 +393,7 @@ export async function autoScheduleRemindersForSignedInUser(opts?: { minIntervalM
                 repeat: step.repeat,
                 repeatDay: step.repeatDay,
                 repeatMonth: step.repeatMonth,
+                customDates: step.customDates,
                 goalDueAt: goal.dueAt,
                 notBeforeCivil,
               })

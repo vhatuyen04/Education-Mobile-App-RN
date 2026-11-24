@@ -1,0 +1,1 @@
+ALTER TABLE "GoalStep" ADD COLUMN "customDates" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];

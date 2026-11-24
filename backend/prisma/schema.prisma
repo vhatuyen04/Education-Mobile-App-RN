@@ -164,6 +164,7 @@ model GoalStep {
   effectiveFrom DateTime?
   effectiveUntil DateTime?
   replacesStepId String?
+  customDates String[] @default([])
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

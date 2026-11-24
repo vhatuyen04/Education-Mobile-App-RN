@@ -6,6 +6,8 @@ import { Screen } from '../components/Screen';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { Pill } from '../components/Pill';
+import { ScheduleField } from '../components/ScheduleField';
+import { SchedulePickerModal } from '../components/SchedulePickerModal';
 import { colors } from '../theme/colors';
 import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
@@ -16,7 +18,8 @@ import { removeInboxItemsByRecoId } from '../notifications/inbox';
 import { markAppGoal } from '../motivation/appGoals';
 import { previewRewardsForDeadline } from '../motivation/deadlineDifficulty';
 import { deadlineError, deadlineRetryMessage, utcMidnightIsoFromCivilText } from '../utils/recurrence';
-import { scheduleDraftError, stepDateAfterGoalError, stepOutsideActiveRangeError, storedScheduleError } from '../utils/stepSchedule';
+import { parseScheduleShortText as parseStoredSchedule, scheduleDraftError, stepDateAfterGoalError, stepOutsideActiveRangeError, storedScheduleError } from '../utils/stepSchedule';
+import { scheduleRange } from '../utils/schedulePicker';
 
 type RouteParams = { id: string };
 
@@ -48,8 +51,12 @@ function parseWeekdayToken(token: string): number | null {
   return null;
 }
 
-function scheduleToShortText(s?: authApi.AiGoalStepSchedule) {
+function scheduleToShortText(s?: authApi.AiGoalStepSchedule & { customDates?: string[] | null }) {
   if (!s || s.type === 'none') return '';
+  if (s.type === 'repeat' && String(s.repeat ?? '').trim().toLowerCase() === 'custom') {
+    const dates = (s.customDates ?? []).map(date => String(date).trim()).filter(Boolean);
+    return dates.length ? `custom:${dates.join(',')}` : '';
+  }
   if (s.type === 'once') return `once:${s.due}`;
   const r = (s.repeat ?? '').trim();
   const rLower = r.toLowerCase();
@@ -108,6 +115,14 @@ function parseScheduleShortText(input: string): authApi.AiGoalStepSchedule {
   }
 
   return { type: 'none' };
+}
+
+function recommendationSchedule(text: string): authApi.AiGoalStepSchedule {
+  const stored = parseStoredSchedule(text);
+  if (stored.repeat === 'custom') {
+    return { type: 'repeat', repeat: 'custom', customDates: stored.customDates ?? [] } as authApi.AiGoalStepSchedule;
+  }
+  return parseScheduleShortText(text);
 }
 
 function parseDeadlineToISOEndOfDay(v: string): string | null {
@@ -217,6 +232,7 @@ export function AiGoalRecommendationScreen() {
   const [descriptionDraft, setDescriptionDraft] = useState('');
   const [deadlineDraft, setDeadlineDraft] = useState('');
   const [stepsDraft, setStepsDraft] = useState<UiStep[]>([]);
+  const [scheduleEditId, setScheduleEditId] = useState<string | null>(null);
   const shownRewards = useMemo(() => {
     const score = Number((rec?.suggestion as any)?.difficultyScore);
     const points = Number((rec?.suggestion as any)?.pointsAwarded);
@@ -269,7 +285,7 @@ export function AiGoalRecommendationScreen() {
       .map(s => ({
         text: s.text.trim(),
         description: s.description.trim() || undefined,
-        schedule: parseScheduleShortText(s.scheduleText),
+        schedule: recommendationSchedule(s.scheduleText),
       }))
       .filter(s => s.text);
 
@@ -315,7 +331,7 @@ export function AiGoalRecommendationScreen() {
           .map(s => ({
             text: s.text.trim(),
             description: s.description.trim() || undefined,
-            schedule: parseScheduleShortText(s.scheduleText) as any,
+            schedule: recommendationSchedule(s.scheduleText),
           }))
           .filter(s => s.text),
       },
@@ -325,16 +341,8 @@ export function AiGoalRecommendationScreen() {
 
     for (const step of normalized) {
       if (!step.text.trim()) continue;
-      const parsed = parseScheduleShortText(step.scheduleText);
-      const scheduleError =
-        scheduleDraftError(step.scheduleText) ??
-        (parsed.type === 'repeat'
-          ? storedScheduleError({
-              repeat: parsed.repeat,
-              repeatDay: parsed.repeatDay ?? null,
-              repeatMonth: parsed.repeatMonth ?? null,
-            })
-          : null);
+      const stored = parseStoredSchedule(step.scheduleText);
+      const scheduleError = scheduleDraftError(step.scheduleText) ?? storedScheduleError(stored);
       if (scheduleError) {
         toast(scheduleError);
         return;
@@ -349,7 +357,7 @@ export function AiGoalRecommendationScreen() {
       return;
     }
     for (const step of nextRec.suggestion.steps ?? []) {
-      const schedule = (step.schedule ?? {}) as { dueAt?: string | null; repeat?: string | null; repeatDay?: number | null; repeatMonth?: number | null };
+      const schedule = (step.schedule ?? {}) as { dueAt?: string | null; repeat?: string | null; repeatDay?: number | null; repeatMonth?: number | null; customDates?: string[] | null };
       const later = stepDateAfterGoalError(schedule.dueAt, dueIso) ?? stepOutsideActiveRangeError(schedule, dueIso);
       if (later) {
         toast(later);
@@ -386,13 +394,16 @@ export function AiGoalRecommendationScreen() {
 
         const description = String(s.description ?? '').trim();
         const body: any = { text, order: i, description: description || null };
-        if (s.schedule?.type === 'once') {
-          const d = parseDeadlineToISOEndOfDay(s.schedule.due);
-          body.dueAt = d;
-        } else if (s.schedule?.type === 'repeat') {
-          body.repeat = s.schedule.repeat;
-          body.repeatDay = s.schedule.repeatDay ?? null;
-          body.repeatMonth = s.schedule.repeatMonth ?? null;
+        const schedule = s.schedule as (authApi.AiGoalStepSchedule & { repeat?: string; customDates?: string[] | null; repeatDay?: number | null; repeatMonth?: number | null; due?: string }) | undefined;
+        if (schedule?.repeat === 'custom') {
+          body.repeat = 'custom';
+          body.customDates = schedule.customDates ?? [];
+        } else if (schedule?.type === 'once') {
+          body.dueAt = parseDeadlineToISOEndOfDay(schedule.due ?? '');
+        } else if (schedule?.type === 'repeat') {
+          body.repeat = schedule.repeat;
+          body.repeatDay = schedule.repeatDay ?? null;
+          body.repeatMonth = schedule.repeatMonth ?? null;
         }
         await authApi.createGoalStep(token, goalId, body);
       }
@@ -502,16 +513,7 @@ export function AiGoalRecommendationScreen() {
                   multiline
                   style={styles.input}
                 />
-                <Text style={styles.label}>Schedule</Text>
-                <TextInput
-                  value={s.scheduleText}
-                  onChangeText={t => setStepsDraft(prev => prev.map(p => (p.id === s.id ? { ...p, scheduleText: t } : p)))}
-                  placeholder="daily | weekly:Mon | monthly:15 | yearly:01-15 | once:2027-01-01"
-                  placeholderTextColor={colors.muted}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  style={styles.inputSmall}
-                />
+                <ScheduleField value={s.scheduleText} onPress={() => setScheduleEditId(s.id)} />
               </View>
               <Pressable onPress={() => setStepsDraft(prev => prev.filter(p => p.id !== s.id))} hitSlop={10} style={styles.stepRemove}>
                 <Text style={styles.stepRemoveText}>🗑</Text>
@@ -529,6 +531,18 @@ export function AiGoalRecommendationScreen() {
           <Button title="Reject" full onPress={reject} />
         </View>
       </ScrollView>
+      <SchedulePickerModal
+        visible={scheduleEditId != null}
+        initialText={stepsDraft.find(step => step.id === scheduleEditId)?.scheduleText ?? ''}
+        range={scheduleRange(deadlineDraft.trim() || rec.suggestion.deadline || null)}
+        onCancel={() => setScheduleEditId(null)}
+        onConfirm={text => {
+          if (scheduleEditId) {
+            setStepsDraft(prev => prev.map(step => (step.id === scheduleEditId ? { ...step, scheduleText: text } : step)));
+          }
+          setScheduleEditId(null);
+        }}
+      />
     </Screen>
   );
 }

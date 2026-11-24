@@ -12,7 +12,10 @@ import { toast } from '../utils/toast';
 import { useAuth } from '../auth/AuthContext';
 import * as authApi from '../api/auth';
 import type { RootStackParamList } from '../navigation/types';
+import { ScheduleField } from '../components/ScheduleField';
+import { SchedulePickerModal } from '../components/SchedulePickerModal';
 import { scheduleDraftError, scheduleToShortText, storedScheduleError, parseScheduleShortText, stepDateAfterGoalError, stepOutsideActiveRangeError } from '../utils/stepSchedule';
+import { compactScheduleLabel, scheduleRange } from '../utils/schedulePicker';
 import { DELETE_STEP_MESSAGE, formatStepDate, readDurationMinutes, replaceStepCopy, stepOverviewFacts } from '../utils/stepLifecycle';
 import { classifyDate, monthDays, pageOccurrences, shiftMonth, type DatedOccurrence, type OccurrenceWindow, type ScheduleStep } from '../utils/stepOccurrences';
 import { autoScheduleRemindersForSignedInUser } from '../notifications/scheduler';
@@ -31,6 +34,7 @@ export function StepDetailScreen() {
   const stepId = route.params.stepId;
   const [history, setHistory] = useState<authApi.StepHistory | null>(null);
   const [replaceOpen, setReplaceOpen] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
   const [confirm, setConfirm] = useState<'delete' | 'replace' | null>(null);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -135,6 +139,7 @@ export function StepDetailScreen() {
         repeat: schedule.repeat ?? null,
         repeatDay: schedule.repeatDay ?? null,
         repeatMonth: schedule.repeatMonth ?? null,
+        customDates: schedule.customDates ?? null,
       });
       setConfirm(null);
       void autoScheduleRemindersForSignedInUser({ minIntervalMs: 0 });
@@ -298,16 +303,16 @@ export function StepDetailScreen() {
         </Card>
       </ScrollView>
 
-      <Modal visible={replaceOpen} transparent animationType="fade" onRequestClose={() => setReplaceOpen(false)}>
+      <Modal visible={replaceOpen && !scheduleOpen} transparent animationType="fade" onRequestClose={() => setReplaceOpen(false)}>
         <View style={styles.backdrop}>
           <View style={styles.sheet}>
             <Text style={styles.section}>New step</Text>
             <Text style={styles.note}>Saving archives the current step and starts a new one today. The old step keeps its DONE or MISSED result. These fields stay fixed after that.</Text>
             <TextInput value={title} onChangeText={setTitle} style={styles.input} placeholder="Title" placeholderTextColor={colors.muted} />
             <TextInput value={description} onChangeText={setDescription} style={styles.input} placeholder="Description" placeholderTextColor={colors.muted} />
-            <TextInput value={scheduleText} onChangeText={setScheduleText} style={styles.input} autoCapitalize="none" placeholder="daily" placeholderTextColor={colors.muted} />
+            <ScheduleField value={scheduleText} onPress={() => setScheduleOpen(true)} />
             <TextInput value={durationText} onChangeText={setDurationText} style={styles.input} keyboardType="number-pad" placeholder="Minutes (optional)" placeholderTextColor={colors.muted} />
-            <Text style={styles.note}>{title.trim() || 'Untitled'} · {description.trim() || 'No description'} · {scheduleText.trim() || 'No schedule'} · {durationText.trim() ? `${durationText.trim()} min` : 'No duration'}</Text>
+            <Text style={styles.note}>{title.trim() || 'Untitled'} · {description.trim() || 'No description'} · {compactScheduleLabel(scheduleText)} · {durationText.trim() ? `${durationText.trim()} min` : 'No duration'}</Text>
             <View style={styles.sheetActions}>
               <Button title="Cancel" onPress={() => setReplaceOpen(false)} />
               <Button title="Continue" variant="primary" onPress={askReplace} />
@@ -315,6 +320,16 @@ export function StepDetailScreen() {
           </View>
         </View>
       </Modal>
+      <SchedulePickerModal
+        visible={scheduleOpen}
+        initialText={scheduleText}
+        range={scheduleRange(history?.effectiveEnd)}
+        onCancel={() => setScheduleOpen(false)}
+        onConfirm={text => {
+          setScheduleText(text);
+          setScheduleOpen(false);
+        }}
+      />
 
       <Modal visible={confirm != null} transparent animationType="fade" onRequestClose={() => setConfirm(null)}>
         <View style={styles.dialogBackdrop}>
@@ -326,7 +341,10 @@ export function StepDetailScreen() {
                 <Text style={styles.dialogBody}>{DELETE_STEP_MESSAGE}</Text>
               </>
             ) : (
-              <ReplaceNotice currentEnds={history?.archiveEffectiveUntil ?? 'today'} nextStarts={history?.replacementStartsOn ?? 'today'} />
+              <>
+                <ReplaceNotice currentEnds={history?.archiveEffectiveUntil ?? 'today'} nextStarts={history?.replacementStartsOn ?? 'today'} />
+                <Text style={styles.dialogBody}>{compactScheduleLabel(scheduleText)}</Text>
+              </>
             )}
             <View style={styles.dialogDivider} />
             <View style={styles.dialogActions}>

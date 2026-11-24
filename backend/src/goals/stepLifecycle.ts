@@ -19,6 +19,7 @@
 import {
   hasScheduleConflict,
   instantCivilDate,
+  prepareCustomDates,
   isStepScheduledOnCivilDay,
   stepProgressBounds,
   storedInstantCivilDate,
@@ -170,6 +171,7 @@ export type ReplacementPlan = {
     repeat: string | null;
     repeatDay: number | null;
     repeatMonth: number | null;
+    customDates: string[];
     durationMinutes: number | null;
     order: number;
   };
@@ -187,6 +189,7 @@ export function planReplacement(args: {
   repeat?: string | null;
   repeatDay?: number | null;
   repeatMonth?: number | null;
+  customDates?: string[] | null;
   durationMinutes?: number | null;
   order?: number;
 }): ReplacementPlan | { error: string } {
@@ -198,6 +201,8 @@ export function planReplacement(args: {
   const starts = args.todayCivil;
   if (!utcMidnightFromCivil(starts)) return { error: 'Invalid payload' };
   const decision = archiveDecision(args);
+  const preparedDates = prepareCustomDates(args.customDates);
+  const customDates = String(args.repeat ?? '').trim().toLowerCase() === 'custom' && preparedDates.ok ? preparedDates.dates : [];
   return {
     previous: { archivedAt: decision.archivedAt, effectiveUntil: decision.effectiveUntil },
     next: {
@@ -209,6 +214,7 @@ export function planReplacement(args: {
       repeat: args.repeat ? String(args.repeat) : null,
       repeatDay: args.repeatDay ?? null,
       repeatMonth: args.repeatMonth ?? null,
+      customDates,
       durationMinutes: duration.minutes,
       order: args.order ?? 0,
     },

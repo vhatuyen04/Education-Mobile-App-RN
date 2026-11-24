@@ -26,6 +26,7 @@ import {
   requestContentModeration,
   SAMPLED_FRAME_LIMITATION,
 } from '../goals/contentModeration.js';
+import { parseGeneratedSuggestion } from '../goals/aiSuggestion.js';
 import { acceptAiSuggestion, claimSuggestionOnce, signAiSuggestion, SuggestionAlreadyUsed } from '../goals/suggestionToken.js';
 import { autoReviewFailureWrite, rejectionReason } from '../goals/proofFeedback.js';
 import {
@@ -58,6 +59,7 @@ import {
   isStepScheduledOnDay,
   isUtcMidnightInstant,
   localCivilDate,
+  prepareCustomDates,
   scheduleWriteError,
   stepLaterThanGoalError,
   stepOutsideActiveRangeError,
@@ -145,6 +147,7 @@ const goalStepSelect = {
   effectiveFrom: true,
   effectiveUntil: true,
   replacesStepId: true,
+  customDates: true,
 } as const;
 
 const prismaAny: any = prisma;
@@ -629,6 +632,12 @@ async function completionIdsOnCivilDay(stepIds: string[], civilToday: string, ti
     if (storedInstantCivilDate(new Date(row.date), timeZone) === civilToday) done.add(String(row.stepId));
   }
   return done;
+}
+
+function storedCustomDates(data: { repeat?: string | null; customDates?: string[] | null }): string[] {
+  if (String(data.repeat ?? '').trim().toLowerCase() !== 'custom') return [];
+  const prepared = prepareCustomDates(data.customDates);
+  return prepared.ok ? prepared.dates : [];
 }
 
 function isRepeating(repeat: string | null | undefined) {
@@ -1392,100 +1401,6 @@ function extractFirstJsonObject(s: string): string {
   return s.slice(start);
 }
 
-function clampUnit(value: unknown): number | undefined {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return undefined;
-  const unit = n > 1 ? n / 100 : n;
-  return Math.max(0, Math.min(1, unit));
-}
-
-function normalizeStepSchedule(schedule: unknown): { type: 'none' } | { type: 'once'; due: string } | { type: 'repeat'; repeat: string; repeatDay?: number; repeatMonth?: number } | null {
-  if (typeof schedule === 'string') {
-    const text = schedule.trim().toLowerCase();
-    const once = /^(\d{4}-\d{2}-\d{2})/.exec(text);
-    if (once) return { type: 'once', due: once[1] };
-    if (text === 'none') return { type: 'none' };
-    if (text.includes('daily') || text === 'day') return { type: 'repeat', repeat: 'daily' };
-    if (text.includes('week')) return { type: 'repeat', repeat: 'weekly' };
-    if (text.includes('month')) return { type: 'repeat', repeat: 'monthly' };
-    if (text.includes('year')) return { type: 'repeat', repeat: 'yearly' };
-    return null;
-  }
-  if (!schedule || typeof schedule !== 'object') return null;
-  const row = schedule as Record<string, unknown>;
-  const type = String(row.type ?? '').toLowerCase();
-  if (type === 'none') return { type: 'none' };
-  if (type === 'once') {
-    const due = String(row.due ?? '').slice(0, 10);
-    return /^\d{4}-\d{2}-\d{2}$/.test(due) ? { type: 'once', due } : null;
-  }
-  if (type === 'repeat' || type === 'daily' || type === 'weekly' || type === 'monthly' || type === 'yearly') {
-    const repeatName = type === 'repeat' ? String(row.repeat ?? 'daily').toLowerCase() : type;
-    const repeat = ['daily', 'weekly', 'monthly', 'yearly'].includes(repeatName) ? repeatName : 'daily';
-    const repeatDay = Number(row.repeatDay);
-    const repeatMonth = Number(row.repeatMonth);
-    return {
-      type: 'repeat',
-      repeat,
-      ...(Number.isInteger(repeatDay) ? { repeatDay } : {}),
-      ...(Number.isInteger(repeatMonth) ? { repeatMonth } : {}),
-    };
-  }
-  return null;
-}
-
-function normalizeAiSuggestionPayload(value: unknown): unknown {
-  if (!value || typeof value !== 'object') return value;
-  const root = value as Record<string, any>;
-  if (root.ok !== true || !root.suggestion || typeof root.suggestion !== 'object') return value;
-  const suggestion = root.suggestion as Record<string, any>;
-  const score = Number(suggestion.difficultyScore);
-  if (Number.isFinite(score)) suggestion.difficultyScore = Math.max(1, Math.min(100, Math.round(score)));
-  const confidence = clampUnit(suggestion.difficultyConfidence);
-  if (suggestion.difficultyConfidence !== undefined && suggestion.difficultyConfidence !== null && confidence !== undefined) {
-    suggestion.difficultyConfidence = confidence;
-  }
-  if (typeof suggestion.rankingEligible === 'string') suggestion.rankingEligible = suggestion.rankingEligible.trim().toLowerCase() === 'true';
-  if (typeof suggestion.rankingEligibilityReason === 'string') {
-    suggestion.rankingEligibilityReason = suggestion.rankingEligibilityReason.trim().slice(0, 300);
-  }
-  if (typeof suggestion.field === 'string') {
-    const field = suggestion.field.trim().toLowerCase();
-    if (field.startsWith('sport')) suggestion.field = 'Sport';
-    else if (field.startsWith('acad') || field.startsWith('study') || field.startsWith('edu')) suggestion.field = 'Academy';
-    else if (field.startsWith('entertain')) suggestion.field = 'Entertainment';
-  }
-  if (typeof suggestion.description === 'string' && !suggestion.description.trim()) delete suggestion.description;
-  if (Array.isArray(suggestion.steps)) {
-    suggestion.steps = suggestion.steps.slice(0, 12).map((step: any) => {
-      const text = String(step?.text ?? '').trim();
-      if (!text) return step;
-      const schedule = normalizeStepSchedule(step?.schedule);
-      if (!schedule) return step;
-      const description = String(step?.description ?? '').trim();
-      return { text, ...(description ? { description } : {}), schedule };
-    });
-  }
-  return root;
-}
-
-function formatSuggestionSchemaIssues(error: z.ZodError): string[] {
-  const lines: string[] = [];
-  for (const issue of error.issues) {
-    const nested = (issue as { unionErrors?: z.ZodError[] }).unionErrors;
-    if (nested) {
-      for (const unionError of nested) {
-        for (const inner of unionError.issues) {
-          lines.push(`${inner.path.join('.') || '(root)'}: ${inner.message}`);
-        }
-      }
-      continue;
-    }
-    lines.push(`${issue.path.join('.') || '(root)'}: ${issue.message}`);
-  }
-  return lines.slice(0, 12);
-}
-
 const HIDDEN_ADMIN_PROOF_KEY = 'admin_hidden_proof_attempt_ids';
 
 async function readHiddenAdminProofIds(): Promise<Set<string>> {
@@ -1810,63 +1725,21 @@ The description field must be 1-3 short sentences inside the JSON object. State 
       return res.status(502).json({ error: 'AI returned empty response' });
     }
 
-    let parsedJson: any;
+    let parsedJson: unknown;
     try {
-      parsedJson = normalizeAiSuggestionPayload(JSON.parse(content));
+      parsedJson = JSON.parse(content);
     } catch (error) {
       const preview = content.replace(/\s+/g, ' ').slice(0, 500);
       console.error('AI goal suggestion was not valid JSON:', error instanceof Error ? error.message : error, preview);
       return res.status(502).json({ error: 'AI returned invalid JSON' });
     }
 
-    const OutSchema = z.union([
-      z.object({
-        ok: z.literal(false),
-        message: z.string().min(1),
-        questions: z.array(z.string().min(1)).min(1).max(3),
-      }),
-      z.object({
-        ok: z.literal(true),
-        suggestion: z.object({
-          title: z.string().min(1),
-          description: z.string().min(1).optional(),
-          field: z.enum(['Sport', 'Academy', 'Entertainment']),
-          deadline: z.string().min(1),
-          expectation: z.string().optional(),
-          requirement: z.string().optional(),
-          difficultyScore: z.number().int().min(1).max(100),
-          difficultyConfidence: z.number().min(0).max(1),
-          difficultyReason: z.string().min(1),
-          rankingEligible: z.boolean(),
-          rankingEligibilityReason: z.string().min(1).max(300),
-          steps: z
-            .array(
-              z.object({
-                text: z.string().min(1),
-                description: z.string().optional(),
-                schedule: z.union([
-                  z.object({ type: z.literal('none') }),
-                  z.object({ type: z.literal('once'), due: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }),
-                  z.object({
-                    type: z.literal('repeat'),
-                    repeat: z.string().min(1),
-                    repeatDay: z.number().int().optional(),
-                    repeatMonth: z.number().int().optional(),
-                  }),
-                ]),
-              })
-            )
-            .min(0)
-            .max(12),
-        }),
-      }),
-    ]);
-
-    const out = OutSchema.safeParse(parsedJson);
-    if (!out.success) {
-      console.error('AI goal suggestion did not match expected format:', formatSuggestionSchemaIssues(out.error).join('; '));
-      return res.status(502).json({ error: 'AI output did not match expected format' });
+    const generated = parseGeneratedSuggestion(parsedJson);
+    if (!generated.ok) {
+      console.error('AI goal suggestion did not match expected format:', generated.detail ?? generated.error);
+      return res.status(502).json({ error: generated.error });
     }
+    const out = { data: generated.value };
 
     if (out.data.ok) {
       const rawScore = Math.max(1, Math.min(100, Math.floor(Number((out.data as any).suggestion.difficultyScore ?? 1))));
@@ -2124,7 +1997,7 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
   if (nextGoal?.id) {
     const goalSteps = await allGoalSteps({
       where: { goalId: nextGoal.id },
-      select: { id: true, dueAt: true, repeat: true, repeatDay: true, repeatMonth: true, createdAt: true, archivedAt: true, effectiveFrom: true, effectiveUntil: true },
+      select: { id: true, dueAt: true, repeat: true, repeatDay: true, repeatMonth: true, customDates: true, createdAt: true, archivedAt: true, effectiveFrom: true, effectiveUntil: true },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
 
@@ -2188,6 +2061,7 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
       repeat: true,
       repeatDay: true,
       repeatMonth: true,
+      customDates: true,
       createdAt: true,
       effectiveFrom: true,
       goal: { select: { id: true, title: true, dueAt: true, createdAt: true } },
@@ -2848,8 +2722,10 @@ authRouter.post('/goals/:id/steps', async (req: Request, res: Response) => {
     repeat: parsed.data.repeat ?? null,
     repeatDay: parsed.data.repeatDay ?? null,
     repeatMonth: parsed.data.repeatMonth ?? null,
+    customDates: parsed.data.customDates ?? null,
   });
   if (scheduleError) return res.status(400).json({ error: scheduleError });
+  const customDates = storedCustomDates(parsed.data);
 
   try {
     const step = await prisma.$transaction((tx) =>
@@ -2862,7 +2738,7 @@ authRouter.post('/goals/:id/steps', async (req: Request, res: Response) => {
           const laterThanGoal = stepLaterThanGoalError(parsed.data.dueAt, goal.dueAt, zone);
           if (laterThanGoal) throw new GoalLifecycleError(400, laterThanGoal);
           const outsideRange = stepOutsideActiveRangeError({
-            step: parsed.data,
+            step: { ...parsed.data, customDates },
             todayCivil: instantCivilDate(new Date(), zone),
             goalDueAt: goal.dueAt,
             timeZone: zone,
@@ -2878,6 +2754,7 @@ authRouter.post('/goals/:id/steps', async (req: Request, res: Response) => {
               repeat: parsed.data.repeat ? String(parsed.data.repeat) : null,
               repeatDay: parsed.data.repeatDay ?? null,
               repeatMonth: parsed.data.repeatMonth ?? null,
+              customDates,
               durationMinutes: duration.minutes,
             },
             select: goalStepSelect,
@@ -3022,8 +2899,10 @@ authRouter.post('/goals/:goalId/steps/:stepId/replace', async (req: Request, res
     repeat: parsed.data.repeat ?? null,
     repeatDay: parsed.data.repeatDay ?? null,
     repeatMonth: parsed.data.repeatMonth ?? null,
+    customDates: parsed.data.customDates ?? null,
   });
   if (scheduleError) return res.status(400).json({ error: scheduleError });
+  const customDates = storedCustomDates(parsed.data);
 
   const goalId = String(req.params.goalId);
   const stepId = String(req.params.stepId);
@@ -3042,7 +2921,7 @@ authRouter.post('/goals/:goalId/steps/:stepId/replace', async (req: Request, res
           const now = new Date();
           const todayCivil = instantCivilDate(now, zone);
           const outsideRange = stepOutsideActiveRangeError({
-            step: parsed.data,
+            step: { ...parsed.data, customDates },
             todayCivil,
             goalDueAt: goal.dueAt,
             timeZone: zone,
@@ -3068,6 +2947,7 @@ authRouter.post('/goals/:goalId/steps/:stepId/replace', async (req: Request, res
             repeat: parsed.data.repeat,
             repeatDay: parsed.data.repeatDay,
             repeatMonth: parsed.data.repeatMonth,
+            customDates,
             durationMinutes: parsed.data.durationMinutes,
             order: parsed.data.order ?? existing.order,
           });
@@ -3084,6 +2964,7 @@ authRouter.post('/goals/:goalId/steps/:stepId/replace', async (req: Request, res
                   repeat: next.repeat,
                   repeatDay: next.repeatDay,
                   repeatMonth: next.repeatMonth,
+                  customDates: next.customDates,
                   durationMinutes: next.durationMinutes,
                   effectiveFrom: utcMidnightFromCivil(next.effectiveFrom),
                   replacesStepId: next.replacesStepId,
@@ -3456,7 +3337,7 @@ authRouter.get('/goals', async (req: Request, res: Response) => {
   }> = goalIds.length
     ? await prismaAny.goalStep.findMany({
         where: { goalId: { in: goalIds } },
-        select: { id: true, goalId: true, dueAt: true, repeat: true, repeatDay: true, repeatMonth: true, createdAt: true, archivedAt: true, effectiveFrom: true, effectiveUntil: true },
+        select: { id: true, goalId: true, dueAt: true, repeat: true, repeatDay: true, repeatMonth: true, customDates: true, createdAt: true, archivedAt: true, effectiveFrom: true, effectiveUntil: true },
       })
     : [];
   const stepIds = steps.map(step => step.id);
@@ -3542,7 +3423,7 @@ authRouter.get('/goals/:id', async (req: Request, res: Response) => {
 
   const detailSteps = await allGoalSteps({
     where: { goalId: id },
-    select: { id: true, dueAt: true, repeat: true, repeatDay: true, repeatMonth: true, createdAt: true, archivedAt: true, effectiveFrom: true, effectiveUntil: true },
+    select: { id: true, dueAt: true, repeat: true, repeatDay: true, repeatMonth: true, customDates: true, createdAt: true, archivedAt: true, effectiveFrom: true, effectiveUntil: true },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
   });
   const detailCompletions = detailSteps.length
