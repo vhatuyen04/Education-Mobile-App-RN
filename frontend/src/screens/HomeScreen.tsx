@@ -194,7 +194,7 @@ export function HomeScreen() {
         (avoidLines.length ? `\n\n${avoidLines.join('\n')}` : '');
 
       // Let backend AI decide the deadline; we omit deadline here.
-      const ai = await authApi.aiSuggestGoal(token, { prompt, intensity: 'Normal' });
+      const ai = await authApi.aiSuggestGoal(token, { prompt, intensity: 'Normal', mode: 'recommendation' });
       if (!ai.ok) {
         toast(ai.message || 'AI needs more info');
         return;

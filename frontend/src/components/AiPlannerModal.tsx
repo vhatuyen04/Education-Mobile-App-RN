@@ -15,9 +15,11 @@ import { useSettings } from '../settings/SettingsContext';
 import * as authApi from '../api/auth';
 import { markAppGoal } from '../motivation/appGoals';
 import { previewRewardsForDeadline } from '../motivation/deadlineDifficulty';
-import { countRepeatOccurrencesUntilDeadline, deadlineRetryMessage, realCivilDate } from '../utils/recurrence';
+import { deadlineRetryMessage, realCivilDate } from '../utils/recurrence';
 import { parseScheduleShortText as parseStoredSchedule, scheduleDraftError, stepDateAfterGoalError, stepOutsideActiveRangeError, storedScheduleError } from '../utils/stepSchedule';
 import { scheduleRange } from '../utils/schedulePicker';
+import { preparePlannerDraft, scheduleToShortText } from './aiPlannerDraft';
+import { choosePlannerDeadline, resolvePlannerDeadline } from './aiPlannerDeadline';
 
 type Props = {
   visible: boolean;
@@ -163,14 +165,6 @@ function makeId() {
   return `s_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
-function formatWeekday(d: number | undefined) {
-  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  if (d === undefined || d === null) return '';
-  const idx = Number(d);
-  if (!Number.isFinite(idx) || idx < 0 || idx > 6) return '';
-  return days[idx];
-}
-
 function parseWeekdayToken(token: string): number | null {
   const t = token.trim().toLowerCase();
   const map: Record<string, number> = { sun: 0, mon: 1, tue: 2, tues: 2, wed: 3, thu: 4, thur: 4, thurs: 4, fri: 5, sat: 6 };
@@ -178,32 +172,6 @@ function parseWeekdayToken(token: string): number | null {
   const n = Number(t);
   if (Number.isFinite(n) && n >= 0 && n <= 6) return n;
   return null;
-}
-
-function scheduleToShortText(s?: authApi.AiGoalStepSchedule) {
-  if (!s || s.type === 'none') return '';
-  if (s.type === 'once') return `once:${s.due}`;
-  const r = (s.repeat ?? '').trim();
-  // Drop AI placeholder/template schedule strings.
-  const rLowerAll = r.toLowerCase();
-  const tokenHits = [
-    rLowerAll.includes('daily'),
-    rLowerAll.includes('weekly'),
-    rLowerAll.includes('monthly'),
-    rLowerAll.includes('yearly'),
-    rLowerAll.includes('once'),
-  ].filter(Boolean).length;
-  if (/[|｜¦∣]/.test(r) || tokenHits >= 2) return '';
-  const rLower = r.toLowerCase();
-  if (rLower === 'daily') return 'daily';
-  if (rLower === 'weekly') return s.repeatDay !== undefined ? `weekly:${formatWeekday(s.repeatDay) || String(s.repeatDay)}` : 'weekly';
-  if (rLower === 'monthly') return s.repeatDay !== undefined ? `monthly:${String(s.repeatDay)}` : 'monthly';
-  if (rLower === 'yearly') {
-    const mm = s.repeatMonth !== undefined ? String(s.repeatMonth).padStart(2, '0') : '';
-    const dd = s.repeatDay !== undefined ? String(s.repeatDay).padStart(2, '0') : '';
-    return mm && dd ? `yearly:${mm}-${dd}` : 'yearly';
-  }
-  return `repeat:${r}`;
 }
 
 function parseScheduleShortText(input: string): authApi.AiGoalStepSchedule {
@@ -250,105 +218,20 @@ function parseScheduleShortText(input: string): authApi.AiGoalStepSchedule {
   return { type: 'none' };
 }
 
-function formatDateYmd(d: Date) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-
-function dateFromRealCivil(civil: string): Date | null {
+function parseYmd(raw: string): Date | null {
+  const text = String(raw ?? '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
+  const civil = realCivilDate(text);
+  if (!civil) return null;
   const [year, month, day] = civil.split('-').map(Number);
   return new Date(year, month - 1, day);
 }
 
-function parseYmd(raw: string): Date | null {
-  const text = String(raw ?? '').trim();
-  if (!/^(\d{4})-(\d{2})-(\d{2})$/.test(text)) return null;
-  const civil = realCivilDate(text);
-  return civil ? dateFromRealCivil(civil) : null;
-}
-
-function parseDmy(raw: string): Date | null {
-  const text = String(raw ?? '').trim();
-  if (!/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/.test(text)) return null;
-  const civil = realCivilDate(text);
-  return civil ? dateFromRealCivil(civil) : null;
-}
-
-function clampToDeadline(d: Date, deadline: Date) {
-  return d.getTime() > deadline.getTime() ? new Date(deadline) : d;
-}
-
-function normalizeAiStepSchedule(schedule: authApi.AiGoalStepSchedule | undefined, deadlineYmd: string) {
-  if (!schedule) return schedule;
-  if (schedule.type !== 'repeat') return schedule;
-
-  // Sometimes AI returns multiple schedule options as one string ("daily | weekly:Mon | ...").
-  // Treat that as invalid/no schedule.
-  const rawRepeat = String((schedule as any).repeat ?? '').trim();
-  if (!rawRepeat || /[|｜¦∣]/.test(rawRepeat)) return { type: 'none' } as any;
-
-  const dl = parseYmd(deadlineYmd) ?? parseDmy(deadlineYmd);
-  if (!dl) return schedule;
-
-  const repeat = String(schedule.repeat ?? '').trim().toLowerCase();
-  if (!repeat) return { type: 'none' } as authApi.AiGoalStepSchedule;
-
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-
-  const { count, lastOccurrence } = countRepeatOccurrencesUntilDeadline({
-    repeat,
-    repeatDay: schedule.repeatDay,
-    repeatMonth: schedule.repeatMonth,
-    start,
-    deadline: dl,
-  });
-
-  // If it can happen 2+ times before the deadline, keep the repeat schedule.
-  if (count >= 2) return schedule;
-
-  // Otherwise convert to once, at the last possible occurrence on/before the deadline.
-  const pick = lastOccurrence ? clampToDeadline(lastOccurrence, dl) : new Date(dl);
-  const ymd = formatDateYmd(pick);
-  return { type: 'once', due: ymd } as authApi.AiGoalStepSchedule;
-}
-
-type PlanDeadline = { date: Date; label: string };
-
-function parseDeadlineFromPlanText(planText: string): PlanDeadline | null {
-  const txt = String(planText ?? '');
-
-  const absMatch = txt.match(/\b(?:by|before|until|deadline\s*[:=]?)\s*(\d{4}-\d{2}-\d{2}|\d{1,2}[./-]\d{1,2}[./-]\d{4})\b/i);
-  if (absMatch?.[1]) {
-    const d = parseYmd(absMatch[1]) ?? parseDmy(absMatch[1]);
-    if (d) return { date: d, label: absMatch[1] };
-  }
-
-  const relMatch =
-    txt.match(/\b(?:in|within|for)\s*(\d+)\s*(day|days|week|weeks|month|months)\b/i) ??
-    txt.match(/\b(\d+)\s*[- ]\s*(day|days|week|weeks|month|months)\b/i);
-  if (relMatch?.[1] && relMatch?.[2]) {
-    const n = Number(relMatch[1]);
-    const unit = relMatch[2].toLowerCase();
-    if (!Number.isFinite(n) || n <= 0) return null;
-    const base = new Date();
-    base.setHours(0, 0, 0, 0);
-    const d = new Date(base);
-    if (unit.startsWith('day')) d.setDate(d.getDate() + n);
-    else if (unit.startsWith('week')) d.setDate(d.getDate() + n * 7);
-    else if (unit.startsWith('month')) d.setMonth(d.getMonth() + n);
-    return { date: d, label: `${n} ${unit}` };
-  }
-
-  return null;
-}
-
-function isSimilarDeadline(a: Date, b: Date) {
-  const ms = Math.abs(a.getTime() - b.getTime());
-  const days = ms / (1000 * 60 * 60 * 24);
-  return days <= 3;
+function plannerDeadlineMessage(kind: 'missing' | 'invalid' | 'past' | 'ambiguous'): string {
+  if (kind === 'missing') return 'Please enter a deadline (or mention it in your plan like “in 6 weeks”).';
+  if (kind === 'ambiguous') return 'Your plan has multiple possible deadlines. Enter one in the Deadline field.';
+  if (kind === 'past') return 'The deadline is in the past. Enter today or a later date.';
+  return deadlineRetryMessage();
 }
 
 function inferFieldFromText(text: string): 'Sport' | 'Academy' | 'Entertainment' {
@@ -393,8 +276,6 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
   const [steps, setSteps] = useState<PlannerStep[]>([]);
   const [scheduleEditId, setScheduleEditId] = useState<string | null>(null);
 
-  const displaySteps = useMemo(() => sanitizePlannerSteps(steps), [steps]);
-  const stepCount = displaySteps.length;
   const shownRewards = useMemo(() => {
     if (typeof goalDifficultyScore !== 'number' || typeof goalPointsAwarded !== 'number' || typeof goalXpAwarded !== 'number') return null;
     return previewRewardsForDeadline({
@@ -402,9 +283,9 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
       pointsAwarded: goalPointsAwarded,
       xpAwarded: goalXpAwarded,
       suggestedDeadline: goalDeadline,
-      chosenDeadline: deadline.trim() || goalDeadline,
+      chosenDeadline: goalDeadline,
     });
-  }, [deadline, goalDeadline, goalDifficultyScore, goalPointsAwarded, goalXpAwarded]);
+  }, [goalDeadline, goalDifficultyScore, goalPointsAwarded, goalXpAwarded]);
   const shownRankingEligible = goalRankingEligible;
 
   const templates = useMemo(
@@ -447,64 +328,6 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
     onClose();
   }, [onClose]);
 
-  async function resolveDeadlineForPlan(override?: string): Promise<string | null> {
-    const input = String(override ?? deadline ?? '').trim();
-    const fromPlan = parseDeadlineFromPlanText(planText);
-
-    if (fromPlan && !input) {
-      const auto = formatDateYmd(fromPlan.date);
-      setDeadline(auto);
-      return auto;
-    }
-
-    if (!fromPlan) {
-      return input || null;
-    }
-
-    if (!input) {
-      const auto = formatDateYmd(fromPlan.date);
-      setDeadline(auto);
-      return auto;
-    }
-
-    const inputDate = parseYmd(input) ?? parseDmy(input);
-    if (!inputDate) {
-      return input;
-    }
-
-    if (isSimilarDeadline(fromPlan.date, inputDate)) {
-      return input;
-    }
-
-    const planChoice = formatDateYmd(fromPlan.date);
-    const inputChoice = formatDateYmd(inputDate);
-
-    return new Promise(resolve => {
-      Alert.alert(
-        'Choose deadline',
-        `Your plan mentions a deadline that differs from the Deadline field.\n\nFrom plan: ${planChoice}\nFrom field: ${inputChoice}`,
-        [
-          {
-            text: 'Cancel',
-            style: 'cancel',
-            onPress: () => resolve(null),
-          },
-          {
-            text: `Use ${planChoice}`,
-            onPress: () => {
-              setDeadline(planChoice);
-              resolve(planChoice);
-            },
-          },
-          {
-            text: `Use ${inputChoice}`,
-            onPress: () => resolve(inputChoice),
-          },
-        ]
-      );
-    });
-  }
-
   function insertTemplate(t: string) {
     setPlanText(t);
     setAiHelp(null);
@@ -519,43 +342,6 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
     setSteps(prev => prev.filter(s => s.id !== id));
   }
 
-  function parseDeadlineToISOEndOfDay(v: string, opts?: { mustBeFuture?: boolean }): string | null {
-    const raw = v.trim();
-    if (!raw) return null;
-
-    // Accept ISO datetime strings too.
-    if (raw.includes('T')) {
-      const iso = new Date(raw);
-      if (!Number.isNaN(iso.getTime())) {
-        iso.setHours(23, 59, 59, 999);
-
-        if (opts?.mustBeFuture) {
-          const now = new Date();
-          const today0 = new Date(now);
-          today0.setHours(0, 0, 0, 0);
-          if (iso.getTime() < today0.getTime()) return null;
-        }
-
-        return iso.toISOString();
-      }
-    }
-
-    const parsed = parseYmd(raw) ?? parseDmy(raw);
-    if (!parsed) return null;
-    const d = new Date(parsed);
-
-    d.setHours(23, 59, 59, 999);
-
-    if (opts?.mustBeFuture) {
-      const now = new Date();
-      const today0 = new Date(now);
-      today0.setHours(0, 0, 0, 0);
-      if (d.getTime() < today0.getTime()) return null;
-    }
-
-    return d.toISOString();
-  }
-
   async function generate() {
     if (!planText.trim()) {
       toast('Please describe your plan first');
@@ -567,15 +353,16 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
       return;
     }
 
-    const resolvedDeadline = await resolveDeadlineForPlan();
-    if (!resolvedDeadline) {
-      toast('Please enter a deadline (or mention it in your plan like “in 6 weeks”).');
-      return;
-    }
-
-    const dl = parseDeadlineToISOEndOfDay(resolvedDeadline, { mustBeFuture: true });
-    if (!dl) {
-      toast(deadlineRetryMessage());
+    const resolved = await choosePlannerDeadline(planText, deadline, conflict => new Promise(resolve => {
+      Alert.alert('Choose deadline', `Your plan ends on ${conflict.plan.civil}. The Deadline field says ${conflict.field.civil}. Which should the Goal use?`, [
+        { text: 'Cancel', style: 'cancel', onPress: () => resolve(null) },
+        { text: `Plan: ${conflict.plan.civil}`, onPress: () => resolve('plan') },
+        { text: `Field: ${conflict.field.civil}`, onPress: () => resolve('field') },
+      ], { cancelable: true, onDismiss: () => resolve(null) });
+    }));
+    if (!resolved) return;
+    if (resolved.kind !== 'resolved') {
+      toast(plannerDeadlineMessage(resolved.kind));
       return;
     }
 
@@ -591,7 +378,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
     setLoading(true);
 
     try {
-      const resp = await authApi.aiSuggestGoal(token, { prompt: planText.trim(), deadline: dl, intensity });
+      const resp = await authApi.aiSuggestGoal(token, { prompt: planText.trim(), deadline: resolved.dueAt, intensity });
       if (!resp.ok) {
         setAiHelp({ message: resp.message, questions: resp.questions ?? [] });
         return;
@@ -600,8 +387,9 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
       setGoalTitle(resp.suggestion.title || defaultGoalTitle(planText));
       setGoalDescription(String(resp.suggestion.description ?? '').trim());
       setGoalField(resp.suggestion.field);
-      const effectiveDeadline = resp.suggestion.deadline || resolvedDeadline;
-      setDeadline(effectiveDeadline);
+      const draft = preparePlannerDraft(resp.suggestion, resolved.civil);
+      const effectiveDeadline = draft.deadline;
+      setDeadline(previous => previous === deadline && previous.trim() ? effectiveDeadline : previous);
       setGoalDeadline(effectiveDeadline);
       setGoalRequirement(resp.suggestion.requirement || '');
       setGoalExpectation(resp.suggestion.expectation || '');
@@ -612,16 +400,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
       setGoalPointsAwarded(typeof resp.suggestion.pointsAwarded === 'number' ? resp.suggestion.pointsAwarded : null);
       setGoalXpAwarded(typeof resp.suggestion.xpAwarded === 'number' ? resp.suggestion.xpAwarded : null);
       setGoalRankingEligible(resp.suggestion.rankingEligible === true);
-      const mapped = resp.suggestion.steps.map(s => {
-        const schedule = normalizeAiStepSchedule(s.schedule, effectiveDeadline);
-        return {
-          id: makeId(),
-          text: s.text,
-          description: String(s.description ?? '').trim(),
-          schedule,
-          scheduleText: scheduleToShortText(schedule),
-        };
-      });
+      const mapped = draft.steps.map(step => ({ ...step, id: makeId() }));
       const sanitized = sanitizePlannerSteps(mapped);
       setSteps(sanitized);
       setGenerated(true);
@@ -661,14 +440,16 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
     if (loading) return;
     setLoading(true);
     try {
-      const resolvedDeadline = await resolveDeadlineForPlan(deadline.trim() || goalDeadline);
-      if (!resolvedDeadline) return;
-
-      const dueIso = parseDeadlineToISOEndOfDay(resolvedDeadline, { mustBeFuture: true });
-      if (!dueIso) {
-        toast(deadlineRetryMessage());
+      if (deadline.trim() && deadline.trim() !== goalDeadline) {
+        toast('Regenerate the plan to use the edited deadline.');
         return;
       }
+      const resolved = resolvePlannerDeadline('', goalDeadline);
+      if (resolved.kind !== 'resolved') {
+        toast(plannerDeadlineMessage(resolved.kind));
+        return;
+      }
+      const dueIso = resolved.dueAt;
       for (const step of stepWrites) {
         const later = stepDateAfterGoalError(step.body?.dueAt, dueIso) ?? stepOutsideActiveRangeError(step.body ?? {}, dueIso);
         if (later) {
@@ -715,11 +496,10 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
   }
 
   const editingStep = steps.find(step => step.id === scheduleEditId);
-  const scheduleDeadline = deadline.trim() || goalDeadline || null;
+  const scheduleDeadline = goalDeadline || null;
 
   return (
-    <>
-    <Modal visible={visible && scheduleEditId == null} transparent animationType="slide" onRequestClose={closeModal}>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={closeModal}>
       <View style={styles.backdrop}>
         <Pressable style={StyleSheet.absoluteFill} onPress={closeModal} />
 
@@ -738,7 +518,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
           >
             <Text style={styles.mutedSmall}>Describe your plan. SmartGoal will suggest 1 goal and a checklist. Requirement is determined completely by the SmartGoal app.</Text>
             <Text style={[styles.mutedSmall, { marginTop: 8 }]}>
-              Write in English. Use a number for time: in 3 weeks, for 10 days, within 2 months, or by 2027-01-01. Words such as “a week” are not read. The Deadline field uses YYYY-MM-DD.
+              Describe your goal in English. Include a deadline such as “in 6 weeks”, “in 30 days”, “within 2 months”, or “by January 1, 2027”. Use digits for durations. You can also enter a deadline below in YYYY-MM-DD format. Slash dates use US month/day/year.
             </Text>
             <Text style={[styles.mutedSmall, { marginTop: 8 }]}>
               If a suggested goal is eligible for ranking, you can later submit a video to prove the achievement and compete on the ranking board. You can still complete the goal without ranking.
@@ -865,7 +645,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
 
                   <View style={{ flexDirection: 'row', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
                     <Pill>Field: {goalField}</Pill>
-                    <Pill>Deadline: {deadline.trim() || goalDeadline || '—'}</Pill>
+                    <Pill>Deadline: {goalDeadline || '—'}</Pill>
                     {shownRewards ? <Pill>Points: {shownRewards.pointsAwarded}</Pill> : null}
                     {shownRewards ? <Pill>XP: {shownRewards.xpAwarded}</Pill> : null}
                     <Pill>{shownRankingEligible ? 'Eligible' : 'Non eligible'}</Pill>
@@ -875,12 +655,12 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
                 <Card>
                   <View style={styles.cardTitleRow}>
                     <Text style={styles.cardTitle}>Steps</Text>
-                    <Badge>{stepCount} steps</Badge>
+                    <Badge>{steps.length} steps</Badge>
                   </View>
 
                   <View style={{ marginTop: 10 }}>
                     <View style={{ gap: 10 }}>
-                      {displaySteps.map((s, idx) => (
+                      {steps.map((s, idx) => (
                         <View key={s.id} style={styles.stepItemRow}>
                           <View style={styles.stepHead}>
                             <Text style={styles.stepLabel}>Step {idx + 1}</Text>
@@ -931,25 +711,23 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
           </ScrollView>
         </View>
       </View>
+      <SchedulePickerModal
+        visible={visible && scheduleEditId != null}
+        initialText={editingStep?.scheduleText ?? scheduleToShortText(editingStep?.schedule)}
+        range={scheduleRange(scheduleDeadline)}
+        onCancel={() => setScheduleEditId(null)}
+        onConfirm={text => {
+          if (scheduleEditId) {
+            setSteps(prev => prev.map(step => (
+              step.id === scheduleEditId
+                ? { ...step, scheduleText: text, schedule: parseScheduleShortText(text) }
+                : step
+            )));
+          }
+          setScheduleEditId(null);
+        }}
+      />
     </Modal>
-    <SchedulePickerModal
-      visible={visible && scheduleEditId != null}
-      initialText={editingStep?.scheduleText ?? scheduleToShortText(editingStep?.schedule)}
-      range={scheduleRange(scheduleDeadline)}
-      onCancel={() => setScheduleEditId(null)}
-      onConfirm={text => {
-        if (scheduleEditId) {
-          setSteps(prev => prev.map(step => (
-            step.id === scheduleEditId
-              ? { ...step, scheduleText: text, schedule: parseScheduleShortText(text) }
-              : step
-          )));
-          setDirty(true);
-        }
-        setScheduleEditId(null);
-      }}
-    />
-    </>
   );
 }
 

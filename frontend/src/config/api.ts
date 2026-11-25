@@ -10,3 +10,5 @@ export const API_BASE_URL =
         ios: 'http://localhost:4000',
         default: 'http://localhost:4000',
       }) as string);
+
+if (__DEV__) console.info('SmartGoal API origin', new URL(API_BASE_URL).origin);

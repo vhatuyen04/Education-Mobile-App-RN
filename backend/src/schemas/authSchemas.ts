@@ -89,6 +89,7 @@ export const LeaderboardFieldQuerySchema = z.object({
 
 export const AiGoalSuggestSchema = z.object({
   prompt: z.string().min(1),
+  mode: z.enum(['planner', 'recommendation']).optional(),
   deadline: z.string().min(1).optional(),
   intensity: z.enum(['Light', 'Normal', 'Hard']).optional(),
 });

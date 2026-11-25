@@ -101,15 +101,30 @@ async function authorized<T>(
   _accessToken: string
 ): Promise<T> {
   return gate.withAuthRetry(async accessToken => {
+    const debugPlanner = __DEV__ && path === '/auth/ai/goal';
     const res = await fetch(`${API_BASE_URL}${path}`, {
       method,
       headers: {
         ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
         Authorization: `Bearer ${accessToken}`,
+        ...(debugPlanner && { 'X-SmartGoal-Debug': 'planner' }),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
     const data = await readBody(res);
+    if (debugPlanner) {
+      console.info('SmartGoal planner endpoint', JSON.stringify({
+        origin: new URL(API_BASE_URL).origin, status: res.status, traceId: res.headers.get('X-SmartGoal-Trace'),
+        model: data?.plannerTrace?.model, pid: data?.plannerTrace?.pid,
+      }));
+      for (const event of data?.plannerTrace?.events ?? []) {
+        const { raw, normalized, ...summary } = event;
+        console.info('SmartGoal planner attempt', JSON.stringify(summary));
+        for (const row of raw) console.info('SmartGoal planner step', JSON.stringify({
+          traceId: event.correlationId, attempt: event.attempt, submitted: row, normalized: normalized?.[row.stepNumber - 1]?.schedule ?? null,
+        }));
+      }
+    }
     if (!res.ok) {
       throw new Error(data?.error ?? `Request failed (${res.status})`);
     }
@@ -177,7 +192,7 @@ export type AiGoalSuggestion = {
 export type AiGoalStepSchedule =
   | { type: 'none' }
   | { type: 'once'; due: string }
-  | { type: 'repeat'; repeat: string; repeatDay?: number; repeatMonth?: number };
+  | { type: 'repeat'; repeat: string; repeatDay?: number; repeatMonth?: number; customDates?: string[] | null };
 
 export type AiGoalStep = {
   text: string;
@@ -191,7 +206,7 @@ export type AiGoalSuggestResponse =
 
 export async function aiSuggestGoal(
   accessToken: string,
-  body: { prompt: string; deadline?: string; intensity?: 'Light' | 'Normal' | 'Hard' }
+  body: { prompt: string; deadline?: string; intensity?: 'Light' | 'Normal' | 'Hard'; mode?: 'planner' | 'recommendation' }
 ): Promise<AiGoalSuggestResponse> {
   return postJsonAuth<AiGoalSuggestResponse>('/auth/ai/goal', body, accessToken);
 }
