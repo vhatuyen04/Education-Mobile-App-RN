@@ -10,7 +10,7 @@
 
 import { z } from 'zod';
 
-import { CUSTOM_DATES_LIMIT, utcCivilDate, isCalendarMonthDay, isRealCivilDate, prepareCustomDates, scheduleWriteError, stepOutsideActiveRangeError } from './recurrenceSchedule.js';
+import { CUSTOM_DATES_LIMIT, isCalendarMonthDay, isRealCivilDate, prepareCustomDates, scheduleWriteError, stepOutsideActiveRangeError } from './recurrenceSchedule.js';
 
 const SUPPORTED_REPEATS = ['daily', 'weekly', 'monthly', 'yearly'] as const;
 
@@ -21,6 +21,7 @@ export const scheduleExamples = (civilDate: string) => [
   { type: 'weekdays', days: ['monday', 'wednesday', 'friday'] },
   { type: 'repeat', repeat: SUPPORTED_REPEATS[1], repeatDay: 'monday' },
   { type: 'repeat', repeat: SUPPORTED_REPEATS[2], repeatDay: 15 },
+  { type: 'monthDays', days: [15, 30] },
   { type: 'repeat', repeat: SUPPORTED_REPEATS[3], repeatMonth: 6, repeatDay: 15 },
   { type: 'repeat', repeat: 'custom', customDates: [civilDate] },
 ];
@@ -29,7 +30,7 @@ export type GeneratedStepSchedule =
   | { type: 'none' }
   | { type: 'once'; due: string }
   | { type: 'repeat'; repeat: 'custom'; customDates: string[]; repeatDay?: never; repeatMonth?: never }
-  | { type: 'repeat'; repeat: (typeof SUPPORTED_REPEATS)[number]; repeatDay?: number; repeatMonth?: number };
+  | { type: 'repeat'; repeat: (typeof SUPPORTED_REPEATS)[number]; repeatDay?: number; repeatMonth?: number; repeatDays?: number[] };
 
 export type GeneratedSuggestion =
   | { ok: false; message: string; questions: string[] }
@@ -93,6 +94,7 @@ const GeneratedSuggestionSchema = z.discriminatedUnion('ok', [
                 repeat: z.enum(SUPPORTED_REPEATS),
                 repeatDay: z.number().int().optional(),
                 repeatMonth: z.number().int().optional(),
+                repeatDays: z.array(z.number().int()).min(1).max(31).optional(),
               }),
             ]),
           })
@@ -205,16 +207,19 @@ function normalizeGeneratedSuggestion(value: unknown, window?: GenerationWindow)
           return { ok: false, stepNumber: index + 1, rule: 'repeat_required', error: `Step "${text}": specify the requested recurrence for type "repeat".` };
         }
         const cadence = type === 'repeat' ? repeat : type;
-        if ((due != null && type !== 'once') || (days != null && type !== 'weekdays') ||
+        if ((due != null && type !== 'once') || (days != null && type !== 'weekdays' && type !== 'monthdays') ||
           (repeat && type !== 'repeat' && repeat !== type) || (customDates != null && cadence !== 'custom') ||
           (repeatMonth != null && cadence !== 'yearly') ||
           (repeatDay != null && !['weekly', 'monthly', 'yearly'].includes(cadence))) {
           return { ok: false, stepNumber: index + 1, rule: 'inactive_schedule_fields_null', error: `Step "${text}" mixes schedule rules. Return only the fields in the chosen schedule branch.` };
         }
       }
-      const schedule = step?.schedule?.type === 'weekdays' && window && isRealCivilDate(suggestion.deadline)
-        ? readGeneratedWeekdays(step.schedule.days, window.todayCivil, suggestion.deadline)
-        : readGeneratedStepSchedule(step?.schedule);
+      const rawType = String(step?.schedule?.type ?? '').trim().toLowerCase();
+      const schedule = rawType === 'weekdays'
+        ? readGeneratedWeekdays(step.schedule.days)
+        : rawType === 'monthdays'
+          ? readGeneratedMonthDays(step.schedule.days)
+          : readGeneratedStepSchedule(step?.schedule);
       if (!schedule.ok) return { ok: false, stepNumber: index + 1, rule: 'valid_schedule_values', error: `Step "${text}": ${schedule.error}` };
       if (!schedule.schedule) {
         normalizedSteps.push(step);
@@ -262,28 +267,25 @@ function readGeneratedCustomDates(dates: unknown): { ok: true; schedule: Generat
   return { ok: true, schedule: { type: 'repeat', repeat: 'custom', customDates: prepared.dates } };
 }
 
-export function weekdayDates(days: number[], today: string, deadline: string): string[] {
-  if (!days.length) return [];
-  const selected = new Set(days);
-  const dates: string[] = [];
-  const start = new Date(`${today}T00:00:00.000Z`);
-  const end = new Date(`${deadline}T00:00:00.000Z`);
-  for (const day = new Date(start); day <= end && dates.length <= CUSTOM_DATES_LIMIT; day.setUTCDate(day.getUTCDate() + 1)) {
-    if (selected.has(day.getUTCDay())) dates.push(utcCivilDate(day));
-  }
-  return dates;
-}
-
-function readGeneratedWeekdays(days: unknown, today: string, deadline: string): ReturnType<typeof readGeneratedCustomDates> {
+function readGeneratedWeekdays(days: unknown): { ok: true; schedule: GeneratedStepSchedule } | { ok: false; error: string } {
   if (!Array.isArray(days) || !days.length || new Set(days).size !== days.length ||
     !days.every(day => Number.isInteger(day) && day >= 0 && day <= 6)) {
     return { ok: false, error: 'Select distinct weekdays numbered 0 through 6.' };
   }
-  if (days.length === 1) return { ok: true, schedule: { type: 'repeat', repeat: 'weekly', repeatDay: days[0] } };
-  if (days.length === 7) return { ok: true, schedule: { type: 'repeat', repeat: 'daily' } };
-  const dates = weekdayDates(days, today, deadline);
-  if (!dates.length) return { ok: false, error: 'The selected weekdays have no dates inside the goal window.' };
-  return readGeneratedCustomDates(dates);
+  const unique = [...days].sort((left, right) => left - right);
+  if (unique.length === 7) return { ok: true, schedule: { type: 'repeat', repeat: 'daily' } };
+  if (unique.length === 1) return { ok: true, schedule: { type: 'repeat', repeat: 'weekly', repeatDay: unique[0] } };
+  return { ok: true, schedule: { type: 'repeat', repeat: 'weekly', repeatDay: unique[0], repeatDays: unique } };
+}
+
+function readGeneratedMonthDays(days: unknown): { ok: true; schedule: GeneratedStepSchedule } | { ok: false; error: string } {
+  if (!Array.isArray(days) || !days.length || new Set(days).size !== days.length ||
+    !days.every(day => Number.isInteger(day) && day >= 1 && day <= 31)) {
+    return { ok: false, error: 'Select distinct month days from 1 through 31.' };
+  }
+  const unique = [...days].sort((left, right) => left - right);
+  if (unique.length === 1) return { ok: true, schedule: { type: 'repeat', repeat: 'monthly', repeatDay: unique[0] } };
+  return { ok: true, schedule: { type: 'repeat', repeat: 'monthly', repeatDay: unique[0], repeatDays: unique } };
 }
 
 function readOnce(due: unknown): { ok: true; schedule: GeneratedStepSchedule } | { ok: false; error: string } {
@@ -360,7 +362,7 @@ function readWholeNumber(
 }
 
 function unsupportedRepeatError(value: string): string {
-  return `Unsupported recurrence "${value}". Use daily, weekly, monthly, yearly, or custom under type "repeat". For multiple weekdays, use type "weekdays" with a "days" array.`;
+  return `Unsupported recurrence "${value}". Use daily, weekly, monthly, yearly, or custom under type "repeat". For several weekdays, use type "weekdays". For several month days, use type "monthDays".`;
 }
 
 function onceDateError(value: string): string {

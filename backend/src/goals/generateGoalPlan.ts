@@ -1,6 +1,6 @@
 ﻿import { z } from 'zod/v4';
 import { parseGeneratedSuggestion, type GeneratedSuggestion, type GenerationViolation, type GenerationWindow } from './aiSuggestion.js';
-import { actionSchema, goalModelResponse, goalModelSchedule, horizonSchema } from './goalModelContract.js';
+import { actionSchema, goalModelResponse, goalModelSchedule, horizonSchema, mergeReviewMessage } from './goalModelContract.js';
 import { isRealCivilDate } from './recurrenceSchedule.js';
 import type { createPlannerTrace } from './plannerTrace.js';
 
@@ -17,6 +17,7 @@ type Schedule =
   | { type: 'repeat'; repeat: 'monthly'; repeatDay: number }
   | { type: 'repeat'; repeat: 'yearly'; repeatMonth: number; repeatDay: number }
   | { type: 'weekdays'; days: number[] }
+  | { type: 'monthDays'; days: number[] }
   | { type: 'repeat'; repeat: 'custom'; customDates: string[] };
 type Action = z.infer<typeof actionSchema>;
 type Constraint = Schedule | { type: 'nonrecurring' } | null;
@@ -24,6 +25,7 @@ const WEEKDAY_NUMBER = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursda
 
 function numericSchedule(schedule: ModelSchedule): Schedule {
   if (schedule.type === 'weekdays') return { type: 'weekdays', days: schedule.days.map(day => WEEKDAY_NUMBER[day]) };
+  if (schedule.type === 'monthDays') return { type: 'monthDays', days: schedule.days };
   if (schedule.type === 'repeat' && schedule.repeat === 'weekly') return { type: 'repeat', repeat: 'weekly', repeatDay: WEEKDAY_NUMBER[schedule.repeatDay] };
   return schedule;
 }
@@ -43,6 +45,11 @@ function scheduleKey(schedule: Schedule): string {
     if (schedule.days.length === 1) return scheduleKey({ type: 'repeat', repeat: 'weekly', repeatDay: schedule.days[0] });
     if (new Set(schedule.days).size === 7 && schedule.days.length === 7) return scheduleKey({ type: 'repeat', repeat: 'daily' });
     return 'weekdays:' + [...schedule.days].sort().join(',');
+  }
+  if (schedule.type === 'monthDays') {
+    const days = [...new Set(schedule.days)].sort((left, right) => left - right);
+    if (days.length === 1) return scheduleKey({ type: 'repeat', repeat: 'monthly', repeatDay: days[0] });
+    return 'monthDays:' + days.join(',');
   }
   if (schedule.type === 'repeat' && schedule.repeat === 'custom') return 'dates:' + [...schedule.customDates].sort().join(',');
   return JSON.stringify(schedule);
@@ -71,11 +78,6 @@ function scheduleFor(constraints: Constraint[], proposed: Schedule): Schedule {
   return proposed;
 }
 
-function openSchedule(proposed: Schedule, others: Constraint[]): Schedule {
-  const copiesAnotherAction = others.some(schedule => schedule && schedule.type !== 'nonrecurring' && scheduleKey(schedule) === scheduleKey(proposed));
-  return copiesAnotherAction ? { type: 'none' } : proposed;
-}
-
 type DraftStep = {
   text: string;
   description: string;
@@ -99,6 +101,27 @@ function scheduleFromWeekdays(days: number[]): Schedule {
   return { type: 'weekdays', days: unique };
 }
 
+function monthDayMembership(schedule: Schedule): number[] | null {
+  if (schedule.type === 'monthDays') return schedule.days;
+  if (schedule.type === 'repeat' && schedule.repeat === 'monthly') return [schedule.repeatDay];
+  return null;
+}
+
+function scheduleFromMonthDays(days: number[]): Schedule {
+  const unique = [...new Set(days)].sort((a, b) => a - b);
+  if (unique.length === 1) return { type: 'repeat', repeat: 'monthly', repeatDay: unique[0] };
+  return { type: 'monthDays', days: unique };
+}
+
+function combineSameKindSchedules(left: Schedule, right: Schedule): Schedule | null {
+  const weekdays = combineWeekdaySchedules(left, right);
+  if (weekdays) return weekdays;
+  const first = monthDayMembership(left);
+  const second = monthDayMembership(right);
+  if (!first || !second) return null;
+  return scheduleFromMonthDays([...first, ...second]);
+}
+
 function sameActivityKey(item: DraftStep): string {
   return JSON.stringify({
     text: item.text.trim(),
@@ -109,6 +132,29 @@ function sameActivityKey(item: DraftStep): string {
   });
 }
 
+function daySet(schedule: Schedule): { kind: 'week' | 'month'; days: number[] } | null {
+  const weekdays = weekdayMembership(schedule);
+  if (weekdays) return { kind: 'week', days: weekdays };
+  const monthDays = monthDayMembership(schedule);
+  if (monthDays) return { kind: 'month', days: monthDays };
+  return null;
+}
+
+// A step that already lists each linked action's single day is kept as the model wrote it.
+function scheduleCoversSingleDays(proposed: Schedule, constraints: Constraint[]): boolean {
+  const concrete = constraints.filter((schedule): schedule is Schedule => !!schedule && schedule.type !== 'nonrecurring');
+  if (concrete.length < 2) return false;
+  const parts = concrete.map(daySet);
+  if (parts.some(part => !part || part.days.length !== 1)) return false;
+  const kind = parts[0]!.kind;
+  if (parts.some(part => part!.kind !== kind)) return false;
+  const required = [...new Set(parts.flatMap(part => part!.days))].sort((left, right) => left - right);
+  const covered = daySet(proposed);
+  if (!covered || covered.kind !== kind) return false;
+  const listed = [...new Set(covered.days)].sort((left, right) => left - right);
+  return required.length === listed.length && required.every((day, index) => day === listed[index]);
+}
+
 function combineWeekdaySchedules(left: Schedule, right: Schedule): Schedule | null {
   const first = weekdayMembership(left);
   const second = weekdayMembership(right);
@@ -116,21 +162,20 @@ function combineWeekdaySchedules(left: Schedule, right: Schedule): Schedule | nu
   return scheduleFromWeekdays([...first, ...second]);
 }
 
-// One activity on several weekdays is one schedule. Models often emit one weekly step per day;
-// applying a shared weekday set to each copy would otherwise repeat the same calendar.
+// Identical copies of one activity can share a schedule. Different wording stays as the model wrote it.
 function foldSameActivity(items: DraftStep[]): DraftStep[] {
   const folded: DraftStep[] = [];
   for (const item of items) {
     const key = sameActivityKey(item);
     const match = folded.findIndex(existing => {
       if (sameActivityKey(existing) !== key) return false;
-      return combineWeekdaySchedules(existing.proposed, item.proposed) != null || scheduleKey(existing.proposed) === scheduleKey(item.proposed);
+      return combineSameKindSchedules(existing.proposed, item.proposed) != null || scheduleKey(existing.proposed) === scheduleKey(item.proposed);
     });
     if (match < 0) {
       folded.push(item);
       continue;
     }
-    const combined = combineWeekdaySchedules(folded[match].proposed, item.proposed);
+    const combined = combineSameKindSchedules(folded[match].proposed, item.proposed);
     if (combined) folded[match] = { ...folded[match], proposed: combined };
   }
   return folded;
@@ -199,20 +244,20 @@ function decode(value: unknown, window: GenerationWindow, previous: RepairConstr
     const draft = (text: string, description: string, actionIds: number[], schedule: Schedule, applied: Constraint[]) => {
       pending.push({ text, description, durationMinutes: step.durationMinutes, actionIds, proposed: schedule, constraints: applied });
     };
+    if (scheduleCoversSingleDays(proposed, constraints)) {
+      draft(step.text, step.description, step.actionIds, proposed, [proposed]);
+      continue;
+    }
     if (new Set(constraints.map(constraintKind)).size === 1) {
       draft(step.text, step.description, step.actionIds, proposed, constraints);
       continue;
     }
-    // Different hard constraints cannot share a step. Separate them instead of rejecting the plan.
-    linked.forEach((action, actionIndex) => {
-      const constraint = constraints[actionIndex];
-      const schedule = !constraint
-        ? openSchedule(proposed, constraints.filter((_, other) => other !== actionIndex))
-        : constraint.type === 'nonrecurring'
-          ? (proposed.type === 'once' ? proposed : { type: 'none' })
-          : constraint;
-      draft(action.label, '', [action.id], schedule, [constraint]);
-    });
+    return {
+      ok: false,
+      code: 'schedule',
+      stepNumber: index + 1,
+      error: 'Linked actions have different schedules, and this step does not list exactly those days. Give each incompatible schedule its own step. Keep the step title and description.',
+    };
   }
   const steps = dedupeResolved(foldSameActivity(pending).map(item => ({
     text: item.text,
@@ -223,6 +268,23 @@ function decode(value: unknown, window: GenerationWindow, previous: RepairConstr
   if (steps.length > 12) return { ok: false, code: 'activity_coverage', error: 'Use at most 12 steps. Give actions with different timing their own steps.' };
   if (covered.size !== actions.size) return { ok: false, code: 'activity_coverage', error: 'Include steps for uncovered action IDs: ' + [...actions.keys()].filter(id => !covered.has(id)).join(', ') };
   return parseGeneratedSuggestion({ ok: true, suggestion: { ...suggestion, deadline: window.requestedDeadline ?? interpreted, steps } }, window);
+}
+
+async function mergedPlan(options: {
+  messages: Message[];
+  window: GenerationWindow;
+  requestModel: (messages: Message[]) => Promise<string | null>;
+}, previous: RepairConstraints, raw: string): Promise<Suggestion | null> {
+  let reviewRaw: string | null;
+  try {
+    reviewRaw = await options.requestModel([...options.messages, { role: 'user', content: mergeReviewMessage(raw) }]);
+  } catch {
+    return null;
+  }
+  let value;
+  try { value = JSON.parse(reviewRaw ?? ''); } catch { return null; }
+  const reviewed = decode(value, options.window, previous);
+  return reviewed.ok && reviewed.value.ok ? reviewed.value.suggestion : null;
 }
 
 export async function generateGoalPlan<T>(options: {
@@ -249,6 +311,10 @@ export async function generateGoalPlan<T>(options: {
     if (trace) trace.record(attempt, options.window, options.window.requestedDeadline, trace.snapshot(value), result.ok ? trace.snapshot(result.value) : null, result.ok ? undefined : result);
     if (result.ok) {
       if (attempt === 'repair') options.logRepair({ status: 'succeeded' });
+      if (result.value.ok) {
+        const merged = await mergedPlan(options, previous, raw ?? '');
+        if (merged) return { ok: true, value: await options.finalize(merged) };
+      }
       return { ok: true, value: result.value.ok ? await options.finalize(result.value.suggestion) : result.value };
     }
     options.logRepair({ status: attempt === 'initial' ? 'attempted' : 'rejected', code: result.code, fields: result.fields, stepNumber: result.stepNumber });

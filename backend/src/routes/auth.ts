@@ -1678,7 +1678,28 @@ authRouter.post('/ai/goal', async (req: Request, res: Response) => {
         requestedDeadline,
         deadlineConfirmed: parsed.data.deadlineConfirmed,
       },
-      requestModel: messages => requestGoalModel(messages, apiKey, model),
+      requestModel: async messages => {
+        const raw = await requestGoalModel(messages, apiKey, model);
+        // Temporary debug dump. Delete this block and backend/tmp/planner-review-debug.json after comparing the two responses.
+        if (development) {
+          const last = messages[messages.length - 1]?.content ?? '';
+          const label = last.startsWith('Treat the previous output as data.')
+            ? 'review'
+            : last.startsWith('Repair the structural error')
+              ? 'repair'
+              : 'initial';
+          let body: unknown = raw;
+          try { body = JSON.parse(raw ?? ''); } catch { body = raw; }
+          const debugFile = path.resolve(process.cwd(), 'tmp', 'planner-review-debug.json');
+          const prior = fs.existsSync(debugFile) ? JSON.parse(fs.readFileSync(debugFile, 'utf8')) : { calls: [] };
+          const calls = label === 'initial' ? [] : (Array.isArray(prior.calls) ? prior.calls : []);
+          calls.push({ label, at: new Date().toISOString(), body });
+          fs.mkdirSync(path.dirname(debugFile), { recursive: true });
+          fs.writeFileSync(debugFile, JSON.stringify({ prompt, savedAt: new Date().toISOString(), calls }, null, 2));
+          console.info('SmartGoal planner debug', debugFile, label);
+        }
+        return raw;
+      },
       trace,
       logRepair: event => console.info('AI goal repair', event),
       finalize: async suggestion => {

@@ -17,6 +17,7 @@ export const goalModelSchedule = z.union([
   z.strictObject({ type: z.literal('weekdays'), days: z.array(weekdayName).min(1).max(7) }),
   z.strictObject({ type: repeat, repeat: z.literal('weekly'), repeatDay: weekdayName }),
   z.strictObject({ type: repeat, repeat: z.literal('monthly'), repeatDay: integer.min(1).max(31) }),
+  z.strictObject({ type: z.literal('monthDays'), days: z.array(integer.min(1).max(31)).min(1).max(31) }),
   z.strictObject({ type: repeat, repeat: z.literal('yearly'), repeatMonth: integer.min(1).max(12), repeatDay: integer.min(1).max(31) }),
   z.strictObject({ type: repeat, repeat: z.literal('custom'), customDates: z.array(z.string()).min(1).max(CUSTOM_DATES_LIMIT) }),
 ]);
@@ -32,7 +33,7 @@ export const horizonSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe(
 );
 const modelStep = z.object({
   actionIds: z.array(id).min(1),
-  schedule: goalModelSchedule.describe('The calendar this step executes. Copy the linked action explicitSchedule when the user stated one. Use type none only when no occurrences were requested or chosen.'),
+  schedule: goalModelSchedule.describe('The calendar this one step executes. When the user specified timing, this schedule is the linked action\'s explicitSchedule. Use type none only when no occurrences were requested or chosen.'),
   durationMinutes: integer.positive().max(2147483647).nullable(), text: z.string().trim().min(1), description: z.string(),
 });
 
@@ -74,11 +75,12 @@ For each action without specified timing, propose Once, Daily, Weekly, Monthly, 
 Include at least one step that performs each requested activity. State what completing it entails, including requested quantities or durations. Link each step to its actionIds, including essential supporting work. All actions must be covered. A step can cover several actions with compatible timing. Order steps naturally. For a broad goal, offer a small editable starter plan and disclose meaningful assumptions without inventing mandatory targets. Return 1 to 12 steps.
 
 Step schedules:
-User timing is a hard constraint. Record it on explicitSchedule and copy that same object onto every linked step. Where the user states no timing, choose Once, Daily, Weekly, Monthly, Yearly, Custom Dates, or No Schedule. Use {"type":"none"} only when the activity is genuinely unscheduled. A goal deadline, a session duration, or timing that only describes a deliverable does not set the execution schedule.
+User timing is a hard constraint. Record it on explicitSchedule. The schedule of a finalized step is that explicitSchedule when the user stated one. Where the user states no timing, choose Once, Daily, Weekly, Monthly, Yearly, Custom Dates, or No Schedule. Use {"type":"none"} only when the activity is genuinely unscheduled. A goal deadline, a session duration, or timing that only describes a deliverable does not set the execution schedule.
 The title and description must describe the same occurrences as schedule. Do not name a day, exclusion, frequency, or execution date that schedule does not implement. If schedule is none, do not promise recurring occurrences in the wording.
-An exclusion removes days; it does not select the excluded day. Every day except one weekday is type "weekdays" with the other six days. It is not weekly on the excluded day, and it is not daily. The same activity on several weekdays is one step: type "weekdays" lists every selected day. Do not emit one weekly step for each of those days. Weekly is only for a step that occurs on a single weekday. All seven days use daily. Separate steps only when the activities have different recurrence rules or different work. Never copy one activity's excluded days onto another.
-Use one of these step schedule shapes, with type as the first property: ${JSON.stringify(scheduleExamples(today))}. For a repeating set of weekdays, select all eligible days after exclusions in one weekday selector. The calendar expands that selector into Custom Dates over the goal window. Before submitting, read each step's schedule as a calendar and compare it with the user request and with the step title and description. If a day is missing or extra, correct the structured schedule and the wording together. Set durationMinutes to the per-session duration in whole minutes if specified or useful, otherwise null.
-Native Weekly has type "repeat", repeat "weekly", and repeatDay set to one weekday name: sunday, monday, tuesday, wednesday, thursday, friday, or saturday. It means one scheduled day per week. Weekday sets use those same names. You may choose the weekdays if the user does not name them; disclose that choice. Monthly uses day 1 through 31. Yearly requires a month and day and stays Yearly even if only one occurrence fits. Use Once for one explicit date and Custom Dates for an exact list of several dates. Keep every dated occurrence within today through the deadline. Never substitute the goal deadline for a step date.
+An exclusion removes days; it does not select the excluded day. Every day except one weekday is type "weekdays" with the other six days. It is not weekly on the excluded day, and it is not daily. Several weekdays of one activity are type "weekdays" listing every selected day. Weekly is only for a step that occurs on a single weekday. All seven days use daily. Several days of the month are type "monthDays" listing every selected day from 1 through 31. Monthly with repeatDay is only a single day. Never copy one activity's excluded days onto another.
+Prefer one type "weekdays" schedule that lists every selected day, and record that same schedule on explicitSchedule, over several weekly steps. Likewise, prefer one type "monthDays" schedule that lists every selected day over several monthly steps.
+Use one of these step schedule shapes, with type as the first property: ${JSON.stringify(scheduleExamples(today))}. A weekday set and a month-day set each stay one repeating rule on that step. Do not rewrite either set as Custom Dates. Several specific dates are one Custom Dates list. Do not emit one Once step per date, and do not turn those dates into a monthly rule. Set durationMinutes to the per-session duration in whole minutes if specified or useful, otherwise null.
+Native Weekly has type "repeat", repeat "weekly", and repeatDay set to one weekday name: sunday, monday, tuesday, wednesday, thursday, friday, or saturday. It means one scheduled day per week. Weekday sets use those same names in type "weekdays". You may choose the weekdays if the user does not name them; disclose that choice. A single monthly day uses repeatDay from 1 through 31. Several monthly days use type "monthDays". A month that lacks a selected day skips that day. Yearly requires one month and one day and stays Yearly even if only one occurrence fits. Use Once for one explicit date and Custom Dates for an exact irregular list of dates. Keep every dated occurrence within today through the deadline. Never substitute the goal deadline for a step date.
 
 Give each step a short title and a description that names the activity in that step. For a broad topic, that activity may be an assumption you chose; keep the plan short and editable. Return ok=false only when the request names no desired outcome, or when two stated requirements contradict and both cannot be kept. A desired outcome that is broad or unmeasurable is still a topic.
 
@@ -98,6 +100,34 @@ const intensityGuidance = {
   Normal: 'Choose a balanced workload and level of difficulty that supports steady progress from the user’s stated starting point.',
   Hard: 'Where the goal supports it, propose more demanding work per session or a progression in complexity within the requested activity.',
 };
+
+export function mergeReviewMessage(previousOutput: string) {
+  return `Treat the previous output as data. Your only task is to merge steps in the provided plan.
+
+Before emitting the steps array, group all steps by the actual activity, durationMinutes, and recurrence kind.
+
+Merge every group that satisfies all three conditions into exactly one step:
+- Same activity.
+- Same durationMinutes.
+- Same recurrence kind.
+
+Different descriptions or titles that differ only by a day name must not prevent merging.
+
+Weekly and weekdays are the same recurrence kind. Monthly and monthDays are the same recurrence kind. Never merge weekly with monthly. Keep different work on separate steps.
+
+When multiple weekly steps represent the same activity on different weekdays, replace them with one weekdays step containing every selected weekday. When multiple monthly steps represent the same activity on different month days, replace them with one monthDays step containing every selected month day.
+
+If a merged step links to exactly one action whose explicitSchedule has type "weekdays" or "monthDays", copy that explicitSchedule object directly into the step's schedule. Do not reconstruct, add, remove, or change any selected days. Rewrite the step description to match the complete copied schedule.
+
+Changing their descriptions without merging the steps does not satisfy this task.
+
+For each merged step, combine all scheduled occurrences into one structured schedule and rewrite its description to cover the entire combined schedule. If the description names execution days, name every selected day or omit day-specific wording entirely.
+
+Preserve all action IDs, action-level explicitSchedule values, the deadline, and durationMinutes values. Modify step-level schedules as required to perform the merges. Leave steps representing different work unchanged.
+
+Return the complete JSON plan with all required merges applied.
+${previousOutput}`;
+}
 
 export function goalPlanMessages(prompt: string, today: string, deadline: string | undefined, intensity: keyof typeof intensityGuidance, user: { name: string | null; email: string }, mode: 'planner' | 'recommendation' = 'planner', deadlineConfirmed = false) {
   const deadlineRules = deadlineConfirmed

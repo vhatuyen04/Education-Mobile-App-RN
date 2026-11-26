@@ -75,7 +75,7 @@ for (const scenario of [
   },
 ]) {
   for (const reverse of scenario.native ? [false, true] : [false]) {
-    test(`Android request reaches an editable draft on the first model call: ${scenario.title} (reversed=${reverse})`, async () => {
+    test(`Android request reaches an editable draft: ${scenario.title} (reversed=${reverse})`, async () => {
       const rows = scenario.steps.map((step, i) => ({ ...step, actionId: scenario.indices[i] }));
       if (reverse) rows.reverse();
       const todayCivil = '2026-11-25';
@@ -100,7 +100,7 @@ for (const scenario of [
         finalize: async suggestion => preparePlannerDraft(suggestion),
         logRepair: event => assert.fail(JSON.stringify(event)),
       });
-      assert.equal(calls, 1);
+      assert.equal(calls, 2);
       assert.ok(result.ok && 'steps' in result.value);
       const draft = result.value;
       assert.equal(draft.deadline, scenario.deadline);
@@ -113,11 +113,9 @@ for (const scenario of [
         }
       }
       for (const [i, expectedDays] of (scenario.weekdays ?? []).entries()) {
-        const expectedDates: string[] = [];
-        for (const day = new Date(todayCivil + 'T00:00:00Z'); day.toISOString().slice(0, 10) <= draft.deadline; day.setUTCDate(day.getUTCDate() + 1)) {
-          if (expectedDays.includes(day.getUTCDay())) expectedDates.push(day.toISOString().slice(0, 10));
-        }
-        assert.deepEqual(parseScheduleShortText(draft.steps[i].scheduleText).customDates, expectedDates);
+        const stored = parseScheduleShortText(draft.steps[i].scheduleText);
+        assert.equal(stored.repeat, 'weekly');
+        assert.deepEqual(stored.repeatDays, [...expectedDays].sort((a, b) => a - b));
       }
     });
   }
@@ -157,6 +155,31 @@ test('planner preserves the selected December 24 deadline when the model returns
 test('planner can use the model deadline when no deadline is supplied', () => {
   const draft = preparePlannerDraft({ deadline: '2026-12-01', steps: [] });
   assert.equal(draft.deadline, '2026-12-01');
+});
+
+test('several month days stay one monthly rule in the editable draft', async () => {
+  const todayCivil = '2026-11-25';
+  const deadline = '2027-06-01';
+  const result = await generateGoalPlan({
+    messages: goalPlanMessages('Review finances on the 15th and the 30th of each month.', todayCivil, undefined, 'Normal', { name: null, email: 'test@example.invalid' }),
+    window: { todayCivil },
+    requestModel: () => requestGoalModel([], 'unused', 'offline', async () => Response.json({ choices: [{ message: { content: JSON.stringify({
+      ok: true, message: '', questions: [], suggestion: {
+        actions: [{ id: 1, label: 'Review', explicitSchedule: { type: 'monthDays', days: [30, 15] } }],
+        title: 'Monthly review', description: 'Check the accounts twice a month.', expectation: 'Keep a record of each review.',
+        field: 'Academy', deadline, deadlineSource: 'requested', requirement: '', difficultyScore: 25, difficultyConfidence: 0.9,
+        difficultyReason: 'Routine review.', rankingEligible: false, rankingEligibilityReason: 'A personal habit.',
+        steps: [{ text: 'Review finances', description: 'Compare income and expenses.', actionIds: [1], durationMinutes: null, schedule: { type: 'monthDays', days: [30, 15] } }],
+      },
+    }) } }] })),
+    finalize: async suggestion => preparePlannerDraft(suggestion),
+    logRepair: event => assert.fail(JSON.stringify(event)),
+  });
+  assert.ok(result.ok && 'steps' in result.value);
+  const stored = parseScheduleShortText(result.value.steps[0].scheduleText);
+  assert.equal(stored.repeat, 'monthly');
+  assert.deepEqual(stored.repeatDays, [15, 30]);
+  assert.equal(stepOutsideActiveRangeError(stored, deadline, todayCivil), null);
 });
 
 test('generated Custom Dates reach the existing schedule draft without adding or removing days', () => {

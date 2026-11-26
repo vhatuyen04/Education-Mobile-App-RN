@@ -1,7 +1,7 @@
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import type { GenerationViolation, GenerationWindow } from './aiSuggestion.js';
 
-const scheduleWords = new Set(['none', 'once', 'repeat', 'weekdays', 'daily', 'weekly', 'monthly', 'yearly', 'custom']);
+const scheduleWords = new Set(['none', 'once', 'repeat', 'weekdays', 'monthDays', 'daily', 'weekly', 'monthly', 'yearly', 'custom']);
 const weekdayNumber = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6 } as const;
 const civil = (v: unknown) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null;
 const field = (v: unknown) => v == null ? null : typeof v === 'string' && scheduleWords.has(v) ? v : 'invalid';
@@ -17,8 +17,10 @@ export function createPlannerTrace(emit: (event: object) => void) {
     const dates = Array.isArray(value.customDates) ? value.customDates.map(civil).sort() : null;
     return {
       type: field(typeof value === 'string' ? value : value.type), repeat: field(value.repeat),
-      days: Array.isArray(value.days) ? value.days.slice(0, 14).map(weekday).sort() : null,
-      repeatDay: weekday(value.repeatDay), repeatMonth: integer(value.repeatMonth), due: civil(value.due),
+      days: Array.isArray(value.days) ? value.days.slice(0, 31).map(weekday).sort() : null,
+      repeatDay: weekday(value.repeatDay), repeatMonth: integer(value.repeatMonth),
+      repeatDays: Array.isArray(value.repeatDays) ? value.repeatDays.slice(0, 31).map(integer) : null,
+      due: civil(value.due),
       customDates: dates && dates.slice(0, 32), dateCount: dates?.length ?? null,
       datesHash: dates && fingerprint(JSON.stringify(dates)),
     };
