@@ -179,6 +179,7 @@ function step(input: {
     repeat: input.repeat ?? null,
     repeatDay: input.repeatDay ?? null,
     repeatMonth: input.repeatMonth ?? null,
+    repeatDays: [],
     durationMinutes: null,
     archivedAt: null,
     effectiveFrom: null,

@@ -20,5 +20,10 @@ export function recommendationStepFields(schedule: AiGoalStepSchedule) {
   if (schedule.type === 'once') return { dueAt: utcMidnightIsoFromCivilText(schedule.due) };
   if (schedule.type === 'none') return {};
   if (schedule.repeat === 'custom') return { repeat: 'custom', customDates: schedule.customDates ?? [] };
-  return { repeat: schedule.repeat, repeatDay: schedule.repeatDay ?? null, repeatMonth: schedule.repeatMonth ?? null };
+  return {
+    repeat: schedule.repeat,
+    repeatDay: schedule.repeatDay ?? null,
+    repeatMonth: schedule.repeatMonth ?? null,
+    ...(schedule.repeatDays && schedule.repeatDays.length > 1 ? { repeatDays: schedule.repeatDays } : null),
+  };
 }

@@ -420,6 +420,30 @@ test('explicit civil dates survive a timezone different from the server', () => 
   );
 });
 
+test('several weekly days stay one step and several monthly days skip a missing day', () => {
+  const tuesday = new Date(2026, 10, 17, 12, 0, 0, 0);
+  const february28 = new Date(2026, 1, 28, 12, 0, 0, 0);
+  const january30 = new Date(2026, 0, 30, 12, 0, 0, 0);
+  const january31 = new Date(2026, 0, 31, 12, 0, 0, 0);
+  const week = { repeat: 'weekly', repeatDay: 1, repeatDays: [1, 2] };
+  assert.equal(scheduleWriteError(week), null);
+  assert.equal(isStepScheduledOnDay(week, monday), true);
+  assert.equal(isStepScheduledOnDay(week, tuesday), true);
+  assert.equal(isStepScheduledOnDay(week, sunday), false);
+  assert.equal(countRepeatOccurrencesBetween(week, monday, tuesday), 2);
+  assert.match(scheduleWriteError({ repeat: 'weekly', repeatDays: [1, 1] }) ?? '', /once/);
+
+  const month = { repeat: 'monthly', repeatDay: 30, repeatDays: [30, 31] };
+  assert.equal(scheduleWriteError(month), null);
+  assert.equal(isStepScheduledOnDay(month, january30), true);
+  assert.equal(isStepScheduledOnDay(month, january31), true);
+  assert.equal(isStepScheduledOnDay(month, april30), true);
+  assert.equal(isStepScheduledOnDay(month, april29), false);
+  assert.equal(isStepScheduledOnDay(month, february28), false);
+  assert.equal(countRepeatOccurrencesBetween(month, new Date(2026, 0, 1), new Date(2026, 3, 30)), 5);
+  assert.equal(isStepScheduledOnDay({ repeat: 'monthly', repeatDay: 31 }, february28), true);
+});
+
 function civilDays(from: Date, to: Date): number {
   const start = Date.UTC(from.getFullYear(), from.getMonth(), from.getDate());
   const end = Date.UTC(to.getFullYear(), to.getMonth(), to.getDate());

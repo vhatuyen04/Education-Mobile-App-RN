@@ -10,21 +10,19 @@
 
 import { z } from 'zod';
 
-import { CUSTOM_DATES_LIMIT, isCalendarMonthDay, isRealCivilDate, prepareCustomDates, scheduleWriteError, stepOutsideActiveRangeError } from './recurrenceSchedule.js';
-import { duplicateActionError, durationClaims, generatedHorizonError, hasActionableGoalWording, readScheduleIntent, scheduleIntentError, stepFrequencyClaim, weekdayDates } from './aiScheduleIntent.js';
-import { activityMetadataWarnings, activityScheduleError, ambiguousActivityMessage, readActivitySchedules, type ActivitySchedules } from './aiActivitySchedules.js';
+import { CUSTOM_DATES_LIMIT, utcCivilDate, isCalendarMonthDay, isRealCivilDate, prepareCustomDates, scheduleWriteError, stepOutsideActiveRangeError } from './recurrenceSchedule.js';
 
 const SUPPORTED_REPEATS = ['daily', 'weekly', 'monthly', 'yearly'] as const;
 
-export const GENERATED_SCHEDULE_CONTRACT = [
+export const scheduleExamples = (civilDate: string) => [
   { type: 'none' },
-  { type: 'once', due: 'YYYY-MM-DD' },
+  { type: 'once', due: civilDate },
   { type: 'repeat', repeat: SUPPORTED_REPEATS[0] },
-  { type: 'repeat', repeat: SUPPORTED_REPEATS[1], repeatDay: 1 },
+  { type: 'weekdays', days: ['monday', 'wednesday', 'friday'] },
+  { type: 'repeat', repeat: SUPPORTED_REPEATS[1], repeatDay: 'monday' },
   { type: 'repeat', repeat: SUPPORTED_REPEATS[2], repeatDay: 15 },
   { type: 'repeat', repeat: SUPPORTED_REPEATS[3], repeatMonth: 6, repeatDay: 15 },
-  { type: 'weekdays', days: [1, 3, 5] },
-  { type: 'repeat', repeat: 'custom', customDates: ['YYYY-MM-DD'] },
+  { type: 'repeat', repeat: 'custom', customDates: [civilDate] },
 ];
 
 export type GeneratedStepSchedule =
@@ -49,7 +47,7 @@ export type GeneratedSuggestion =
         difficultyReason: string;
         rankingEligible: boolean;
         rankingEligibilityReason: string;
-        steps: Array<{ text: string; description?: string; schedule: GeneratedStepSchedule }>;
+        steps: Array<{ text: string; description?: string; durationMinutes?: number; schedule: GeneratedStepSchedule }>;
       };
     };
 
@@ -78,7 +76,7 @@ const GeneratedSuggestionSchema = z.discriminatedUnion('ok', [
           z.object({
             text: z.string().trim().min(1),
             description: z.string().optional(),
-            activityIndex: z.number().int().positive().nullable().optional(),
+            durationMinutes: z.number().int().positive().optional(),
             schedule: z.union([
               z.object({ type: z.literal('none') }),
               z.object({
@@ -105,26 +103,23 @@ const GeneratedSuggestionSchema = z.discriminatedUnion('ok', [
   }),
 ]);
 
-export type GenerationWindow = { todayCivil: string; requestedDeadline?: string; prompt?: string; activitySchedules?: ActivitySchedules };
+export type GenerationWindow = { todayCivil: string; requestedDeadline?: string; deadlineConfirmed?: boolean };
 
 export type GenerationViolation = {
   stage?: string;
   rule?: string;
   ok: false;
-  code: 'json' | 'shape' | 'deadline' | 'schedule' | 'primary_action' | 'clarification' | 'activity_mapping';
+  code: 'json' | 'shape' | 'deadline' | 'schedule' | 'activity_mapping' | 'activity_coverage';
   fields?: string[];
   error: string;
   detail?: string;
-  activity?: string;
   stepNumber?: number;
 };
 
 export function parseGeneratedSuggestion(
   value: unknown,
   window?: GenerationWindow
-): { ok: true; value: GeneratedSuggestion; warnings: string[]; wordingWarning?: GenerationViolation } | GenerationViolation {
-  const activitySchedules = window?.activitySchedules ?? (window?.prompt === undefined ? null : readActivitySchedules(window.prompt));
-  if (activitySchedules?.kind === 'ambiguous') return { ok: false, code: 'activity_mapping', error: ambiguousActivityMessage };
+): { ok: true; value: GeneratedSuggestion } | GenerationViolation {
   const normalized = normalizeGeneratedSuggestion(value, window);
   if (!normalized.ok) return { ...normalized, code: 'schedule', stage: 'normalization' };
   const parsed = GeneratedSuggestionSchema.safeParse(normalized.value);
@@ -137,8 +132,6 @@ export function parseGeneratedSuggestion(
       detail: formatSuggestionSchemaIssues(parsed.error).join('; '),
     };
   }
-  const warnings: string[] = [];
-  let wordingWarning: GenerationViolation | undefined;
   if (window && parsed.data.ok) {
     const { deadline, steps } = parsed.data.suggestion;
     if (!isRealCivilDate(deadline) || deadline < window.todayCivil) {
@@ -157,51 +150,8 @@ export function parseGeneratedSuggestion(
         if (error) return { ok: false, code: 'schedule', stage: writeError ? 'structure' : 'window', rule: writeError ? 'writable_recurrence' : 'recurrence_within_window', stepNumber: index + 1, error: `Step "${text}": ${error}` };
       }
     }
-    if (window.prompt !== undefined || activitySchedules?.kind === 'scoped') {
-      const violation = activityScheduleError(activitySchedules, window.prompt ?? '', steps, window.todayCivil, deadline, normalized.stepWeekdays ?? []);
-      if (violation) return { ok: false, stage: violation.code === 'schedule' ? 'schedule_intent' : violation.code, ...violation };
-    }
-    for (const [i, step] of steps.entries()) {
-      for (const field of ['text', 'description'] as const) {
-        const wording = step[field] ?? '';
-        for (const clause of wording.split(/[.!?;]\s*|\n/)) {
-          const claim = stepFrequencyClaim(clause, activitySchedules?.kind === 'single' && activitySchedules.planningDeliverable);
-          if (!claim) continue;
-          const mismatch = scheduleIntentError(claim, step.schedule, window.todayCivil, deadline, normalized.stepWeekdays?.[i]);
-          if (!mismatch) continue;
-          const issue: GenerationViolation = { ok: false, code: 'schedule', stage: 'step_wording',
-            rule: claim.kind === 'invalid' ? `wording_${claim.reason}` : mismatch.rule, stepNumber: i + 1,
-            fields: [`suggestion.steps.${i}.${field}`],
-            detail: JSON.stringify({ field, clause, interpretedClaim: claim, submittedSchedule: step.schedule }),
-            error: `Step ${i + 1}: ${mismatch.error} Rewrite the indicated wording to describe the scheduled action accurately. Preserve the user's explicit schedule.` };
-          if (activitySchedules?.kind !== 'single' || activitySchedules.activity) return issue;
-          wordingWarning ??= issue;
-          warnings.push(issue.error);
-        }
-      }
-    }
-    if (window.requestedDeadline) {
-      const originalEnds = new Set(durationClaims(window.prompt ?? '', window.todayCivil).map(claim => claim.end));
-      const { title, description, expectation, requirement } = parsed.data.suggestion;
-      const fields: { text?: string; stepNumber?: number }[] = [title, description, expectation, requirement].map(text => ({ text }));
-      fields.push(...steps.flatMap((step, i) => [step.text, step.description].map(text => ({ text, stepNumber: i + 1 }))));
-      for (const { text, stepNumber } of fields) {
-        const error = text && generatedHorizonError(text, window.todayCivil, deadline, !!stepNumber, originalEnds);
-        if (error) return { ok: false, code: 'deadline', stage: 'generated_wording', rule: 'consistent_goal_horizon', stepNumber, error };
-      }
-    }
-    if (activitySchedules?.kind === 'scoped') warnings.push(...activityMetadataWarnings(activitySchedules.activities, parsed.data.suggestion));
-    const duplicate = duplicateActionError(steps);
-    if (duplicate) warnings.push(duplicate);
-  } else if (window?.prompt && (readScheduleIntent(window.prompt) || hasActionableGoalWording(window.prompt) ||
-    (activitySchedules?.kind === 'single' && activitySchedules.actionable))) {
-    return { ok: false, code: 'clarification', error: 'The request has an actionable goal. Return a draft instead of clarification questions.' };
   }
-  if (!parsed.data.ok) return { ok: true, value: parsed.data, warnings };
-  const { suggestion } = parsed.data;
-  return { ok: true, warnings, ...(wordingWarning && { wordingWarning }), value: { ok: true, suggestion: {
-    ...suggestion, steps: suggestion.steps.map(({ activityIndex: _modelOnly, ...step }) => step),
-  } } };
+  return { ok: true, value: parsed.data };
 }
 
 export function readGeneratedStepSchedule(
@@ -215,7 +165,7 @@ export function readGeneratedStepSchedule(
   return readScheduleObject(schedule as Record<string, unknown>);
 }
 
-function normalizeGeneratedSuggestion(value: unknown, window?: GenerationWindow): { ok: true; value: unknown; stepWeekdays?: (number[] | undefined)[] } | { ok: false; error: string; rule: string; stepNumber: number } {
+function normalizeGeneratedSuggestion(value: unknown, window?: GenerationWindow): { ok: true; value: unknown } | { ok: false; error: string; rule: string; stepNumber: number } {
   if (!value || typeof value !== 'object') return { ok: true, value };
   const root = value as Record<string, any>;
   if (root.ok !== true || !root.suggestion || typeof root.suggestion !== 'object') return { ok: true, value };
@@ -238,7 +188,6 @@ function normalizeGeneratedSuggestion(value: unknown, window?: GenerationWindow)
     else if (field.startsWith('entertain')) suggestion.field = 'Entertainment';
   }
   if (typeof suggestion.description === 'string' && !suggestion.description.trim()) delete suggestion.description;
-  const stepWeekdays: (number[] | undefined)[] = [];
   if (Array.isArray(suggestion.steps)) {
     const steps = suggestion.steps;
     const normalizedSteps = [];
@@ -271,13 +220,12 @@ function normalizeGeneratedSuggestion(value: unknown, window?: GenerationWindow)
         normalizedSteps.push(step);
         continue;
       }
-      if (step?.schedule?.type === 'weekdays') stepWeekdays[index] = step.schedule.days;
       const description = String(step?.description ?? '').trim();
-      normalizedSteps.push({ text, ...(description ? { description } : {}), activityIndex: step.activityIndex, schedule: schedule.schedule });
+      normalizedSteps.push({ text, ...(description ? { description } : {}), durationMinutes: step.durationMinutes ?? undefined, schedule: schedule.schedule });
     }
     suggestion.steps = normalizedSteps;
   }
-  return { ok: true, value: root, stepWeekdays };
+  return { ok: true, value: root };
 }
 
 function readScheduleText(schedule: string): { ok: true; schedule: GeneratedStepSchedule } | { ok: false; error: string } {
@@ -312,6 +260,18 @@ function readGeneratedCustomDates(dates: unknown): { ok: true; schedule: Generat
   if (!prepared.ok) return prepared;
   if (!prepared.dates.length) return { ok: false, error: 'Custom Dates must include at least one date.' };
   return { ok: true, schedule: { type: 'repeat', repeat: 'custom', customDates: prepared.dates } };
+}
+
+export function weekdayDates(days: number[], today: string, deadline: string): string[] {
+  if (!days.length) return [];
+  const selected = new Set(days);
+  const dates: string[] = [];
+  const start = new Date(`${today}T00:00:00.000Z`);
+  const end = new Date(`${deadline}T00:00:00.000Z`);
+  for (const day = new Date(start); day <= end && dates.length <= CUSTOM_DATES_LIMIT; day.setUTCDate(day.getUTCDate() + 1)) {
+    if (selected.has(day.getUTCDay())) dates.push(utcCivilDate(day));
+  }
+  return dates;
 }
 
 function readGeneratedWeekdays(days: unknown, today: string, deadline: string): ReturnType<typeof readGeneratedCustomDates> {

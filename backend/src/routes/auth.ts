@@ -62,6 +62,7 @@ import {
   isUtcMidnightInstant,
   localCivilDate,
   prepareCustomDates,
+  normalizedRepeatSelection,
   scheduleWriteError,
   stepLaterThanGoalError,
   stepOutsideActiveRangeError,
@@ -143,6 +144,7 @@ const goalStepSelect = {
   repeat: true,
   repeatDay: true,
   repeatMonth: true,
+  repeatDays: true,
   durationMinutes: true,
   createdAt: true,
   archivedAt: true,
@@ -1657,27 +1659,7 @@ authRouter.post('/ai/goal', async (req: Request, res: Response) => {
   }
   const intensity = parsed.data.intensity ?? 'Normal';
 
-  function sanitizePromptForRequirement(input: string): string {
-    const raw = String(input ?? '');
-    if (!raw.trim()) return '';
-
-    const lines = raw.split(/\r?\n/);
-    const filtered = lines.filter(l => {
-      const t = l.toLowerCase();
-      if (t.includes('requirement:')) return false;
-      if (t.includes('requirement -')) return false;
-      if (t.includes('proof:')) return false;
-      if (t.includes('proof -')) return false;
-      if (t.includes('the requirement is')) return false;
-      if (t.includes('my requirement is')) return false;
-      if (t.includes('proof requirement')) return false;
-      return true;
-    });
-
-    return filtered.join('\n').trim();
-  }
-
-  const prompt = sanitizePromptForRequirement(parsed.data.prompt) || parsed.data.prompt;
+  const prompt = parsed.data.prompt;
   const model = process.env.OPENAI_MODEL ?? 'gpt-4o-mini';
   const mirrorTrace = development && req.header('X-SmartGoal-Debug') === 'planner';
   const events: object[] = [];
@@ -1690,13 +1672,13 @@ authRouter.post('/ai/goal', async (req: Request, res: Response) => {
 
   try {
     const generated = await generateGoalPlan({
-      messages: goalPlanMessages(prompt, todayCivil, requestedDeadline, intensity, user),
+      messages: goalPlanMessages(prompt, todayCivil, requestedDeadline, intensity, user, parsed.data.mode, parsed.data.deadlineConfirmed),
       window: {
         todayCivil,
         requestedDeadline,
-        prompt: parsed.data.mode === 'recommendation' ? '' : prompt,
+        deadlineConfirmed: parsed.data.deadlineConfirmed,
       },
-      requestModel: (messages, scope) => requestGoalModel(messages, apiKey, model, scope),
+      requestModel: messages => requestGoalModel(messages, apiKey, model),
       trace,
       logRepair: event => console.info('AI goal repair', event),
       finalize: async suggestion => {
@@ -1950,7 +1932,7 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
   if (nextGoal?.id) {
     const goalSteps = await allGoalSteps({
       where: { goalId: nextGoal.id },
-      select: { id: true, dueAt: true, repeat: true, repeatDay: true, repeatMonth: true, customDates: true, createdAt: true, archivedAt: true, effectiveFrom: true, effectiveUntil: true },
+      select: { id: true, dueAt: true, repeat: true, repeatDay: true, repeatMonth: true, repeatDays: true, customDates: true, createdAt: true, archivedAt: true, effectiveFrom: true, effectiveUntil: true },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
 
@@ -2014,6 +1996,7 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
       repeat: true,
       repeatDay: true,
       repeatMonth: true,
+      repeatDays: true,
       customDates: true,
       createdAt: true,
       effectiveFrom: true,
@@ -2039,6 +2022,7 @@ authRouter.get('/dashboard', async (req: Request, res: Response) => {
       repeat: s.repeat ? String(s.repeat) : null,
       repeatDay: s.repeatDay ?? null,
       repeatMonth: s.repeatMonth ?? null,
+      repeatDays: Array.isArray(s.repeatDays) ? s.repeatDays : [],
       doneToday: stepDoneSet.has(String(s.id)),
     }));
 
@@ -2675,10 +2659,12 @@ authRouter.post('/goals/:id/steps', async (req: Request, res: Response) => {
     repeat: parsed.data.repeat ?? null,
     repeatDay: parsed.data.repeatDay ?? null,
     repeatMonth: parsed.data.repeatMonth ?? null,
+    repeatDays: parsed.data.repeatDays ?? null,
     customDates: parsed.data.customDates ?? null,
   });
   if (scheduleError) return res.status(400).json({ error: scheduleError });
   const customDates = storedCustomDates(parsed.data);
+  const selection = normalizedRepeatSelection(parsed.data);
 
   try {
     const step = await prisma.$transaction((tx) =>
@@ -2691,7 +2677,7 @@ authRouter.post('/goals/:id/steps', async (req: Request, res: Response) => {
           const laterThanGoal = stepLaterThanGoalError(parsed.data.dueAt, goal.dueAt, zone);
           if (laterThanGoal) throw new GoalLifecycleError(400, laterThanGoal);
           const outsideRange = stepOutsideActiveRangeError({
-            step: { ...parsed.data, customDates },
+            step: { ...parsed.data, ...selection, customDates },
             todayCivil: instantCivilDate(new Date(), zone),
             goalDueAt: goal.dueAt,
             timeZone: zone,
@@ -2705,8 +2691,9 @@ authRouter.post('/goals/:id/steps', async (req: Request, res: Response) => {
               order: parsed.data.order ?? 0,
               dueAt: parsed.data.dueAt ? new Date(parsed.data.dueAt) : null,
               repeat: parsed.data.repeat ? String(parsed.data.repeat) : null,
-              repeatDay: parsed.data.repeatDay ?? null,
+              repeatDay: selection.repeatDay,
               repeatMonth: parsed.data.repeatMonth ?? null,
+              repeatDays: selection.repeatDays,
               customDates,
               durationMinutes: duration.minutes,
             },
@@ -2852,10 +2839,12 @@ authRouter.post('/goals/:goalId/steps/:stepId/replace', async (req: Request, res
     repeat: parsed.data.repeat ?? null,
     repeatDay: parsed.data.repeatDay ?? null,
     repeatMonth: parsed.data.repeatMonth ?? null,
+    repeatDays: parsed.data.repeatDays ?? null,
     customDates: parsed.data.customDates ?? null,
   });
   if (scheduleError) return res.status(400).json({ error: scheduleError });
   const customDates = storedCustomDates(parsed.data);
+  const selection = normalizedRepeatSelection(parsed.data);
 
   const goalId = String(req.params.goalId);
   const stepId = String(req.params.stepId);
@@ -2874,7 +2863,7 @@ authRouter.post('/goals/:goalId/steps/:stepId/replace', async (req: Request, res
           const now = new Date();
           const todayCivil = instantCivilDate(now, zone);
           const outsideRange = stepOutsideActiveRangeError({
-            step: { ...parsed.data, customDates },
+            step: { ...parsed.data, ...selection, customDates },
             todayCivil,
             goalDueAt: goal.dueAt,
             timeZone: zone,
@@ -2898,8 +2887,9 @@ authRouter.post('/goals/:goalId/steps/:stepId/replace', async (req: Request, res
             description: parsed.data.description,
             dueAt: parsed.data.dueAt,
             repeat: parsed.data.repeat,
-            repeatDay: parsed.data.repeatDay,
+            repeatDay: selection.repeatDay,
             repeatMonth: parsed.data.repeatMonth,
+            repeatDays: selection.repeatDays,
             customDates,
             durationMinutes: parsed.data.durationMinutes,
             order: parsed.data.order ?? existing.order,
@@ -2917,6 +2907,7 @@ authRouter.post('/goals/:goalId/steps/:stepId/replace', async (req: Request, res
                   repeat: next.repeat,
                   repeatDay: next.repeatDay,
                   repeatMonth: next.repeatMonth,
+                  repeatDays: next.repeatDays,
                   customDates: next.customDates,
                   durationMinutes: next.durationMinutes,
                   effectiveFrom: utcMidnightFromCivil(next.effectiveFrom),
@@ -3290,7 +3281,7 @@ authRouter.get('/goals', async (req: Request, res: Response) => {
   }> = goalIds.length
     ? await prismaAny.goalStep.findMany({
         where: { goalId: { in: goalIds } },
-        select: { id: true, goalId: true, dueAt: true, repeat: true, repeatDay: true, repeatMonth: true, customDates: true, createdAt: true, archivedAt: true, effectiveFrom: true, effectiveUntil: true },
+        select: { id: true, goalId: true, dueAt: true, repeat: true, repeatDay: true, repeatMonth: true, repeatDays: true, customDates: true, createdAt: true, archivedAt: true, effectiveFrom: true, effectiveUntil: true },
       })
     : [];
   const stepIds = steps.map(step => step.id);
@@ -3376,7 +3367,7 @@ authRouter.get('/goals/:id', async (req: Request, res: Response) => {
 
   const detailSteps = await allGoalSteps({
     where: { goalId: id },
-    select: { id: true, dueAt: true, repeat: true, repeatDay: true, repeatMonth: true, customDates: true, createdAt: true, archivedAt: true, effectiveFrom: true, effectiveUntil: true },
+    select: { id: true, dueAt: true, repeat: true, repeatDay: true, repeatMonth: true, repeatDays: true, customDates: true, createdAt: true, archivedAt: true, effectiveFrom: true, effectiveUntil: true },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
   });
   const detailCompletions = detailSteps.length

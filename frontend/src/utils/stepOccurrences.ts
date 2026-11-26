@@ -5,6 +5,7 @@ export type ScheduleStep = {
   repeat?: string | null;
   repeatDay?: number | null;
   repeatMonth?: number | null;
+  repeatDays?: number[] | null;
   customDates?: string[] | null;
 };
 
@@ -103,16 +104,17 @@ function scheduledOnOrBefore(step: ScheduleStep, window: OccurrenceWindow, cap: 
     return due && due >= window.start && due <= end ? due : null;
   }
   if (repeat === 'daily') return end;
-  if (repeat === 'weekly' && isWeekday(step.repeatDay)) {
+  const weekdays = selectedDays(step, 'weekly');
+  if (repeat === 'weekly' && weekdays.length) {
     for (let index = 0; index < 7; index += 1) {
       const date = addDays(end, -index);
       if (date < window.start) return null;
-      if (weekday(date) === step.repeatDay) return date;
+      if (weekdays.includes(weekday(date))) return date;
     }
     return null;
   }
-  const repeatDay = step.repeatDay;
-  if (repeat === 'monthly' && isMonthDay(repeatDay)) return monthlyOnOrBefore(window.start, end, repeatDay);
+  const monthDays = selectedDays(step, 'monthly');
+  if (repeat === 'monthly' && monthDays.length) return monthlyOnOrBefore(window.start, end, monthDays);
   const pair = monthDayPair(step.repeatMonth, step.repeatDay);
   if (repeat === 'yearly' && pair) return yearlyOnOrBefore(window.start, end, pair.month, pair.day);
   return null;
@@ -128,16 +130,17 @@ function scheduledOnOrAfter(step: ScheduleStep, window: OccurrenceWindow, floor:
     return due && due >= start && (window.end == null || due <= window.end) ? due : null;
   }
   if (repeat === 'daily') return window.end == null || start <= window.end ? start : null;
-  if (repeat === 'weekly' && isWeekday(step.repeatDay)) {
+  const weekdays = selectedDays(step, 'weekly');
+  if (repeat === 'weekly' && weekdays.length) {
     for (let index = 0; index < 7; index += 1) {
       const date = addDays(start, index);
       if (window.end && date > window.end) return null;
-      if (weekday(date) === step.repeatDay) return date;
+      if (weekdays.includes(weekday(date))) return date;
     }
     return null;
   }
-  const repeatDay = step.repeatDay;
-  if (repeat === 'monthly' && isMonthDay(repeatDay)) return monthlyOnOrAfter(start, window.end, repeatDay);
+  const monthDays = selectedDays(step, 'monthly');
+  if (repeat === 'monthly' && monthDays.length) return monthlyOnOrAfter(start, window.end, monthDays);
   const pair = monthDayPair(step.repeatMonth, step.repeatDay);
   if (repeat === 'yearly' && pair) return yearlyOnOrAfter(start, window.end, pair.month, pair.day);
   return null;
@@ -151,11 +154,20 @@ function nextScheduled(step: ScheduleStep, window: OccurrenceWindow, date: strin
   return scheduledOnOrAfter(step, window, addDays(date, 1));
 }
 
-function monthlyOnOrBefore(start: string, end: string, repeatDay: number): string | null {
+function occurringMonthDays(year: number, month: number, days: number[]): number[] {
+  const last = daysInMonth(year, month);
+  if (days.length <= 1) return days.length ? [Math.min(days[0], last)] : [];
+  return days.filter(day => day <= last);
+}
+
+function monthlyOnOrBefore(start: string, end: string, days: number[]): string | null {
   let { year, month } = parseCivil(end);
   for (let index = 0; index < 24; index += 1) {
-    const date = civil(year, month, Math.min(repeatDay, daysInMonth(year, month)));
-    if (date <= end && date >= start) return date;
+    const dates = occurringMonthDays(year, month, days)
+      .map(day => civil(year, month, day))
+      .filter(date => date <= end && date >= start)
+      .sort();
+    if (dates.length) return dates[dates.length - 1];
     const shifted = shiftMonth(year, month, -1);
     year = shifted.year;
     month = shifted.month;
@@ -164,11 +176,14 @@ function monthlyOnOrBefore(start: string, end: string, repeatDay: number): strin
   return null;
 }
 
-function monthlyOnOrAfter(start: string, end: string | null, repeatDay: number): string | null {
+function monthlyOnOrAfter(start: string, end: string | null, days: number[]): string | null {
   let { year, month } = parseCivil(start);
   for (let index = 0; index < 24; index += 1) {
-    const date = civil(year, month, Math.min(repeatDay, daysInMonth(year, month)));
-    if (date >= start && (end == null || date <= end)) return date;
+    const dates = occurringMonthDays(year, month, days)
+      .map(day => civil(year, month, day))
+      .filter(date => date >= start && (end == null || date <= end))
+      .sort();
+    if (dates.length) return dates[0];
     const shifted = shiftMonth(year, month, 1);
     year = shifted.year;
     month = shifted.month;
@@ -205,13 +220,14 @@ function isScheduled(step: ScheduleStep, civilDate: string): boolean {
   if (repeat === 'custom') return customDateList(step).includes(civilDate);
   if (!repeat || repeat === 'once') return dueCivil(step.dueAt) === civilDate;
   if (repeat === 'daily') return true;
-  if (repeat === 'weekly') return isWeekday(step.repeatDay) && weekday(civilDate) === step.repeatDay;
-  const repeatDay = step.repeatDay;
+  if (repeat === 'weekly') return selectedDays(step, 'weekly').includes(weekday(civilDate));
   if (repeat === 'monthly') {
-    if (!isMonthDay(repeatDay)) return false;
+    const days = selectedDays(step, 'monthly');
+    if (!days.length) return false;
     const parts = parseCivil(civilDate);
-    return parts.day === Math.min(repeatDay, daysInMonth(parts.year, parts.month));
+    return occurringMonthDays(parts.year, parts.month, days).includes(parts.day);
   }
+  const repeatDay = step.repeatDay;
   if (repeat === 'yearly') {
     const pair = monthDayPair(step.repeatMonth, repeatDay);
     if (!pair) return false;
@@ -264,6 +280,19 @@ function dueCivil(value?: string | null): string | null {
 
 function normalize(value?: string | null): string {
   return String(value ?? '').trim().toLowerCase();
+}
+
+function selectedDays(step: ScheduleStep, kind: 'weekly' | 'monthly'): number[] {
+  const valid = kind === 'weekly' ? isWeekday : isMonthDay;
+  const listed = Array.isArray(step.repeatDays) ? step.repeatDays : [];
+  const source = listed.length > 0 ? listed : step.repeatDay == null ? [] : [step.repeatDay];
+  const unique: number[] = [];
+  for (const day of source) {
+    if (!valid(day) || unique.includes(day)) continue;
+    unique.push(day);
+  }
+  unique.sort((left, right) => left - right);
+  return unique;
 }
 
 function isWeekday(value?: number | null): value is number {

@@ -43,6 +43,8 @@ export type StoredSchedule = {
   repeat?: string | null;
   repeatDay?: number | null;
   repeatMonth?: number | null;
+  /** Several weekdays or month days. Empty means the single repeatDay still applies. */
+  repeatDays?: number[] | null;
   customDates?: string[] | null;
 };
 
@@ -126,11 +128,62 @@ export function clampedMonthDay(year: number, month: number, requestedDay: numbe
   return Math.min(requestedDay, daysInCivilMonth(year, month));
 }
 
+/**
+ * Weekdays or month days for one step. A non-empty repeatDays list wins.
+ * An older row with only repeatDay is read as that one day.
+ */
+export function selectedRepeatDays(step: StoredSchedule, kind: 'weekly' | 'monthly'): number[] {
+  const valid = kind === 'weekly' ? isWeekdayIndex : isMonthDayIndex;
+  const listed = Array.isArray(step.repeatDays) ? step.repeatDays : [];
+  const source = listed.length > 0 ? listed : step.repeatDay == null ? [] : [step.repeatDay];
+  const unique: number[] = [];
+  for (const day of source) {
+    if (!valid(day) || unique.includes(day)) continue;
+    unique.push(day);
+  }
+  unique.sort((left, right) => left - right);
+  return unique;
+}
+
+/** One stored day keeps repeatDay. Several days keep the full list and the first day as a fallback. */
+export function normalizedRepeatSelection(step: StoredSchedule): { repeatDay: number | null; repeatDays: number[] } {
+  const repeat = normalizeRepeat(step.repeat);
+  if (repeat !== 'weekly' && repeat !== 'monthly') return { repeatDay: step.repeatDay ?? null, repeatDays: [] };
+  const days = selectedRepeatDays(step, repeat);
+  if (days.length <= 1) return { repeatDay: days[0] ?? null, repeatDays: [] };
+  return { repeatDay: days[0], repeatDays: days };
+}
+
+function repeatListError(step: StoredSchedule): string | null {
+  if (!Array.isArray(step.repeatDays) || step.repeatDays.length === 0) return null;
+  const repeat = normalizeRepeat(step.repeat);
+  if (repeat !== 'weekly' && repeat !== 'monthly') return 'Only a weekly or monthly schedule can list several days.';
+  const valid = repeat === 'weekly' ? isWeekdayIndex : isMonthDayIndex;
+  const seen = new Set<number>();
+  for (const day of step.repeatDays) {
+    if (!valid(day)) {
+      return repeat === 'weekly'
+        ? 'Pick a weekday from Monday through Sunday, such as weekly:Mon, and try again.'
+        : 'Pick a day from 1 through 31, such as monthly:15, and try again.';
+    }
+    if (seen.has(day)) return 'Each day can be selected only once. Remove the duplicate, and try again.';
+    seen.add(day);
+  }
+  return null;
+}
+
+/** Days that occur in one month. A single day still clamps. Several days skip a day the month does not have. */
+export function monthOccurrenceDays(year: number, month: number, days: number[]): number[] {
+  const last = daysInCivilMonth(year, month);
+  if (days.length <= 1) return days.length ? [Math.min(days[0], last)] : [];
+  return days.filter(day => day <= last);
+}
+
 export function isDeterminateRepeat(step: StoredSchedule): boolean {
   const repeat = normalizeRepeat(step.repeat);
   if (repeat === 'daily') return true;
-  if (repeat === 'weekly') return isWeekdayIndex(step.repeatDay);
-  if (repeat === 'monthly') return isMonthDayIndex(step.repeatDay);
+  if (repeat === 'weekly') return selectedRepeatDays(step, 'weekly').length > 0;
+  if (repeat === 'monthly') return selectedRepeatDays(step, 'monthly').length > 0;
   if (repeat === 'yearly') return isCalendarMonthDay(step.repeatMonth, step.repeatDay);
   return false;
 }
@@ -148,10 +201,12 @@ export function scheduleWriteError(step: StoredSchedule): string | null {
     return 'Use daily, weekly:Mon, monthly:15, yearly:02-29, or once:2026-11-22, and try again.';
   }
   if (repeat === 'once' && !hasDue) return 'Pick a real date, such as once:2026-11-22, and try again.';
-  if (repeat === 'weekly' && !isWeekdayIndex(step.repeatDay)) {
+  const listedDays = repeatListError(step);
+  if (listedDays) return listedDays;
+  if (repeat === 'weekly' && selectedRepeatDays(step, 'weekly').length === 0) {
     return 'Pick a weekday from Monday through Sunday, such as weekly:Mon, and try again.';
   }
-  if (repeat === 'monthly' && !isMonthDayIndex(step.repeatDay)) {
+  if (repeat === 'monthly' && selectedRepeatDays(step, 'monthly').length === 0) {
     return 'Pick a day from 1 through 31, such as monthly:15, and try again.';
   }
   if (repeat === 'yearly' && !isCalendarMonthDay(step.repeatMonth, step.repeatDay)) {
@@ -389,13 +444,16 @@ export function isStepScheduledOnDay(step: StoredSchedule, now: Date): boolean {
   if (repeat === 'daily') return true;
 
   if (repeat === 'weekly') {
-    if (!isWeekdayIndex(step.repeatDay)) return false;
-    return now.getDay() === step.repeatDay;
+    const days = selectedRepeatDays(step, 'weekly');
+    return days.includes(now.getDay());
   }
 
   if (repeat === 'monthly') {
-    if (!isMonthDayIndex(step.repeatDay)) return false;
-    return now.getDate() === clampedMonthDay(now.getFullYear(), now.getMonth() + 1, step.repeatDay);
+    const days = selectedRepeatDays(step, 'monthly');
+    if (!days.length) return false;
+    const today = now.getDate();
+    if (days.length === 1) return today === clampedMonthDay(now.getFullYear(), now.getMonth() + 1, days[0]);
+    return days.includes(today);
   }
 
   if (repeat === 'yearly') {
@@ -433,25 +491,35 @@ export function countRepeatOccurrencesBetween(step: StoredSchedule, fromDay: Dat
   }
 
   if (repeat === 'weekly') {
-    if (!isWeekdayIndex(step.repeatDay)) return 0;
+    const days = selectedRepeatDays(step, 'weekly');
+    if (!days.length) return 0;
     let count = 0;
     const cur = new Date(from);
     while (cur.getTime() <= to.getTime()) {
-      if (cur.getDay() === step.repeatDay) count += 1;
+      if (days.includes(cur.getDay())) count += 1;
       cur.setDate(cur.getDate() + 1);
     }
     return count;
   }
 
   if (repeat === 'monthly') {
-    if (!isMonthDayIndex(step.repeatDay)) return 0;
+    const days = selectedRepeatDays(step, 'monthly');
+    if (!days.length) return 0;
     let count = 0;
     let year = from.getFullYear();
     let month = from.getMonth();
     for (let guard = 0; guard < 2400; guard += 1) {
-      const occ = new Date(year, month, clampedMonthDay(year, month + 1, step.repeatDay));
-      if (occ.getTime() > to.getTime()) break;
-      if (occ.getTime() >= from.getTime()) count += 1;
+      const occurring = monthOccurrenceDays(year, month + 1, days);
+      let finished = false;
+      for (const day of occurring) {
+        const occ = new Date(year, month, day);
+        if (occ.getTime() > to.getTime()) {
+          finished = true;
+          break;
+        }
+        if (occ.getTime() >= from.getTime()) count += 1;
+      }
+      if (finished) break;
       month += 1;
       if (month > 11) {
         month = 0;

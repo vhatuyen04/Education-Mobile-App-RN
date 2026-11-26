@@ -41,7 +41,7 @@ const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0];
 const WEEK_LABEL = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const MONTH_MAX = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-const HEADS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+const HEADS = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
 
 type Props = {
   visible: boolean;
@@ -126,21 +126,31 @@ export function SchedulePickerModal({ visible, initialText, range, onCancel, onC
 
           {draft.preset === 'weekly' || pending?.type === 'weekday' ? (
             <View style={styles.wrap}>
-              {WEEK_ORDER.map(day => (
-                <Pressable key={day} onPress={() => propose(requestWeekday(draft, day, range), { type: 'weekday', weekday: day })} style={[styles.chip, draft.preset === 'weekly' && draft.weekday === day ? styles.chipOn : null]}>
-                  <Text style={[styles.chipText, draft.preset === 'weekly' && draft.weekday === day ? styles.chipTextOn : null]}>{WEEK_LABEL[day]}</Text>
-                </Pressable>
-              ))}
+              {WEEK_ORDER.map(day => {
+                const next = requestWeekday(draft, day, range);
+                const shown = pending?.type === 'weekday' ? pending.weekdays : draft.weekdays;
+                const on = shown.includes(day);
+                return (
+                  <Pressable key={day} onPress={() => propose(next, { type: 'weekday', weekday: day, weekdays: next.weekdays })} style={[styles.chip, on ? styles.chipOn : null]}>
+                    <Text style={[styles.chipText, on ? styles.chipTextOn : null]}>{WEEK_LABEL[day]}</Text>
+                  </Pressable>
+                );
+              })}
             </View>
           ) : null}
 
-          {draft.preset === 'monthly' ? (
+          {draft.preset === 'monthly' || pending?.type === 'monthDay' ? (
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
-              {Array.from({ length: 31 }, (_, index) => index + 1).map(day => (
-                <Pressable key={day} onPress={() => propose(requestMonthDay(draft, day, range), { type: 'monthDay', monthDay: day })} style={[styles.chip, draft.monthDay === day ? styles.chipOn : null]}>
-                  <Text style={[styles.chipText, draft.monthDay === day ? styles.chipTextOn : null]}>{day}</Text>
-                </Pressable>
-              ))}
+              {Array.from({ length: 31 }, (_, index) => index + 1).map(day => {
+                const next = requestMonthDay(draft, day, range);
+                const shown = pending?.type === 'monthDay' ? pending.monthDays : draft.monthDays;
+                const on = shown.includes(day);
+                return (
+                  <Pressable key={day} onPress={() => propose(next, { type: 'monthDay', monthDay: day, monthDays: next.monthDays })} style={[styles.chip, on ? styles.chipOn : null]}>
+                    <Text style={[styles.chipText, on ? styles.chipTextOn : null]}>{day}</Text>
+                  </Pressable>
+                );
+              })}
             </ScrollView>
           ) : null}
 
@@ -229,7 +239,7 @@ function monthOf(date: string): { year: number; month: number } {
 }
 
 function monthCells(year: number, month: number): Array<string | null> {
-  const first = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
+  const first = (new Date(Date.UTC(year, month - 1, 1)).getUTCDay() + 6) % 7;
   const count = new Date(Date.UTC(year, month, 0)).getUTCDate();
   const cells: Array<string | null> = Array.from({ length: first }, () => null);
   for (let day = 1; day <= count; day += 1) {
@@ -253,7 +263,7 @@ const styles = StyleSheet.create({
   nav: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
   navText: { color: colors.text, fontSize: 28, fontWeight: '700' },
   weekRow: { flexDirection: 'row' },
-  head: { width: '14.285%', textAlign: 'center', color: colors.muted, fontWeight: '700' },
+  head: { width: '14.285%', textAlign: 'center', color: colors.muted, fontWeight: '700', fontSize: 12 },
   grid: { flexDirection: 'row', flexWrap: 'wrap' },
   cell: { width: '14.285%', height: 44, alignItems: 'center', justifyContent: 'center' },
   day: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },

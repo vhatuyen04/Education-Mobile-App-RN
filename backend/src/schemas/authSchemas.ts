@@ -91,6 +91,7 @@ export const AiGoalSuggestSchema = z.object({
   prompt: z.string().min(1),
   mode: z.enum(['planner', 'recommendation']).optional(),
   deadline: z.string().min(1).optional(),
+  deadlineConfirmed: z.boolean().optional(),
   intensity: z.enum(['Light', 'Normal', 'Hard']).optional(),
 });
 
@@ -104,6 +105,7 @@ export const CreateGoalStepSchema = z.object({
   repeat: z.string().min(1).optional().nullable(),
   repeatDay: z.coerce.number().int().optional().nullable(),
   repeatMonth: z.coerce.number().int().optional().nullable(),
+  repeatDays: z.array(z.coerce.number().int()).max(31).optional().nullable(),
   customDates: z.array(z.string()).max(2000).optional().nullable(),
   durationMinutes,
   timeZone: z.string().min(1).max(80).optional(),

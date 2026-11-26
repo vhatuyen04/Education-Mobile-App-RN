@@ -29,16 +29,19 @@ export function schedulePhrase(step: {
   repeat?: string | null;
   repeatDay?: number | null;
   repeatMonth?: number | null;
+  repeatDays?: number[] | null;
   customDates?: string[] | null;
   scheduleText?: string | null;
 }): string {
   const repeat = String(step.repeat ?? '').trim().toLowerCase();
+  const listed = Array.isArray(step.repeatDays) && step.repeatDays.length ? step.repeatDays : step.repeatDay == null ? [] : [step.repeatDay];
   if (repeat === 'custom') return compactCustomLabel(step.customDates ?? []);
   if (repeat === 'daily') return 'Every day';
-  if (repeat === 'weekly' && step.repeatDay != null && step.repeatDay >= 0 && step.repeatDay <= 6) {
-    return `Every ${WEEKDAYS[step.repeatDay]}`;
+  if (repeat === 'weekly' && listed.length && listed.every(day => day >= 0 && day <= 6)) {
+    const names = [...listed].sort((left, right) => ((left + 6) % 7) - ((right + 6) % 7)).map(day => WEEKDAYS[day]);
+    return names.length === 1 ? `Every ${names[0]}` : `Every ${names.join(', ')}`;
   }
-  if (repeat === 'monthly' && step.repeatDay) return `Day ${step.repeatDay} of each month`;
+  if (repeat === 'monthly' && listed.length) return listed.length === 1 ? `Day ${listed[0]} of each month` : `Days ${listed.join(', ')} of each month`;
   if (repeat === 'yearly' && step.repeatMonth && step.repeatDay) {
     const month = MONTHS[step.repeatMonth - 1] ?? `month ${step.repeatMonth}`;
     return `Every ${month} ${step.repeatDay}`;

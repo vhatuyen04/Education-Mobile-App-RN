@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { parseScheduleShortText, scheduleDraftError, storedScheduleError } from '../src/utils/stepSchedule.ts';
+import { parseScheduleShortText, scheduleDraftError, scheduleToShortText, storedScheduleError } from '../src/utils/stepSchedule.ts';
 
 test('weekly:Mon is weekday 1 and bare weekly is rejected', () => {
   const parsed = parseScheduleShortText('weekly:Mon');
@@ -47,4 +47,20 @@ test('daily and one-time drafts persist the existing fields', () => {
   assert.equal(parseScheduleShortText('hello').repeat, null);
   assert.equal(storedScheduleError({ repeat: 'hello' }), 'Use daily, weekly:Mon, monthly:15, yearly:02-29, or once:2026-11-22, and try again.');
   assert.equal(storedScheduleError({ repeat: 'weekly', repeatDay: null }), 'Pick a weekday from Monday through Sunday, such as weekly:Mon, and try again.');
+});
+
+test('weekly and monthly text keeps every selected day', () => {
+  const weekly = parseScheduleShortText('weekly:Mon,Tue');
+  assert.equal(weekly.repeatDay, 1);
+  assert.deepEqual(weekly.repeatDays, [1, 2]);
+  assert.equal(scheduleDraftError('weekly:Mon,Tue'), null);
+  assert.equal(scheduleDraftError('weekly:Mon,Mon'), 'Pick a weekday from Monday through Sunday, such as weekly:Mon, and try again.');
+  assert.equal(scheduleToShortText({ dueAt: null, repeat: 'weekly', repeatDay: 1, repeatMonth: null, repeatDays: [1, 2] }), 'weekly:Mon,Tue');
+
+  const monthly = parseScheduleShortText('monthly:30,31');
+  assert.equal(monthly.repeatDay, 30);
+  assert.deepEqual(monthly.repeatDays, [30, 31]);
+  assert.equal(scheduleDraftError('monthly:30,31'), null);
+  assert.equal(scheduleToShortText({ dueAt: null, repeat: 'monthly', repeatDay: 30, repeatMonth: null, repeatDays: [30, 31] }), 'monthly:30,31');
+  assert.equal(scheduleToShortText({ dueAt: null, repeat: 'monthly', repeatDay: 31, repeatMonth: null }), 'monthly:31');
 });

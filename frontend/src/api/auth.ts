@@ -192,21 +192,22 @@ export type AiGoalSuggestion = {
 export type AiGoalStepSchedule =
   | { type: 'none' }
   | { type: 'once'; due: string }
-  | { type: 'repeat'; repeat: string; repeatDay?: number; repeatMonth?: number; customDates?: string[] | null };
+  | { type: 'repeat'; repeat: string; repeatDay?: number; repeatMonth?: number; repeatDays?: number[]; customDates?: string[] | null };
 
 export type AiGoalStep = {
+  durationMinutes?: number;
   text: string;
   description?: string;
   schedule: AiGoalStepSchedule;
 };
 
 export type AiGoalSuggestResponse =
-  | { ok: false; message: string; questions: string[] }
+  | { ok: false; message: string; questions: string[]; planDeadline?: string }
   | { ok: true; suggestion: AiGoalSuggestion };
 
 export async function aiSuggestGoal(
   accessToken: string,
-  body: { prompt: string; deadline?: string; intensity?: 'Light' | 'Normal' | 'Hard'; mode?: 'planner' | 'recommendation' }
+  body: { prompt: string; deadline?: string; deadlineConfirmed?: boolean; intensity?: 'Light' | 'Normal' | 'Hard'; mode?: 'planner' | 'recommendation' }
 ): Promise<AiGoalSuggestResponse> {
   return postJsonAuth<AiGoalSuggestResponse>('/auth/ai/goal', body, accessToken);
 }
@@ -271,6 +272,7 @@ export type TodayStepItem = {
   repeat: string | null;
   repeatDay: number | null;
   repeatMonth: number | null;
+  repeatDays?: number[] | null;
   doneToday: boolean;
 };
 
@@ -627,6 +629,7 @@ export async function createGoalStep(
     repeat?: string | null;
     repeatDay?: number | null;
     repeatMonth?: number | null;
+    repeatDays?: number[] | null;
     customDates?: string[] | null;
     durationMinutes?: number | null;
   }
@@ -645,6 +648,7 @@ export type GoalStepItem = {
   repeat: string | null;
   repeatDay: number | null;
   repeatMonth: number | null;
+  repeatDays?: number[] | null;
   customDates?: string[] | null;
   durationMinutes?: number | null;
   createdAt?: string | null;
@@ -717,6 +721,7 @@ export async function replaceGoalStep(
     repeat?: string | null;
     repeatDay?: number | null;
     repeatMonth?: number | null;
+    repeatDays?: number[] | null;
     customDates?: string[] | null;
     durationMinutes?: number | null;
   }

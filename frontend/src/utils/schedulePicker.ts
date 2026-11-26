@@ -17,7 +17,9 @@ export type Preset = 'daily' | 'weekly' | 'monthly' | 'yearly' | 'once' | 'manua
 export type PickerDraft = {
   preset: Preset | null;
   weekday: number;
+  weekdays: number[];
   monthDay: number;
+  monthDays: number[];
   yearMonth: number;
   yearDay: number;
   onceDate: string | null;
@@ -33,8 +35,8 @@ export type ScheduleRange = {
 
 export type PendingChange =
   | { type: 'preset'; preset: Preset }
-  | { type: 'weekday'; weekday: number }
-  | { type: 'monthDay'; monthDay: number }
+  | { type: 'weekday'; weekday: number; weekdays: number[] }
+  | { type: 'monthDay'; monthDay: number; monthDays: number[] }
   | { type: 'yearMonth'; yearMonth: number }
   | { type: 'yearDay'; yearDay: number };
 
@@ -42,7 +44,9 @@ export function emptyDraft(): PickerDraft {
   return {
     preset: null,
     weekday: 1,
+    weekdays: [1],
     monthDay: 15,
+    monthDays: [15],
     yearMonth: 12,
     yearDay: 15,
     onceDate: null,
@@ -63,8 +67,10 @@ export function draftFromScheduleText(text: string): PickerDraft {
   const parsed = parseScheduleShortText(raw);
   const repeat = String(parsed.repeat ?? '').trim().toLowerCase();
   if (repeat === 'daily') return { ...base, preset: 'daily' };
-  if (repeat === 'weekly' && isWeekday(parsed.repeatDay)) return { ...base, preset: 'weekly', weekday: parsed.repeatDay };
-  if (repeat === 'monthly' && isMonthDay(parsed.repeatDay)) return { ...base, preset: 'monthly', monthDay: parsed.repeatDay };
+  const weekdays = parsed.repeatDays?.length ? parsed.repeatDays : isWeekday(parsed.repeatDay) ? [parsed.repeatDay] : [];
+  if (repeat === 'weekly' && weekdays.length) return { ...base, preset: 'weekly', weekday: weekdays[0], weekdays };
+  const monthDays = parsed.repeatDays?.length ? parsed.repeatDays : isMonthDay(parsed.repeatDay) ? [parsed.repeatDay] : [];
+  if (repeat === 'monthly' && monthDays.length) return { ...base, preset: 'monthly', monthDay: monthDays[0], monthDays };
   if (repeat === 'yearly' && isYearDay(parsed.repeatMonth, parsed.repeatDay)) {
     return { ...base, preset: 'yearly', yearMonth: parsed.repeatMonth as number, yearDay: parsed.repeatDay as number };
   }
@@ -126,24 +132,50 @@ export function commitPreset(draft: PickerDraft, preset: Preset): PickerDraft {
   return { ...draft, preset, added: [], removed: [], onceDate: null, customUntil: null };
 }
 
-export function requestWeekday(draft: PickerDraft, weekday: number, range: ScheduleRange): { draft: PickerDraft; confirm: boolean } {
-  if (!isWeekday(weekday) || (draft.preset === 'weekly' && draft.weekday === weekday)) return { draft, confirm: false };
-  if (isCustomized(draft, range)) return { draft, confirm: true };
-  return { draft: commitWeekday(draft, weekday), confirm: false };
+function sameDays(left: number[], right: number[]): boolean {
+  return left.length === right.length && left.every((day, index) => day === right[index]);
+}
+
+function toggledDays(current: number[], day: number): number[] {
+  const next = current.includes(day) ? current.filter(item => item !== day) : [...current, day];
+  next.sort((left, right) => left - right);
+  return next;
+}
+
+export function requestWeekday(draft: PickerDraft, weekday: number, range: ScheduleRange): { draft: PickerDraft; confirm: boolean; weekdays: number[] } {
+  const current = draft.preset === 'weekly' ? draft.weekdays : [];
+  if (!isWeekday(weekday)) return { draft, confirm: false, weekdays: draft.weekdays };
+  const next = toggledDays(current, weekday);
+  if (!next.length || (draft.preset === 'weekly' && sameDays(current, next))) return { draft, confirm: false, weekdays: draft.weekdays };
+  if (isCustomized(draft, range)) return { draft, confirm: true, weekdays: next };
+  return { draft: commitWeekdays(draft, next), confirm: false, weekdays: next };
 }
 
 export function commitWeekday(draft: PickerDraft, weekday: number): PickerDraft {
-  return { ...commitPreset(draft, 'weekly'), weekday };
+  return commitWeekdays(draft, [weekday]);
 }
 
-export function requestMonthDay(draft: PickerDraft, monthDay: number, range: ScheduleRange): { draft: PickerDraft; confirm: boolean } {
-  if (!isMonthDay(monthDay) || (draft.preset === 'monthly' && draft.monthDay === monthDay)) return { draft, confirm: false };
-  if (isCustomized(draft, range)) return { draft, confirm: true };
-  return { draft: commitMonthDay(draft, monthDay), confirm: false };
+export function commitWeekdays(draft: PickerDraft, weekdays: number[]): PickerDraft {
+  const days = [...new Set(weekdays.filter(isWeekday))].sort((left, right) => left - right);
+  return { ...commitPreset(draft, 'weekly'), weekday: days[0] ?? draft.weekday, weekdays: days.length ? days : draft.weekdays };
+}
+
+export function requestMonthDay(draft: PickerDraft, monthDay: number, range: ScheduleRange): { draft: PickerDraft; confirm: boolean; monthDays: number[] } {
+  const current = draft.preset === 'monthly' ? draft.monthDays : [];
+  if (!isMonthDay(monthDay)) return { draft, confirm: false, monthDays: draft.monthDays };
+  const next = toggledDays(current, monthDay);
+  if (!next.length || (draft.preset === 'monthly' && sameDays(current, next))) return { draft, confirm: false, monthDays: draft.monthDays };
+  if (isCustomized(draft, range)) return { draft, confirm: true, monthDays: next };
+  return { draft: commitMonthDays(draft, next), confirm: false, monthDays: next };
 }
 
 export function commitMonthDay(draft: PickerDraft, monthDay: number): PickerDraft {
-  return { ...commitPreset(draft, 'monthly'), monthDay };
+  return commitMonthDays(draft, [monthDay]);
+}
+
+export function commitMonthDays(draft: PickerDraft, monthDays: number[]): PickerDraft {
+  const days = [...new Set(monthDays.filter(isMonthDay))].sort((left, right) => left - right);
+  return { ...commitPreset(draft, 'monthly'), monthDay: days[0] ?? draft.monthDay, monthDays: days.length ? days : draft.monthDays };
 }
 
 export function requestYearMonth(draft: PickerDraft, yearMonth: number, range: ScheduleRange): { draft: PickerDraft; confirm: boolean } {
@@ -170,8 +202,8 @@ export function commitYearDay(draft: PickerDraft, yearDay: number): PickerDraft 
 
 export function applyPending(draft: PickerDraft, pending: PendingChange): PickerDraft {
   if (pending.type === 'preset') return commitPreset(draft, pending.preset);
-  if (pending.type === 'weekday') return commitWeekday(draft, pending.weekday);
-  if (pending.type === 'monthDay') return commitMonthDay(draft, pending.monthDay);
+  if (pending.type === 'weekday') return commitWeekdays(draft, pending.weekdays);
+  if (pending.type === 'monthDay') return commitMonthDays(draft, pending.monthDays);
   if (pending.type === 'yearMonth') return commitYearMonth(draft, pending.yearMonth);
   return commitYearDay(draft, pending.yearDay);
 }
@@ -217,10 +249,26 @@ export function scheduleTextFromDraft(draft: PickerDraft, range: ScheduleRange):
   return { text: `custom:${dates.join(',')}` };
 }
 
+function activeWeekdays(draft: PickerDraft): number[] {
+  if (draft.weekdays.length === 1 && draft.weekday !== draft.weekdays[0] && isWeekday(draft.weekday)) return [draft.weekday];
+  return draft.weekdays.length ? draft.weekdays : [draft.weekday];
+}
+
+function activeMonthDays(draft: PickerDraft): number[] {
+  if (draft.monthDays.length === 1 && draft.monthDay !== draft.monthDays[0] && isMonthDay(draft.monthDay)) return [draft.monthDay];
+  return draft.monthDays.length ? draft.monthDays : [draft.monthDay];
+}
+
 function canonicalText(draft: PickerDraft): string {
   if (draft.preset === 'daily') return 'daily';
-  if (draft.preset === 'weekly') return `weekly:${WEEK[draft.weekday]}`;
-  if (draft.preset === 'monthly') return `monthly:${draft.monthDay}`;
+  if (draft.preset === 'weekly') {
+    const days = [...activeWeekdays(draft)].sort((left, right) => ((left + 6) % 7) - ((right + 6) % 7));
+    return days.length ? `weekly:${days.map(day => WEEK[day]).join(',')}` : '';
+  }
+  if (draft.preset === 'monthly') {
+    const days = [...activeMonthDays(draft)].sort((left, right) => left - right);
+    return days.length ? `monthly:${days.join(',')}` : '';
+  }
   if (draft.preset === 'yearly') {
     return `yearly:${String(draft.yearMonth).padStart(2, '0')}-${String(draft.yearDay).padStart(2, '0')}`;
   }
@@ -233,6 +281,8 @@ function hasOccurrence(draft: PickerDraft, range: ScheduleRange): boolean {
   if (!end) {
     if (draft.preset === 'once') return !!draft.onceDate && dateEligible(draft.onceDate, range);
     if (draft.preset === 'manual') return draft.added.some(date => dateEligible(date, range));
+    if (draft.preset === 'weekly') return activeWeekdays(draft).length > 0;
+    if (draft.preset === 'monthly') return activeMonthDays(draft).length > 0;
     return draft.preset != null;
   }
   if (range.start > end) return false;
@@ -248,8 +298,16 @@ function hasOccurrence(draft: PickerDraft, range: ScheduleRange): boolean {
 export function compactScheduleLabel(text: string): string {
   const draft = draftFromScheduleText(text);
   if (draft.preset === 'daily') return 'Daily';
-  if (draft.preset === 'weekly') return `Every ${WEEK_FULL[draft.weekday]}`;
-  if (draft.preset === 'monthly') return `Monthly on day ${draft.monthDay}`;
+  if (draft.preset === 'weekly') {
+    const days = [...activeWeekdays(draft)].sort((left, right) => ((left + 6) % 7) - ((right + 6) % 7));
+    if (days.length === 1) return `Every ${WEEK_FULL[days[0]]}`;
+    return days.length ? `Every ${days.map(day => WEEK[day]).join(', ')}` : 'Weekly';
+  }
+  if (draft.preset === 'monthly') {
+    const days = [...activeMonthDays(draft)].sort((left, right) => left - right);
+    if (days.length === 1) return `Monthly on day ${days[0]}`;
+    return days.length ? `Monthly on days ${days.join(', ')}` : 'Monthly';
+  }
   if (draft.preset === 'yearly') return `Yearly on ${MONTH_FULL[draft.yearMonth - 1]} ${draft.yearDay}`;
   if (draft.preset === 'once' && draft.onceDate) return `Once on ${prettyDate(draft.onceDate)}`;
   if (draft.preset === 'manual') return compactCustomLabel(draft.added);
@@ -296,8 +354,12 @@ function matchesPreset(draft: PickerDraft, date: string): boolean {
   const parts = partsOf(date);
   if (!parts) return false;
   if (draft.preset === 'daily') return true;
-  if (draft.preset === 'weekly') return weekdayIndex(date) === draft.weekday;
-  if (draft.preset === 'monthly') return parts.day === Math.min(draft.monthDay, daysInMonth(parts.year, parts.month));
+  if (draft.preset === 'weekly') return activeWeekdays(draft).includes(weekdayIndex(date));
+  if (draft.preset === 'monthly') {
+    const days = activeMonthDays(draft);
+    if (days.length <= 1) return parts.day === Math.min(days[0] ?? draft.monthDay, daysInMonth(parts.year, parts.month));
+    return days.includes(parts.day);
+  }
   if (draft.preset === 'yearly') {
     if (parts.month !== draft.yearMonth) return false;
     return parts.day === Math.min(draft.yearDay, daysInMonth(parts.year, parts.month));

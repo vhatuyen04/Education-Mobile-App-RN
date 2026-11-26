@@ -103,6 +103,21 @@ test('a utc-midnight once date keeps its civil day and a legacy instant uses the
   assert.equal(classifyDate({ dueAt: '2026-11-15T22:59:59.999Z' }, bounds, '2026-11-01'), localDay === '2026-11-01' ? legacyStatus : null);
 });
 
+test('several monthly days skip a short month and a single day 31 still lands on its last day', () => {
+  const several = monthDays({ repeat: 'monthly', repeatDay: 30, repeatDays: [30, 31] }, window({ start: '2026-01-01', end: '2026-04-30' }), 2026, 2)
+    .filter(day => day.status)
+    .map(day => day.date);
+  assert.deepEqual(several, []);
+  const april = monthDays({ repeat: 'monthly', repeatDay: 30, repeatDays: [30, 31] }, window({ start: '2026-01-01', end: '2026-04-30' }), 2026, 4)
+    .filter(day => day.status)
+    .map(day => day.date);
+  assert.deepEqual(april, ['2026-04-30']);
+  const february = monthDays({ repeat: 'monthly', repeatDay: 31 }, window({ start: '2026-01-01', end: '2026-04-30' }), 2026, 2)
+    .filter(day => day.status)
+    .map(day => day.date);
+  assert.deepEqual(february, ['2026-02-28']);
+});
+
 test('view all pages walk a long daily history without dropping a day', () => {
   const step: ScheduleStep = { repeat: 'daily' };
   const bounds = window({ start: '2025-01-01', end: '2026-02-04', today: '2026-02-04', done: new Set(['2025-06-01']) });

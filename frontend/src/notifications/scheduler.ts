@@ -329,7 +329,7 @@ export async function autoScheduleRemindersFromDashboard(dash: authApi.Dashboard
       if (step.doneToday) continue;
       const due = step.dueAt
         ? localReminderInstant(new Date(String(step.dueAt)))
-        : nextReminderOccurrence({ repeat: step.repeat, repeatDay: step.repeatDay, repeatMonth: step.repeatMonth });
+        : nextReminderOccurrence({ repeat: step.repeat, repeatDay: step.repeatDay, repeatMonth: step.repeatMonth, repeatDays: step.repeatDays });
       if (!due || Number.isNaN(due.getTime())) continue;
       const fireAt = due.getTime() - compoundToMs(stepBefore);
       reminders.push(makeReminder({
@@ -393,6 +393,7 @@ export async function autoScheduleRemindersForSignedInUser(opts?: { minIntervalM
                 repeat: step.repeat,
                 repeatDay: step.repeatDay,
                 repeatMonth: step.repeatMonth,
+                repeatDays: step.repeatDays,
                 customDates: step.customDates,
                 goalDueAt: goal.dueAt,
                 notBeforeCivil,

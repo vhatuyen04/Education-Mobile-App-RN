@@ -22,7 +22,7 @@ import { autoScheduleRemindersForSignedInUser } from '../notifications/scheduler
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 type R = RouteProp<RootStackParamList, 'StepDetail'>;
-const WEEK = ['S', 'M', 'T', 'W', 'T', 'F', 'S'] as const;
+const WEEK = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'] as const;
 const PREVIEW_COUNT = 5;
 const PAGE_COUNT = 40;
 
@@ -139,6 +139,7 @@ export function StepDetailScreen() {
         repeat: schedule.repeat ?? null,
         repeatDay: schedule.repeatDay ?? null,
         repeatMonth: schedule.repeatMonth ?? null,
+        repeatDays: schedule.repeatDays ?? [],
         customDates: schedule.customDates ?? null,
       });
       setConfirm(null);
@@ -267,7 +268,7 @@ export function StepDetailScreen() {
             {WEEK.map((label, index) => <Text key={`${label}-${index}`} style={styles.weekLabel}>{label}</Text>)}
           </View>
           <View style={styles.grid}>
-            {monthCursor ? Array.from({ length: new Date(Date.UTC(monthCursor.year, monthCursor.month - 1, 1)).getUTCDay() }, (_, index) => (
+            {monthCursor ? Array.from({ length: (new Date(Date.UTC(monthCursor.year, monthCursor.month - 1, 1)).getUTCDay() + 6) % 7 }, (_, index) => (
               <View key={`pad-${index}`} style={styles.cell} />
             )) : null}
             {visibleDays.map(day => {

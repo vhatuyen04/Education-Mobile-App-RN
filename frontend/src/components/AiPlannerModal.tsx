@@ -1,3 +1,4 @@
+import { readDurationMinutes } from '../utils/stepLifecycle';
 import React, { useCallback, useMemo, useState } from 'react';
 import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
@@ -19,7 +20,7 @@ import { deadlineRetryMessage, realCivilDate } from '../utils/recurrence';
 import { parseScheduleShortText as parseStoredSchedule, scheduleDraftError, stepDateAfterGoalError, stepOutsideActiveRangeError, storedScheduleError } from '../utils/stepSchedule';
 import { scheduleRange } from '../utils/schedulePicker';
 import { preparePlannerDraft, scheduleToShortText } from './aiPlannerDraft';
-import { choosePlannerDeadline, resolvePlannerDeadline } from './aiPlannerDeadline';
+import { resolvePlannerDeadline } from './aiPlannerDeadline';
 
 type Props = {
   visible: boolean;
@@ -39,61 +40,7 @@ function normStepText(t: unknown) {
     .trim();
 }
 
-function isScheduleTemplateText(t: unknown) {
-  const s = normStepText(t);
-  if (!s) return false;
-  const lower = s.toLowerCase();
-  const hasScheduleTokens =
-    lower.includes('daily') || lower.includes('weekly') || lower.includes('monthly') || lower.includes('yearly') || lower.includes('once');
-  if (!hasScheduleTokens) return false;
-
-  // Remove schedule keywords + common schedule payload; if nothing meaningful remains, it's just a template.
-  const remainder = lower
-    .replace(/daily/g, '')
-    .replace(/weekly/g, '')
-    .replace(/monthly/g, '')
-    .replace(/yearly/g, '')
-    .replace(/once/g, '')
-    .replace(/[:]/g, '')
-    .replace(/[0-9\-|/.,]/g, '')
-    .replace(/\b(mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)\b/g, '')
-    .replace(/\s+/g, '')
-    .replace(/[|｜¦∣]/g, '');
-
-  return remainder.length === 0;
-}
-
-function isMeaningfulStepText(t: unknown) {
-  const s = normStepText(t);
-  if (!s) return false;
-  // If AI outputs a schedule template (uses pipe separators), it's not a real step.
-  if (/[|｜¦∣]/.test(s)) return false;
-  if (isScheduleTemplateText(s)) return false;
-  // If AI accidentally returns a schedule string as the step text, hide it.
-  // Example: "daily | weekly:Mon | monthly:15 | yearly:01-15 | once:2026-06-06"
-  const lower = s.toLowerCase();
-  const hasScheduleTokens =
-    lower.includes('daily') || lower.includes('weekly:') || lower.includes('monthly:') || lower.includes('yearly:') || lower.includes('once:');
-  if (hasScheduleTokens) {
-    const stripped = lower
-      .replace(/daily/g, '')
-      .replace(/weekly:/g, '')
-      .replace(/monthly:/g, '')
-      .replace(/yearly:/g, '')
-      .replace(/once:/g, '')
-      .replace(/[0-9\-|:/.]/g, '')
-      .replace(/\b(mon|tue|wed|thu|fri|sat|sun)\b/g, '')
-      .replace(/\s+/g, '')
-      .replace(/\|/g, '');
-    // If nothing remains besides schedule tokens, it's not a real step description.
-    if (!/[a-z]/i.test(stripped)) return false;
-  }
-
-  // Require at least one alphabetic character to avoid rendering garbage like only numbers/symbols.
-  return /[a-z]/i.test(s);
-}
-
-type PlannerStep = Step & { schedule?: authApi.AiGoalStepSchedule; scheduleText?: string; description?: string };
+type PlannerStep = Step & { durationMinutes?: number; schedule?: authApi.AiGoalStepSchedule; scheduleText?: string; description?: string };
 
 function plannerStepWrite(step: PlannerStep, order: number): { error: string | null; body: any } {
   const text = step.text.trim();
@@ -101,7 +48,7 @@ function plannerStepWrite(step: PlannerStep, order: number): { error: string | n
   const scheduleText = String(step.scheduleText ?? '').trim();
   const stored = scheduleText ? parseStoredSchedule(scheduleText) : null;
   const schedule = scheduleText ? parseScheduleShortText(scheduleText) : (step.schedule ?? { type: 'none' });
-  const body: any = { text, order, description };
+  const body: any = { text, order, description, durationMinutes: step.durationMinutes };
   if (stored?.repeat === 'custom') {
     body.repeat = 'custom';
     body.customDates = stored.customDates ?? [];
@@ -115,6 +62,7 @@ function plannerStepWrite(step: PlannerStep, order: number): { error: string | n
     body.repeat = schedule.repeat ?? null;
     body.repeatDay = schedule.repeatDay ?? null;
     body.repeatMonth = schedule.repeatMonth ?? null;
+    body.repeatDays = schedule.repeatDays ?? null;
   }
   const error =
     (scheduleText ? scheduleDraftError(scheduleText) : null) ??
@@ -129,40 +77,22 @@ function plannerStepWrite(step: PlannerStep, order: number): { error: string | n
 }
 
 function sanitizePlannerSteps(input: PlannerStep[]) {
-  const out = (Array.isArray(input) ? input : [])
-    .map(s => {
-      const text = normStepText(s.text);
-      if (!text) return null;
-
-      const schedule = s.schedule;
-
-      // If schedule is a placeholder/template string, drop it.
-      if (schedule && schedule.type === 'repeat') {
-        const rep = String((schedule as any).repeat ?? '').trim();
-        const repLower = rep.toLowerCase();
-        const tokenHits = [
-          repLower.includes('daily'),
-          repLower.includes('weekly'),
-          repLower.includes('monthly'),
-          repLower.includes('yearly'),
-          repLower.includes('once'),
-        ].filter(Boolean).length;
-
-        // If it looks like the AI "options" template (contains multiple schedule tokens), treat as none.
-        if (/[|｜¦∣]/.test(rep) || tokenHits >= 2) {
-          return { ...s, text, schedule: { type: 'none' } as authApi.AiGoalStepSchedule };
-        }
-      }
-
-      return { ...s, text, schedule };
-    })
-    .filter(Boolean) as PlannerStep[];
-
-  return out.filter(s => isMeaningfulStepText(s.text));
+  return input.map(step => ({ ...step, text: normStepText(step.text) })).filter(step => step.text);
 }
 
 function makeId() {
   return `s_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function parseNamedDayList(raw: string, parseOne: (token: string) => number | null): number[] | null {
+  const days: number[] = [];
+  for (const token of raw.split(',')) {
+    const day = parseOne(token);
+    if (day == null || days.includes(day)) return null;
+    days.push(day);
+  }
+  days.sort((left, right) => left - right);
+  return days.length ? days : null;
 }
 
 function parseWeekdayToken(token: string): number | null {
@@ -191,16 +121,19 @@ function parseScheduleShortText(input: string): authApi.AiGoalStepSchedule {
 
   if (lower === 'weekly') return { type: 'repeat', repeat: 'weekly' };
   if (lower.startsWith('weekly:')) {
-    const tok = raw.slice(7).trim();
-    const dow = parseWeekdayToken(tok);
-    return { type: 'repeat', repeat: 'weekly', ...(dow !== null ? { repeatDay: dow } : null) } as any;
+    const days = parseNamedDayList(raw.slice(7), parseWeekdayToken);
+    if (!days) return { type: 'repeat', repeat: 'weekly' };
+    return { type: 'repeat', repeat: 'weekly', repeatDay: days[0], ...(days.length > 1 ? { repeatDays: days } : null) };
   }
 
   if (lower === 'monthly') return { type: 'repeat', repeat: 'monthly' };
   if (lower.startsWith('monthly:')) {
-    const tok = raw.slice(8).trim();
-    const day = Number(tok);
-    return { type: 'repeat', repeat: 'monthly', ...(Number.isFinite(day) ? { repeatDay: day } : null) } as any;
+    const days = parseNamedDayList(raw.slice(8), token => {
+      const day = Number(token);
+      return Number.isInteger(day) && day >= 1 && day <= 31 ? day : null;
+    });
+    if (!days) return { type: 'repeat', repeat: 'monthly' };
+    return { type: 'repeat', repeat: 'monthly', repeatDay: days[0], ...(days.length > 1 ? { repeatDays: days } : null) };
   }
 
   if (lower === 'yearly') return { type: 'repeat', repeat: 'yearly' };
@@ -227,24 +160,10 @@ function parseYmd(raw: string): Date | null {
   return new Date(year, month - 1, day);
 }
 
-function plannerDeadlineMessage(kind: 'missing' | 'invalid' | 'past' | 'ambiguous'): string {
+function plannerDeadlineMessage(kind: 'missing' | 'invalid' | 'past'): string {
   if (kind === 'missing') return 'Please enter a deadline (or mention it in your plan like “in 6 weeks”).';
-  if (kind === 'ambiguous') return 'Your plan has multiple possible deadlines. Enter one in the Deadline field.';
   if (kind === 'past') return 'The deadline is in the past. Enter today or a later date.';
   return deadlineRetryMessage();
-}
-
-function inferFieldFromText(text: string): 'Sport' | 'Academy' | 'Entertainment' {
-  const t = (text || '').toLowerCase();
-  if (t.includes('gym') || t.includes('run') || t.includes('basket') || t.includes('swim') || t.includes('fitness')) return 'Sport';
-  if (t.includes('thesis') || t.includes('study') || t.includes('exam') || t.includes('database') || t.includes('ielts')) return 'Academy';
-  if (t.includes('game') || t.includes('lol') || t.includes('movie') || t.includes('music')) return 'Entertainment';
-  return 'Academy';
-}
-
-function defaultGoalTitle(text: string) {
-  const firstLine = (text || '').trim().split(/\r?\n/)[0] || 'My new plan';
-  return firstLine.length > 46 ? `${firstLine.slice(0, 46)}…` : firstLine;
 }
 
 export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
@@ -348,21 +267,9 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
       return;
     }
 
-    if (planText.includes('___')) {
-      toast('Please fill in the blanks (___) in your plan first.');
-      return;
-    }
-
-    const resolved = await choosePlannerDeadline(planText, deadline, conflict => new Promise(resolve => {
-      Alert.alert('Choose deadline', `Your plan ends on ${conflict.plan.civil}. The Deadline field says ${conflict.field.civil}. Which should the Goal use?`, [
-        { text: 'Cancel', style: 'cancel', onPress: () => resolve(null) },
-        { text: `Plan: ${conflict.plan.civil}`, onPress: () => resolve('plan') },
-        { text: `Field: ${conflict.field.civil}`, onPress: () => resolve('field') },
-      ], { cancelable: true, onDismiss: () => resolve(null) });
-    }));
-    if (!resolved) return;
-    if (resolved.kind !== 'resolved') {
-      toast(plannerDeadlineMessage(resolved.kind));
+    const selected = resolvePlannerDeadline(deadline);
+    if (selected.kind !== 'resolved' && selected.kind !== 'missing') {
+      toast(plannerDeadlineMessage(selected.kind));
       return;
     }
 
@@ -378,16 +285,28 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
     setLoading(true);
 
     try {
-      const resp = await authApi.aiSuggestGoal(token, { prompt: planText.trim(), deadline: resolved.dueAt, intensity });
+      const body = { prompt: planText.trim(), intensity, deadline: selected.kind === 'resolved' ? selected.civil + 'T00:00:00.000Z' : undefined };
+      let resp = await authApi.aiSuggestGoal(token, body);
+      if (!resp.ok && resp.planDeadline && selected.kind === 'resolved') {
+        const planDate = resp.planDeadline;
+        const choice = await new Promise<string | null>(resolve => Alert.alert('Choose deadline',
+          'Your description and Deadline field give different dates. Which should the goal use?', [
+            { text: 'Cancel', style: 'cancel', onPress: () => resolve(null) },
+            { text: 'Description: ' + planDate, onPress: () => resolve(planDate) },
+            { text: 'Field: ' + selected.civil, onPress: () => resolve(selected.civil) },
+          ], { cancelable: true, onDismiss: () => resolve(null) }));
+        if (!choice) return;
+        resp = await authApi.aiSuggestGoal(token, { ...body, deadline: choice + 'T00:00:00.000Z', deadlineConfirmed: true });
+      }
       if (!resp.ok) {
         setAiHelp({ message: resp.message, questions: resp.questions ?? [] });
         return;
       }
 
-      setGoalTitle(resp.suggestion.title || defaultGoalTitle(planText));
+      setGoalTitle(resp.suggestion.title);
       setGoalDescription(String(resp.suggestion.description ?? '').trim());
       setGoalField(resp.suggestion.field);
-      const draft = preparePlannerDraft(resp.suggestion, resolved.civil);
+      const draft = preparePlannerDraft(resp.suggestion);
       const effectiveDeadline = draft.deadline;
       setDeadline(previous => previous === deadline && previous.trim() ? effectiveDeadline : previous);
       setGoalDeadline(effectiveDeadline);
@@ -444,7 +363,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
         toast('Regenerate the plan to use the edited deadline.');
         return;
       }
-      const resolved = resolvePlannerDeadline('', goalDeadline);
+      const resolved = resolvePlannerDeadline(goalDeadline);
       if (resolved.kind !== 'resolved') {
         toast(plannerDeadlineMessage(resolved.kind));
         return;
@@ -518,7 +437,7 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
           >
             <Text style={styles.mutedSmall}>Describe your plan. SmartGoal will suggest 1 goal and a checklist. Requirement is determined completely by the SmartGoal app.</Text>
             <Text style={[styles.mutedSmall, { marginTop: 8 }]}>
-              Describe your goal in English. Include a deadline such as “in 6 weeks”, “in 30 days”, “within 2 months”, or “by January 1, 2027”. Use digits for durations. You can also enter a deadline below in YYYY-MM-DD format. Slash dates use US month/day/year.
+              Describe your goal, activities, and any timing requirements. You can also enter a deadline below in YYYY-MM-DD format.
             </Text>
             <Text style={[styles.mutedSmall, { marginTop: 8 }]}>
               If a suggested goal is eligible for ranking, you can later submit a video to prove the achievement and compete on the ranking board. You can still complete the goal without ranking.
@@ -688,6 +607,19 @@ export function AiPlannerModal({ visible, onClose, onSaved }: Props) {
                             placeholder="Optional detail"
                             placeholderTextColor={colors.muted}
                             multiline
+                            style={styles.input}
+                          />
+                          <Text style={styles.stepLabel}>Duration (minutes)</Text>
+                          <TextInput
+                            value={s.durationMinutes?.toString() ?? ''}
+                            onChangeText={value => {
+                              const minutes = readDurationMinutes(value);
+                              if (minutes === 'invalid' || (minutes != null && minutes > 2147483647)) return;
+                              setSteps(prev => prev.map(step => step.id === s.id ? { ...step, durationMinutes: minutes ?? undefined } : step));
+                            }}
+                            keyboardType="number-pad"
+                            placeholder="Optional"
+                            placeholderTextColor={colors.muted}
                             style={styles.input}
                           />
                           <ScheduleField

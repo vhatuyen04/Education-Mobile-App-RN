@@ -171,6 +171,7 @@ export type ReplacementPlan = {
     repeat: string | null;
     repeatDay: number | null;
     repeatMonth: number | null;
+    repeatDays: number[];
     customDates: string[];
     durationMinutes: number | null;
     order: number;
@@ -189,6 +190,7 @@ export function planReplacement(args: {
   repeat?: string | null;
   repeatDay?: number | null;
   repeatMonth?: number | null;
+  repeatDays?: number[] | null;
   customDates?: string[] | null;
   durationMinutes?: number | null;
   order?: number;
@@ -214,6 +216,7 @@ export function planReplacement(args: {
       repeat: args.repeat ? String(args.repeat) : null,
       repeatDay: args.repeatDay ?? null,
       repeatMonth: args.repeatMonth ?? null,
+      repeatDays: Array.isArray(args.repeatDays) ? args.repeatDays : [],
       customDates,
       durationMinutes: duration.minutes,
       order: args.order ?? 0,

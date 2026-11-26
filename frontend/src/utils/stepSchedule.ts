@@ -6,6 +6,7 @@ export type StepScheduleFields = {
   repeat?: string | null;
   repeatDay?: number | null;
   repeatMonth?: number | null;
+  repeatDays?: number[] | null;
   customDates?: string[] | null;
 };
 
@@ -29,6 +30,41 @@ export function formatWeekday(d: number | null | undefined) {
   return days[idx];
 }
 
+function mondayFirst(days: number[]): number[] {
+  return [...days].sort((left, right) => ((left + 6) % 7) - ((right + 6) % 7));
+}
+
+export function parseWeekdayList(raw: string): number[] | null {
+  const days: number[] = [];
+  for (const token of raw.split(',')) {
+    const day = parseWeekdayToken(token);
+    if (day == null || days.includes(day)) return null;
+    days.push(day);
+  }
+  days.sort((left, right) => left - right);
+  return days.length ? days : null;
+}
+
+export function parseMonthDayList(raw: string): number[] | null {
+  const days: number[] = [];
+  for (const token of raw.split(',')) {
+    const day = Number(token.trim());
+    if (!Number.isInteger(day) || day < 1 || day > 31 || days.includes(day)) return null;
+    days.push(day);
+  }
+  days.sort((left, right) => left - right);
+  return days.length ? days : null;
+}
+
+function listedDays(step: { repeatDay?: number | null; repeatDays?: number[] | null }, kind: 'weekly' | 'monthly'): number[] {
+  const valid = kind === 'weekly'
+    ? (day: number) => Number.isInteger(day) && day >= 0 && day <= 6
+    : (day: number) => Number.isInteger(day) && day >= 1 && day <= 31;
+  const listed = Array.isArray(step.repeatDays) ? step.repeatDays.filter(valid) : [];
+  if (listed.length) return [...new Set(listed)].sort((left, right) => left - right);
+  return step.repeatDay != null && valid(step.repeatDay) ? [step.repeatDay] : [];
+}
+
 function ymdFromStored(value: string): { y: number; m: number; d: number } | null {
   const parsed = new Date(value);
   if (!Number.isFinite(parsed.getTime())) return null;
@@ -38,7 +74,7 @@ function ymdFromStored(value: string): { y: number; m: number; d: number } | nul
   return { y: parsed.getFullYear(), m: parsed.getMonth() + 1, d: parsed.getDate() };
 }
 
-export function scheduleToShortText(step: Pick<GoalStepItem, 'dueAt' | 'repeat' | 'repeatDay' | 'repeatMonth'> & { customDates?: string[] | null }): string {
+export function scheduleToShortText(step: Pick<GoalStepItem, 'dueAt' | 'repeat' | 'repeatDay' | 'repeatMonth'> & { repeatDays?: number[] | null; customDates?: string[] | null }): string {
   const repeatName = (step.repeat ?? '').trim().toLowerCase();
   if (repeatName === 'custom') {
     const dates = normalizedCustomDates(step.customDates);
@@ -54,8 +90,14 @@ export function scheduleToShortText(step: Pick<GoalStepItem, 'dueAt' | 'repeat' 
   const repeat = (step.repeat ?? '').trim().toLowerCase();
   if (!repeat) return '';
   if (repeat === 'daily') return 'daily';
-  if (repeat === 'weekly') return step.repeatDay !== null && step.repeatDay !== undefined ? `weekly:${formatWeekday(step.repeatDay) || String(step.repeatDay)}` : 'weekly';
-  if (repeat === 'monthly') return step.repeatDay !== null && step.repeatDay !== undefined ? `monthly:${String(step.repeatDay)}` : 'monthly';
+  if (repeat === 'weekly') {
+    const days = mondayFirst(listedDays(step, 'weekly'));
+    return days.length ? `weekly:${days.map(day => formatWeekday(day)).join(',')}` : 'weekly';
+  }
+  if (repeat === 'monthly') {
+    const days = listedDays(step, 'monthly');
+    return days.length ? `monthly:${days.join(',')}` : 'monthly';
+  }
   if (repeat === 'yearly') {
     if (step.repeatMonth && step.repeatDay) {
       return `yearly:${String(step.repeatMonth).padStart(2, '0')}-${String(step.repeatDay).padStart(2, '0')}`;
@@ -91,16 +133,16 @@ export function parseScheduleShortText(input: string): StepScheduleFields {
 
   if (lower === 'weekly') return { dueAt: null, repeat: 'weekly', repeatDay: null, repeatMonth: null };
   if (lower.startsWith('weekly:')) {
-    const tok = raw.slice(7).trim();
-    const dow = parseWeekdayToken(tok);
-    return { dueAt: null, repeat: 'weekly', repeatDay: dow, repeatMonth: null };
+    const days = parseWeekdayList(raw.slice(7));
+    if (!days) return { dueAt: null, repeat: 'weekly', repeatDay: null, repeatMonth: null };
+    return { dueAt: null, repeat: 'weekly', repeatDay: days[0], repeatMonth: null, ...(days.length > 1 ? { repeatDays: days } : null) };
   }
 
   if (lower === 'monthly') return { dueAt: null, repeat: 'monthly', repeatDay: null, repeatMonth: null };
   if (lower.startsWith('monthly:')) {
-    const tok = raw.slice(8).trim();
-    const day = Number(tok);
-    return { dueAt: null, repeat: 'monthly', repeatDay: Number.isFinite(day) ? day : null, repeatMonth: null };
+    const days = parseMonthDayList(raw.slice(8));
+    if (!days) return { dueAt: null, repeat: 'monthly', repeatDay: null, repeatMonth: null };
+    return { dueAt: null, repeat: 'monthly', repeatDay: days[0], repeatMonth: null, ...(days.length > 1 ? { repeatDays: days } : null) };
   }
 
   if (lower === 'custom' || lower === 'custom:') {
@@ -139,13 +181,13 @@ export function describeStepSchedule(step: StepScheduleFields): string {
   if (!repeat) return 'No schedule';
   if (repeat === 'daily') return 'Every day';
   if (repeat === 'weekly') {
-    const day = formatWeekday(step.repeatDay);
-    return day ? `Every week on ${day}` : 'Weekly, weekday missing';
+    const names = mondayFirst(listedDays(step, 'weekly')).map(day => formatWeekday(day)).filter(Boolean);
+    return names.length ? `Every week on ${names.join(', ')}` : 'Weekly, weekday missing';
   }
   if (repeat === 'monthly') {
-    if (step.repeatDay !== null && step.repeatDay !== undefined && Number.isInteger(step.repeatDay) && step.repeatDay >= 1 && step.repeatDay <= 31) {
-      return `Every month on day ${step.repeatDay}`;
-    }
+    const days = listedDays(step, 'monthly');
+    if (days.length === 1) return `Every month on day ${days[0]}`;
+    if (days.length > 1) return `Every month on days ${days.join(', ')}`;
     return 'Monthly, day missing';
   }
   if (repeat === 'custom') return customDatesSummary(step.customDates ?? []);
@@ -162,10 +204,8 @@ export function legacyScheduleNote(step: StepScheduleFields & { dueAt?: string |
   const repeat = (step.repeat ?? '').trim().toLowerCase();
   if (step.dueAt && repeat && repeat !== 'once') return 'This step has both a due date and a repeat. Choose one schedule.';
   if (!repeat) return null;
-  if (repeat === 'weekly' && (step.repeatDay == null || !Number.isInteger(step.repeatDay))) return WEEKLY_SCHEDULE_RETRY;
-  if (repeat === 'monthly' && (step.repeatDay == null || !Number.isInteger(step.repeatDay) || step.repeatDay < 1 || step.repeatDay > 31)) {
-    return MONTHLY_SCHEDULE_RETRY;
-  }
+  if (repeat === 'weekly' && listedDays(step, 'weekly').length === 0) return WEEKLY_SCHEDULE_RETRY;
+  if (repeat === 'monthly' && listedDays(step, 'monthly').length === 0) return MONTHLY_SCHEDULE_RETRY;
   if (repeat === 'yearly' && !yearlyMonthDayCanOccur(Number(step.repeatMonth), Number(step.repeatDay))) {
     return YEARLY_SCHEDULE_RETRY;
   }
@@ -252,6 +292,7 @@ export function stepOutsideActiveRangeError(
     repeat,
     repeatDay: step.repeatDay,
     repeatMonth: step.repeatMonth,
+    repeatDays: step.repeatDays,
     start,
     deadline: end,
   });
@@ -301,15 +342,11 @@ export function scheduleDraftError(input: string): string | null {
   }
 
   if (lower.startsWith('weekly:')) {
-    const tok = raw.slice(7).trim();
-    if (!tok || parseWeekdayToken(tok) === null) return WEEKLY_SCHEDULE_RETRY;
-    return null;
+    return parseWeekdayList(raw.slice(7)) ? null : WEEKLY_SCHEDULE_RETRY;
   }
 
   if (lower.startsWith('monthly:')) {
-    const day = Number(raw.slice(8).trim());
-    if (!Number.isInteger(day) || day < 1 || day > 31) return MONTHLY_SCHEDULE_RETRY;
-    return null;
+    return parseMonthDayList(raw.slice(8)) ? null : MONTHLY_SCHEDULE_RETRY;
   }
 
   if (lower === 'custom' || lower === 'custom:') return CUSTOM_DATES_EMPTY;

@@ -2,8 +2,9 @@
  * Client recurrence for reminders and the AI Planner.
  * Matches backend/src/goals/recurrenceSchedule.ts policy clamp-last-valid-day-v1.
  *
- * Daily is every calendar day. Weekly is the stored weekday.
- * Monthly and yearly clamp to the last valid day of a short month.
+ * Daily is every calendar day. Weekly matches every stored weekday.
+ * One monthly or yearly day clamps to the last valid day of a short month.
+ * Several monthly days occur only when that day exists.
  * February 29 clamps to February 28 in a non-leap year.
  * Missing weekday, month, or day fields produce no occurrence.
  * Dates are built from year, month, and a clamped day, so day 31 cannot roll into the next month.
@@ -13,6 +14,7 @@ export type RepeatFields = {
   repeat?: string | null;
   repeatDay?: number | null;
   repeatMonth?: number | null;
+  repeatDays?: number[] | null;
   customDates?: string[] | null;
 };
 
@@ -36,6 +38,19 @@ function isCalendarMonthDay(month: unknown, day: unknown): boolean {
   if (typeof month !== 'number' || typeof day !== 'number') return false;
   if (!Number.isInteger(month) || !Number.isInteger(day) || month < 1 || month > 12 || day < 1) return false;
   return day <= MONTH_MAX_DAY[month - 1];
+}
+
+function selectedDays(kind: 'weekly' | 'monthly', params: RepeatFields): number[] {
+  const valid = kind === 'weekly' ? isWeekday : isMonthDay;
+  const listed = Array.isArray(params.repeatDays) ? params.repeatDays : [];
+  const source = listed.length > 0 ? listed : params.repeatDay == null ? [] : [params.repeatDay];
+  const unique: number[] = [];
+  for (const day of source) {
+    if (!valid(day) || unique.includes(day)) continue;
+    unique.push(day);
+  }
+  unique.sort((left, right) => left - right);
+  return unique;
 }
 
 function daysInMonth(year: number, monthIndex0: number): number {
@@ -166,25 +181,43 @@ export function nextReminderOccurrence(
   }
 
   if (repeat === 'weekly') {
-    if (!isWeekday(params.repeatDay)) return null;
-    const delta = (params.repeatDay - now.getDay() + 7) % 7;
-    let day = addCalendarDays(now, delta);
-    let cand = endOfCivilDay(day.getFullYear(), day.getMonth(), day.getDate());
-    if (cand.getTime() <= now.getTime()) {
-      day = addCalendarDays(day, 7);
-      cand = endOfCivilDay(day.getFullYear(), day.getMonth(), day.getDate());
+    const days = selectedDays('weekly', params);
+    if (!days.length) return null;
+    let best: Date | null = null;
+    for (const weekday of days) {
+      const delta = (weekday - now.getDay() + 7) % 7;
+      let day = addCalendarDays(now, delta);
+      let cand = endOfCivilDay(day.getFullYear(), day.getMonth(), day.getDate());
+      if (cand.getTime() <= now.getTime()) {
+        day = addCalendarDays(day, 7);
+        cand = endOfCivilDay(day.getFullYear(), day.getMonth(), day.getDate());
+      }
+      if (afterGoalDue(cand, goalDueAt)) continue;
+      if (!best || cand.getTime() < best.getTime()) best = cand;
     }
-    return afterGoalDue(cand, goalDueAt) ? null : cand;
+    return best;
   }
 
   if (repeat === 'monthly') {
-    if (!isMonthDay(params.repeatDay)) return null;
+    const days = selectedDays('monthly', params);
+    if (!days.length) return null;
     let year = now.getFullYear();
     let month = now.getMonth();
     for (let guard = 0; guard < 36; guard += 1) {
-      const cand = endOfCivilDay(year, month, Math.min(params.repeatDay, daysInMonth(year, month)));
-      if (afterGoalDue(cand, goalDueAt)) return null;
-      if (cand.getTime() > now.getTime()) return cand;
+      const occurring = days.length === 1 ? [Math.min(days[0], daysInMonth(year, month))] : days.filter(day => day <= daysInMonth(year, month));
+      let best: Date | null = null;
+      let blockedByDeadline = false;
+      for (const day of occurring) {
+        const cand = endOfCivilDay(year, month, day);
+        if (cand.getTime() <= now.getTime()) continue;
+        if (afterGoalDue(cand, goalDueAt)) {
+          blockedByDeadline = true;
+          continue;
+        }
+        if (!best || cand.getTime() < best.getTime()) best = cand;
+      }
+      if (best) return best;
+      if (blockedByDeadline) return null;
       month += 1;
       if (month > 11) {
         month = 0;
@@ -226,6 +259,7 @@ export function countRepeatOccurrencesUntilDeadline(params: {
   repeat: string;
   repeatDay?: number | null;
   repeatMonth?: number | null;
+  repeatDays?: number[] | null;
   start: Date;
   deadline: Date;
 }): { count: number; lastOccurrence: Date | null } {
@@ -247,35 +281,44 @@ export function countRepeatOccurrencesUntilDeadline(params: {
   }
 
   if (repeat === 'weekly') {
-    if (!isWeekday(params.repeatDay)) return { count: 0, lastOccurrence: null };
-    const delta = (params.repeatDay - start0.getDay() + 7) % 7;
-    const cur = addCalendarDays(start0, delta);
-    cur.setHours(0, 0, 0, 0);
-    if (cur.getTime() > end0.getTime()) return { count: 0, lastOccurrence: null };
+    const days = selectedDays('weekly', params);
+    if (!days.length) return { count: 0, lastOccurrence: null };
     let count = 0;
     let last: Date | null = null;
+    const cur = new Date(start0);
     while (cur.getTime() <= end0.getTime()) {
-      count += 1;
-      last = new Date(cur);
-      cur.setDate(cur.getDate() + 7);
+      if (days.includes(cur.getDay())) {
+        count += 1;
+        last = new Date(cur);
+      }
+      cur.setDate(cur.getDate() + 1);
     }
     return { count, lastOccurrence: last };
   }
 
   if (repeat === 'monthly') {
-    if (!isMonthDay(params.repeatDay)) return { count: 0, lastOccurrence: null };
+    const days = selectedDays('monthly', params);
+    if (!days.length) return { count: 0, lastOccurrence: null };
     let year = start0.getFullYear();
     let month = start0.getMonth();
     let count = 0;
     let last: Date | null = null;
     for (let guard = 0; guard < 600; guard += 1) {
-      const occ = new Date(year, month, Math.min(params.repeatDay, daysInMonth(year, month)));
-      occ.setHours(0, 0, 0, 0);
-      if (occ.getTime() > end0.getTime()) break;
-      if (occ.getTime() >= start0.getTime()) {
-        count += 1;
-        last = occ;
+      const occurring = days.length === 1 ? [Math.min(days[0], daysInMonth(year, month))] : days.filter(day => day <= daysInMonth(year, month));
+      let finished = false;
+      for (const day of occurring) {
+        const occ = new Date(year, month, day);
+        occ.setHours(0, 0, 0, 0);
+        if (occ.getTime() > end0.getTime()) {
+          finished = true;
+          break;
+        }
+        if (occ.getTime() >= start0.getTime()) {
+          count += 1;
+          last = occ;
+        }
       }
+      if (finished) break;
       month += 1;
       if (month > 11) {
         month = 0;

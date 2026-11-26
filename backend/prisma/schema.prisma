@@ -158,6 +158,7 @@ model GoalStep {
   repeat    String?
   repeatDay Int?
   repeatMonth Int?
+  repeatDays Int[] @default([])
   durationMinutes Int?
   done      Boolean  @default(false)
   archivedAt DateTime?

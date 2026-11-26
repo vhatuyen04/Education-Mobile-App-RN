@@ -17,8 +17,9 @@
  * Weekly, monthly, and yearly rules that omit a required day or month are
  * ambiguous and produce no occurrences. Monthly day 31 and yearly February 29
  * use recurrence policy clamp-last-valid-day-v1: a short month uses its last
- * valid day, and a non-leap February 29 is February 28. An impossible yearly
- * date such as February 30 stays ambiguous and is not rewritten.
+ * valid day, and a non-leap February 29 is February 28. Several monthly days
+ * skip a day that month does not have, so day 30 and day 31 are never the same
+ * date. An impossible yearly date such as February 30 stays ambiguous and is not rewritten.
  *
  * GoalStep.done is not an input and is never read.
  */
@@ -28,7 +29,9 @@ import {
   RECURRENCE_START_POLICY,
   clampedMonthDay,
   isCalendarMonthDay,
+  monthOccurrenceDays,
   prepareCustomDates,
+  selectedRepeatDays,
 } from './recurrenceSchedule.js';
 
 export const SNAPSHOT_VERSION = '0.1' as const;
@@ -55,8 +58,8 @@ export type RepeatName = 'daily' | 'weekly' | 'monthly' | 'yearly';
 export type SnapshotSchedule =
   | { type: 'once'; due: CivilDateString }
   | { type: 'repeat'; repeat: 'daily' }
-  | { type: 'repeat'; repeat: 'weekly'; repeatDay: number }
-  | { type: 'repeat'; repeat: 'monthly'; repeatDay: number }
+  | { type: 'repeat'; repeat: 'weekly'; repeatDay: number; repeatDays?: number[] }
+  | { type: 'repeat'; repeat: 'monthly'; repeatDay: number; repeatDays?: number[] }
   | { type: 'repeat'; repeat: 'yearly'; repeatMonth: number; repeatDay: number }
   | { type: 'custom'; dates: CivilDateString[] }
   | { type: 'none' };
@@ -79,6 +82,8 @@ export type ProgressSnapshotStep = {
   repeat: string | null;
   repeatDay: number | null;
   repeatMonth: number | null;
+  /** Several weekdays or month days. Empty or omitted keeps the single repeatDay. */
+  repeatDays?: number[] | null;
   /** Explicit YYYY-MM-DD occurrences when repeat is custom. */
   customDates?: string[] | null;
   /** Civil creation date. Omitted means the goal creation date is the start. */
@@ -202,8 +207,8 @@ type Civil = { y: number; m: number; d: number };
 type DefiniteSchedule =
   | { kind: 'once'; due: Civil }
   | { kind: 'daily' }
-  | { kind: 'weekly'; repeatDay: number }
-  | { kind: 'monthly'; repeatDay: number }
+  | { kind: 'weekly'; repeatDay: number; repeatDays?: number[] }
+  | { kind: 'monthly'; repeatDay: number; repeatDays?: number[] }
   | { kind: 'yearly'; repeatMonth: number; repeatDay: number }
   | { kind: 'custom'; dates: string[] };
 
@@ -427,16 +432,26 @@ function classifySchedule(step: ProgressSnapshotStep): {
     return { schedule: { kind: 'daily' }, ambiguity: null, occurrenceStatus: 'scheduled' };
   }
   if (repeat === 'weekly') {
-    if (!isWeekday(step.repeatDay)) {
+    const days = selectedRepeatDays(step, 'weekly');
+    if (!days.length) {
       return { schedule: null, ambiguity: 'weekly_missing_weekday', occurrenceStatus: 'ambiguous' };
     }
-    return { schedule: { kind: 'weekly', repeatDay: step.repeatDay }, ambiguity: null, occurrenceStatus: 'scheduled' };
+    return {
+      schedule: { kind: 'weekly', repeatDay: days[0], ...(days.length > 1 ? { repeatDays: days } : {}) },
+      ambiguity: null,
+      occurrenceStatus: 'scheduled',
+    };
   }
   if (repeat === 'monthly') {
-    if (!isMonthDay(step.repeatDay)) {
+    const days = selectedRepeatDays(step, 'monthly');
+    if (!days.length) {
       return { schedule: null, ambiguity: 'monthly_missing_day', occurrenceStatus: 'ambiguous' };
     }
-    return { schedule: { kind: 'monthly', repeatDay: step.repeatDay }, ambiguity: null, occurrenceStatus: 'scheduled' };
+    return {
+      schedule: { kind: 'monthly', repeatDay: days[0], ...(days.length > 1 ? { repeatDays: days } : {}) },
+      ambiguity: null,
+      occurrenceStatus: 'scheduled',
+    };
   }
   if (repeat === 'custom') {
     const prepared = prepareCustomDates(step.customDates ?? []);
@@ -508,8 +523,14 @@ function scheduledOn(schedule: DefiniteSchedule, date: Civil, createdAt: Civil, 
   if (compareCivil(date, createdAt) < 0) return false;
   if (deadline && compareCivil(date, deadline) > 0) return false;
   if (schedule.kind === 'daily') return true;
-  if (schedule.kind === 'weekly') return weekday(date) === schedule.repeatDay;
-  if (schedule.kind === 'monthly') return date.d === clampedMonthDay(date.y, date.m, schedule.repeatDay);
+  if (schedule.kind === 'weekly') {
+    const days = schedule.repeatDays && schedule.repeatDays.length > 1 ? schedule.repeatDays : [schedule.repeatDay];
+    return days.includes(weekday(date));
+  }
+  if (schedule.kind === 'monthly') {
+    const days = schedule.repeatDays && schedule.repeatDays.length > 1 ? schedule.repeatDays : [schedule.repeatDay];
+    return monthOccurrenceDays(date.y, date.m, days).includes(date.d);
+  }
   return date.m === schedule.repeatMonth && date.d === clampedMonthDay(date.y, date.m, schedule.repeatDay);
 }
 
@@ -532,8 +553,22 @@ function toPublicSchedule(item: ClassifiedStep): SnapshotSchedule {
   if (!schedule) return { type: 'none' };
   if (schedule.kind === 'once') return { type: 'once', due: formatCivil(schedule.due) };
   if (schedule.kind === 'daily') return { type: 'repeat', repeat: 'daily' };
-  if (schedule.kind === 'weekly') return { type: 'repeat', repeat: 'weekly', repeatDay: schedule.repeatDay };
-  if (schedule.kind === 'monthly') return { type: 'repeat', repeat: 'monthly', repeatDay: schedule.repeatDay };
+  if (schedule.kind === 'weekly') {
+    return {
+      type: 'repeat',
+      repeat: 'weekly',
+      repeatDay: schedule.repeatDay,
+      ...(schedule.repeatDays && schedule.repeatDays.length > 1 ? { repeatDays: schedule.repeatDays } : {}),
+    };
+  }
+  if (schedule.kind === 'monthly') {
+    return {
+      type: 'repeat',
+      repeat: 'monthly',
+      repeatDay: schedule.repeatDay,
+      ...(schedule.repeatDays && schedule.repeatDays.length > 1 ? { repeatDays: schedule.repeatDays } : {}),
+    };
+  }
   if (schedule.kind === 'custom') return { type: 'custom', dates: schedule.dates };
   return { type: 'repeat', repeat: 'yearly', repeatMonth: schedule.repeatMonth, repeatDay: schedule.repeatDay };
 }
@@ -549,10 +584,6 @@ function normalizeRepeat(repeat: string | null | undefined): string | null {
   if (repeat == null) return null;
   const value = repeat.trim().toLowerCase();
   return value || null;
-}
-
-function isWeekday(value: number | null): value is number {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 6;
 }
 
 function isMonthDay(value: number | null): value is number {

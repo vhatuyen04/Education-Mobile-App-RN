@@ -1,3 +1,4 @@
+import { readDurationMinutes } from '../utils/stepLifecycle';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -25,6 +26,7 @@ import { recommendationScheduleDrafts, recommendationStepFields } from '../ai/re
 type RouteParams = { id: string };
 
 type UiStep = {
+  durationMinutes?: number;
   id: string;
   text: string;
   description: string;
@@ -41,6 +43,17 @@ function formatWeekday(d: number | undefined) {
   const idx = Number(d);
   if (!Number.isFinite(idx) || idx < 0 || idx > 6) return '';
   return days[idx];
+}
+
+function parseNamedDayList(raw: string, parseOne: (token: string) => number | null): number[] | null {
+  const days: number[] = [];
+  for (const token of raw.split(',')) {
+    const day = parseOne(token);
+    if (day == null || days.includes(day)) return null;
+    days.push(day);
+  }
+  days.sort((left, right) => left - right);
+  return days.length ? days : null;
 }
 
 function parseWeekdayToken(token: string): number | null {
@@ -62,8 +75,15 @@ function scheduleToShortText(s?: authApi.AiGoalStepSchedule & { customDates?: st
   const r = (s.repeat ?? '').trim();
   const rLower = r.toLowerCase();
   if (rLower === 'daily') return 'daily';
-  if (rLower === 'weekly') return s.repeatDay !== undefined ? `weekly:${formatWeekday(s.repeatDay) || String(s.repeatDay)}` : 'weekly';
-  if (rLower === 'monthly') return s.repeatDay !== undefined ? `monthly:${String(s.repeatDay)}` : 'monthly';
+  if (rLower === 'weekly') {
+    const days = s.repeatDays?.length ? s.repeatDays : s.repeatDay !== undefined ? [s.repeatDay] : [];
+    const names = [...days].sort((left, right) => ((left + 6) % 7) - ((right + 6) % 7)).map(day => formatWeekday(day)).filter(Boolean);
+    return names.length ? `weekly:${names.join(',')}` : 'weekly';
+  }
+  if (rLower === 'monthly') {
+    const days = s.repeatDays?.length ? [...s.repeatDays].sort((left, right) => left - right) : s.repeatDay !== undefined ? [s.repeatDay] : [];
+    return days.length ? `monthly:${days.join(',')}` : 'monthly';
+  }
   if (rLower === 'yearly') {
     const mm = s.repeatMonth !== undefined ? String(s.repeatMonth).padStart(2, '0') : '';
     const dd = s.repeatDay !== undefined ? String(s.repeatDay).padStart(2, '0') : '';
@@ -86,16 +106,19 @@ function parseScheduleShortText(input: string): authApi.AiGoalStepSchedule {
 
   if (lower === 'weekly') return { type: 'repeat', repeat: 'weekly' };
   if (lower.startsWith('weekly:')) {
-    const tok = raw.slice(7).trim();
-    const dow = parseWeekdayToken(tok);
-    return { type: 'repeat', repeat: 'weekly', ...(dow !== null ? { repeatDay: dow } : null) } as any;
+    const days = parseNamedDayList(raw.slice(7), parseWeekdayToken);
+    if (!days) return { type: 'repeat', repeat: 'weekly' };
+    return { type: 'repeat', repeat: 'weekly', repeatDay: days[0], ...(days.length > 1 ? { repeatDays: days } : null) };
   }
 
   if (lower === 'monthly') return { type: 'repeat', repeat: 'monthly' };
   if (lower.startsWith('monthly:')) {
-    const tok = raw.slice(8).trim();
-    const day = Number(tok);
-    return { type: 'repeat', repeat: 'monthly', ...(Number.isFinite(day) ? { repeatDay: day } : null) } as any;
+    const days = parseNamedDayList(raw.slice(8), token => {
+      const day = Number(token);
+      return Number.isInteger(day) && day >= 1 && day <= 31 ? day : null;
+    });
+    if (!days) return { type: 'repeat', repeat: 'monthly' };
+    return { type: 'repeat', repeat: 'monthly', repeatDay: days[0], ...(days.length > 1 ? { repeatDays: days } : null) };
   }
 
   if (lower === 'yearly') return { type: 'repeat', repeat: 'yearly' };
@@ -175,6 +198,7 @@ export function AiGoalRecommendationScreen() {
       id: makeId(),
       text: String(s.text ?? ''),
       description: String(s.description ?? ''),
+      durationMinutes: s.durationMinutes,
       scheduleText: scheduleToShortText(s.schedule),
     }));
     setStepsDraft(baseSteps);
@@ -206,6 +230,7 @@ export function AiGoalRecommendationScreen() {
       .map(s => ({
         text: s.text.trim(),
         description: s.description.trim() || undefined,
+        durationMinutes: s.durationMinutes,
         schedule: recommendationSchedule(s.scheduleText),
       }))
       .filter(s => s.text);
@@ -252,6 +277,7 @@ export function AiGoalRecommendationScreen() {
           .map(s => ({
             text: s.text.trim(),
             description: s.description.trim() || undefined,
+            durationMinutes: s.durationMinutes,
             schedule: recommendationSchedule(s.scheduleText),
           }))
           .filter(s => s.text),
@@ -285,6 +311,7 @@ export function AiGoalRecommendationScreen() {
             text: step.text,
             order,
             description: step.description ?? null,
+            durationMinutes: step.durationMinutes,
             ...recommendationStepFields(step.schedule),
           });
         }
@@ -392,6 +419,19 @@ export function AiGoalRecommendationScreen() {
                   placeholder="Optional detail"
                   placeholderTextColor={colors.muted}
                   multiline
+                  style={styles.input}
+                />
+                <Text style={styles.label}>Duration (minutes)</Text>
+                <TextInput
+                  value={s.durationMinutes?.toString() ?? ''}
+                  onChangeText={value => {
+                    const minutes = readDurationMinutes(value);
+                    if (minutes === 'invalid' || (minutes != null && minutes > 2147483647)) return;
+                    setStepsDraft(prev => prev.map(step => step.id === s.id ? { ...step, durationMinutes: minutes ?? undefined } : step));
+                  }}
+                  keyboardType="number-pad"
+                  placeholder="Optional"
+                  placeholderTextColor={colors.muted}
                   style={styles.input}
                 />
                 <ScheduleField value={s.scheduleText} onPress={() => setScheduleEditId(s.id)} />

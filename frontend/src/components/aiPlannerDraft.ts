@@ -25,8 +25,15 @@ export function scheduleToShortText(s?: AiGoalStepSchedule) {
   if (/[|｜¦∣]/.test(r) || tokenHits >= 2) return '';
   const rLower = r.toLowerCase();
   if (rLower === 'daily') return 'daily';
-  if (rLower === 'weekly') return s.repeatDay !== undefined ? `weekly:${formatWeekday(s.repeatDay) || String(s.repeatDay)}` : 'weekly';
-  if (rLower === 'monthly') return s.repeatDay !== undefined ? `monthly:${String(s.repeatDay)}` : 'monthly';
+  if (rLower === 'weekly') {
+    const days = s.repeatDays?.length ? s.repeatDays : s.repeatDay !== undefined ? [s.repeatDay] : [];
+    const names = [...days].sort((left, right) => ((left + 6) % 7) - ((right + 6) % 7)).map(day => formatWeekday(day)).filter(Boolean);
+    return names.length ? `weekly:${names.join(',')}` : 'weekly';
+  }
+  if (rLower === 'monthly') {
+    const days = s.repeatDays?.length ? [...s.repeatDays].sort((left, right) => left - right) : s.repeatDay !== undefined ? [s.repeatDay] : [];
+    return days.length ? `monthly:${days.join(',')}` : 'monthly';
+  }
   if (rLower === 'yearly') {
     const mm = s.repeatMonth !== undefined ? String(s.repeatMonth).padStart(2, '0') : '';
     const dd = s.repeatDay !== undefined ? String(s.repeatDay).padStart(2, '0') : '';

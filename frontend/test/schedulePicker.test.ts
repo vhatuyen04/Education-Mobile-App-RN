@@ -11,7 +11,9 @@ import {
   compactScheduleLabel,
   draftFromScheduleText,
   isDateSelected,
+  requestMonthDay,
   requestPreset,
+  requestWeekday,
   scheduleTextFromDraft,
   selectionState,
   setCustomUntil,
@@ -254,6 +256,23 @@ test('an unmodified daily rule keeps its name past 2000 days', () => {
   assert.equal(compactScheduleLabel('once:2026-11-30'), 'Once on Nov 30, 2026');
   assert.equal(compactScheduleLabel(''), 'No schedule');
   assert.equal(compactScheduleLabel('custom:2026-11-24,2026-12-31'), 'Custom schedule · 2 dates · Nov 24 – Dec 31');
+});
+
+test('weekly and monthly selection keeps several days on one rule', () => {
+  const range: ScheduleRange = { start: '2026-01-01', deadline: '2026-04-30' };
+  const week = requestWeekday(draftFromScheduleText('weekly:Mon'), 2, range).draft;
+  assert.equal(textOf(week, range), 'weekly:Mon,Tue');
+  assert.equal(compactScheduleLabel('weekly:Mon,Tue'), 'Every Mon, Tue');
+  assert.equal(textOf(requestWeekday(week, 1, range).draft, range), 'weekly:Tue');
+  assert.equal(textOf(requestWeekday(requestWeekday(week, 1, range).draft, 2, range).draft, range), 'weekly:Tue');
+
+  const month = requestMonthDay(draftFromScheduleText('monthly:30'), 31, range).draft;
+  assert.equal(textOf(month, range), 'monthly:30,31');
+  assert.equal(compactScheduleLabel('monthly:30,31'), 'Monthly on days 30, 31');
+  assert.deepEqual(selectedBetween(month, range, '2026-01-30', '2026-02-28'), ['2026-01-30', '2026-01-31']);
+  assert.equal(isDateSelected(month, '2026-04-30', range), true);
+  assert.equal(isDateSelected(month, '2026-04-29', range), false);
+  assert.equal(isDateSelected(draftFromScheduleText('monthly:31'), '2026-02-28', range), true);
 });
 
 function addDays(date: string, days: number): string {

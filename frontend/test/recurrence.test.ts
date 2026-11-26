@@ -132,6 +132,37 @@ test('AI Planner occurrence dates do not overflow a short month', () => {
   assert.equal(missing.lastOccurrence, null);
 });
 
+test('several weekly days and missing monthly days are counted once each', () => {
+  const week = countRepeatOccurrencesUntilDeadline({
+    repeat: 'weekly',
+    repeatDay: 1,
+    repeatDays: [1, 2],
+    start: new Date(2026, 10, 16),
+    deadline: new Date(2026, 10, 17),
+  });
+  assert.equal(week.count, 2);
+
+  const month = countRepeatOccurrencesUntilDeadline({
+    repeat: 'monthly',
+    repeatDay: 30,
+    repeatDays: [30, 31],
+    start: new Date(2026, 0, 1),
+    deadline: new Date(2026, 3, 30),
+  });
+  assert.equal(month.count, 5);
+  assert.equal(month.lastOccurrence?.getMonth(), 3);
+  assert.equal(month.lastOccurrence?.getDate(), 30);
+
+  const single = countRepeatOccurrencesUntilDeadline({
+    repeat: 'monthly',
+    repeatDay: 31,
+    start: new Date(2026, 1, 1),
+    deadline: new Date(2026, 1, 28),
+  });
+  assert.equal(single.count, 1);
+  assert.equal(single.lastOccurrence?.getDate(), 28);
+});
+
 test('an impossible deadline is not turned into another day', () => {
   assert.equal(realCivilDate('2026-11-31'), null);
   assert.equal(realCivilDate('2026-02-31'), null);
